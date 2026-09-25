@@ -126,7 +126,9 @@ def main() -> None:
             "| # | 人名 | 表字 | 出现 | 同句 | 共现率 | 原文上下文 | 你的判定 |",
             "|---:|---|---|---:|---:|---:|---|---|",
         ]
-        for i, r in enumerate(low[: a.md_n], 1):
+        # --md-n 0 或负数 = 全量输出（默认是截断，别写死 40）。
+        _rows = low if a.md_n <= 0 else low[: a.md_n]
+        for i, r in enumerate(_rows, 1):
             ctx = ""
             for t in sents:
                 if r["zi"] in t:
@@ -136,7 +138,8 @@ def main() -> None:
             out.append("| {} | {} | {} | {} | {} | {} | {} |  |".format(
                 i, r["name"], r["zi"], r["hit"], r["co"], r["ratio"], ctx))
         out += ["", "---", "",
-                "（共 {} 条待判，此处列出命中最高的 {} 条）".format(len(low), a.md_n)]
+                "（共 {} 条待判，此处列出命中最高的 {} 条）".format(
+                    len(low), len(_rows))]
         Path(a.md).write_text("\n".join(out), encoding="utf-8")
         print("-> {}".format(a.md))
 
