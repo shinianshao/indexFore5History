@@ -1,0 +1,48 @@
+# ===========================================================
+# 生成产物 —— 全部可由 pipeline/ 重跑，不入库
+# 判据：凡 pipeline/*.py 会覆写的文件，一律忽略
+# ===========================================================
+
+# 抓取的原始 HTML（fetch_book.py）          约 30MB / 569 文件
+data/raw/
+
+# 切分产物（build.py）                      约 50MB / 564 文件
+data/corpus/
+
+# 索引产物（annotate.py / annotate_places.py）约 46MB
+data/index/
+
+# 词典产物：唯一来源是 build_dict.py 的 PERSONS / CHAPTER_OWNERS
+# 与 build_places.py 的 PLACES —— Python 源码已入库，产物不必入库
+data/dict/people.json
+data/dict/places.json
+
+# 前端数据（annotate*.py 生成，app-data.js 约 32MB / corpus-data.js 约 15MB）
+web/app-data.js
+web/corpus-data.js
+web/pei-data.js
+web/js-note-data.js
+
+# ===========================================================
+# 探针 / 审计 / 对账报告（可再生）
+# ===========================================================
+pipeline/_*.json
+pipeline/_*.txt
+pipeline/_*.log
+
+# ===========================================================
+# 备份与运行时
+# ===========================================================
+*.bak
+__pycache__/
+*.py[cod]
+.mimocode/node_modules/
+
+# ===========================================================
+# 注意：以下为「人工资产，不可再生，必须入库」
+#   data/dict/books.json          书注册表（手写）
+#   data/dict/volumes/*.json      五书篇名表（130×N 条人工审定，工作量最大）
+#   data/dict/alias-rules.json    别名规则（手写）
+#   pipeline/build_dict.py        PERSONS / CHAPTER_OWNERS 唯一来源
+#   pipeline/build_places.py      PLACES 唯一来源
+# ===========================================================

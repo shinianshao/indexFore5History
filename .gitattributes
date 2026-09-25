@@ -1,0 +1,11 @@
+# 统一换行：仓库内一律存 LF，检出时按平台转换
+* text=auto
+
+# 二进制，禁止任何换行转换与 diff
+*.png binary
+*.jpg binary
+*.bak binary
+
+# 大体积 JSON 产物不做 diff（已在 .gitignore 中，双保险）
+data/index/*.json -diff
+web/*-data.js -diff

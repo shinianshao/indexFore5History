@@ -1,0 +1,57 @@
+{
+  "sj": {
+    "code": "sj",
+    "name": "史記",
+    "order": 0,
+    "volumes": "volumes/sj.json",
+    "source": {
+      "site": "wikisource",
+      "titlePrefix": "史記/卷"
+    },
+    "ready": true
+  },
+  "hs": {
+    "code": "hs",
+    "name": "漢書",
+    "order": 1,
+    "volumes": "volumes/hs.json",
+    "source": {
+      "site": "wikisource",
+      "titlePrefix": "漢書/卷"
+    },
+    "ready": true
+  },
+  "hhs": {
+    "code": "hhs",
+    "name": "後漢書",
+    "order": 2,
+    "volumes": "volumes/hhs.json",
+    "source": {
+      "site": "wikisource",
+      "titlePrefix": "後漢書/卷"
+    },
+    "ready": true
+  },
+  "sgz": {
+    "code": "sgz",
+    "name": "三國志",
+    "order": 3,
+    "volumes": "volumes/sgz.json",
+    "source": {
+      "site": "wikisource",
+      "titlePrefix": "三國志/卷"
+    },
+    "ready": true
+  },
+  "js": {
+    "code": "js",
+    "name": "晉書",
+    "order": 4,
+    "volumes": "volumes/js.json",
+    "source": {
+      "site": "wikisource",
+      "titlePrefix": "晉書/卷"
+    },
+    "ready": true
+  }
+}

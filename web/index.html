@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>古籍檢索 · 前四史</title>
+<style>
+  :root {
+    --bg: #f7f6f3;
+    --panel: #ffffff;
+    --border: #e3e0d8;
+    --text: #2c2c2a;
+    --muted: #8a867c;
+    --accent: #8c5a2b;
+    --accent-soft: #f3ece2;
+    --mark: #ffe9a8;
+    --target: #d9ecff;
+    --place: #2f7d7d;        /* 單字國名：青碧色，與人物「歸屬存疑」的赭石色區分 */
+    --place-soft: #e4f0f0;
+    --serif: Georgia, "Songti SC", "SimSun", "Noto Serif CJK SC", serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 15px; line-height: 1.7;
+  }
+  header {
+    padding: 26px 20px 16px; text-align: center;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: 2px; }
+  header .sub { margin: 6px 0 0; color: var(--muted); font-size: 13px; letter-spacing: 1px; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px 60px; }
+  .searchbar { display: flex; gap: 8px; margin: 22px 0 10px; }
+  .searchbar input {
+    flex: 1; padding: 12px 14px; font-size: 16px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); color: var(--text); outline: none;
+  }
+  .searchbar input:focus { border-color: var(--accent); }
+  .searchbar button {
+    padding: 12px 22px; font-size: 15px; cursor: pointer;
+    border: none; border-radius: 8px; background: var(--accent); color: #fff;
+  }
+  .searchbar button:hover { opacity: .9; }
+  /* 書選擇器：選一本＝書內檢索，選幾本＝多書合檢。
+     計數與條目列表都隨這裏的選擇變化，所以放在最顯眼的位置。 */
+  .bookbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 22px 0 0; }
+  .bookbar::before {
+    content: "選書"; font-size: 12px; color: var(--muted);
+    letter-spacing: 1px; margin-right: 2px;
+  }
+  .bk {
+    display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; user-select: none;
+    padding: 6px 13px; border: 1px solid var(--border); border-radius: 20px;
+    background: var(--panel); color: var(--muted); font-family: var(--serif); font-size: 15px;
+  }
+  .bk:hover { border-color: var(--accent); color: var(--accent); }
+  .bk em { font-family: sans-serif; font-style: normal; font-size: 11px; color: #b8b3a8; }
+  .bk.pei-chip { font-size: 12px; padding: 6px 10px; color: var(--muted); opacity: 0.75; max-width: 11em; }
+  .bk.pei-chip.on { opacity: 1; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .bk.on {
+    border-color: var(--accent); background: var(--accent-soft);
+    color: var(--accent); font-weight: 600;
+  }
+  .bk.on em { color: #a2977f; }
+  .bk.all { font-family: sans-serif; font-size: 13px; margin-left: 6px; }
+  /* 多書合檢時篇目一覽按書分節 */
+  .book-title {
+    margin: 28px 0 10px; font-size: 15px; font-weight: 600; color: var(--accent);
+    letter-spacing: 1px; border-left: 3px solid var(--accent); padding-left: 10px;
+  }
+  .book-title .count { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 8px; }
+  .tabs { display: flex; gap: 4px; margin: 18px 0 14px; border-bottom: 1px solid var(--border); }
+  .tabs span {
+    padding: 8px 16px; font-size: 14px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tabs span.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .quick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+  .quick span {
+    padding: 5px 12px; font-size: 13px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 20px;
+    background: var(--panel); color: var(--muted);
+  }
+  .quick span:hover { border-color: var(--accent); color: var(--accent); }
+  .group-title {
+    margin: 30px 0 12px; font-size: 14px; font-weight: 600;
+    color: var(--accent); letter-spacing: 1px; display: flex; align-items: center; gap: 10px;
+  }
+  .group-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .group-title .count { font-weight: 400; color: var(--muted); font-size: 13px; }
+  .group-title .sort-toggle {
+    color: var(--accent); text-decoration: underline dotted; cursor: pointer;
+  }
+  .group-title .sort-toggle:hover { text-decoration: underline solid; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 12px;
+  }
+  .primary-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 10px 0; border-bottom: 1px dashed var(--border); cursor: pointer;
+  }
+  .primary-row:hover .name { color: var(--accent); }
+  .primary-row:last-child { border-bottom: none; }
+  .primary-row .name { font-family: var(--serif); font-size: 17px; }
+  .primary-row .name .alias { color: var(--muted); font-size: 13px; margin-left: 8px; font-family: sans-serif; }
+  .primary-row .meta { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .mention-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    cursor: pointer; margin-bottom: 8px;
+  }
+  .mention-head .name { font-family: var(--serif); font-size: 16px; }
+  .mention-head:hover .name { color: var(--accent); }
+  .mention-head .meta { color: var(--muted); font-size: 13px; }
+  .sentence {
+    font-family: var(--serif); font-size: 15px; line-height: 1.9;
+    padding: 7px 0 7px 14px; border-left: 2px solid var(--border);
+    margin-bottom: 6px; color: #3a3833; cursor: pointer;
+  }
+  .sentence:hover { border-left-color: var(--accent); background: #fbf9f5; }
+  .sentence mark { background: var(--mark); padding: 1px 2px; border-radius: 2px; color: inherit; }
+  /* 稱號歸屬存疑：不塗黃底，只用虛線下劃線，避免與確定歸屬混淆 */
+  .sentence mark.guess {
+    background: transparent; color: var(--accent);
+    border-bottom: 1px dashed var(--accent); padding: 0; border-radius: 0;
+  }
+  /* 單字國名：與姓氏/常用字同形，靠鄰字排除判定，用青碧虛線下劃線標出 */
+  .sentence mark.approx {
+    background: transparent; color: var(--place);
+    border-bottom: 1px dashed var(--place); padding: 0; border-radius: 0;
+  }
+  .summary { color: #6b6559; font-size: 14px; margin-bottom: 10px; }
+  .alias-line { margin-top: 12px; font-size: 13px; color: var(--muted); }
+  .alias-item { display: inline-block; margin: 0 12px 4px 0; }
+  .alias-item .w { font-family: var(--serif); color: var(--accent); font-size: 14px; }
+  .alias-item .n { font-size: 11px; color: #b8b3a8; margin-left: 2px; }
+  /* 完整稱謂表：按 本名/稱號/泛稱/單字/其他 分組 */
+  .alias-title { margin: 18px 0 6px; font-size: 13px; font-weight: 600; color: var(--accent); }
+  .alias-title .hint { font-weight: 400; color: var(--muted); margin-left: 8px; }
+  .alias-groups { border-top: 1px dashed var(--border); }
+  .alias-group {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 8px 0; border-bottom: 1px dashed var(--border);
+  }
+  .alias-group:last-child { border-bottom: none; }
+  .alias-group .kind {
+    flex: 0 0 3.4em; font-size: 12px; color: var(--muted);
+    border-left: 2px solid var(--accent); padding-left: 6px;
+  }
+  .alias-group .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    display: inline-flex; align-items: baseline; gap: 4px;
+    font-family: var(--serif); font-size: 15px; color: var(--text);
+    background: var(--accent-soft); border-radius: 5px; padding: 1px 8px;
+    cursor: help;
+  }
+  .chip em { font-family: sans-serif; font-size: 11px; font-style: normal; color: #a2977f; }
+  .chip.gen { background: transparent; border: 1px dashed var(--accent); color: var(--accent); }
+  .chip.off { background: transparent; border: 1px solid var(--border); color: #b3ada1; }
+  .chip.off em { color: #c6c0b4; }
+  .alias-note { margin-top: 8px; font-size: 12px; color: var(--muted); line-height: 1.7; }
+  .open-full { color: var(--accent); font-weight: 600; cursor: pointer; margin-left: 6px; }
+  .open-full:hover { text-decoration: underline; }
+  .quick .qn { font-weight: 400; color: #b8b3a8; }
+  /* 快捷詞里人物（赭石）與地名（青碧）分色，一眼分辨兩類實體 */
+  .quick span.land { border-color: #cfe2e2; }
+  .quick span.land:hover { border-color: var(--place); color: var(--place); }
+  .quick i.sep {
+    align-self: center; width: 1px; height: 18px;
+    background: var(--border); margin: 0 4px;
+  }
+  .tag {
+    font-size: 11px; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 3px; padding: 0 4px; margin-left: 4px; font-family: sans-serif;
+  }
+  .titles { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 10px; }
+  .titles-head { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .title-row {
+    display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+    font-size: 13px; padding: 4px 0;
+  }
+  .title-row .w { font-family: var(--serif); font-size: 15px; min-width: 3.5em; color: var(--accent); }
+  .title-row .n { color: var(--muted); }
+  .tier {
+    font-size: 11px; padding: 1px 7px; border-radius: 10px;
+    background: var(--accent-soft); color: #6b5a45;
+  }
+  .tier.warn { background: #f6e3e3; color: #a4553f; }
+  .legend { color: var(--muted); font-family: sans-serif; font-size: 12px; }
+  .muted-card { color: var(--muted); font-size: 14px; }
+  .candidate-list { display: flex; flex-direction: column; }
+  .candidate {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 12px 2px; border-bottom: 1px dashed var(--border); cursor: pointer;
+  }
+  .candidate:last-child { border-bottom: none; }
+  .candidate:hover .name { color: var(--accent); }
+  .candidate .name { font-family: var(--serif); font-size: 17px; }
+  .candidate .name .alias { font-family: sans-serif; font-size: 12px; color: var(--muted); margin-left: 8px; }
+  .candidate .meta { font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .more { font-size: 13px; color: var(--accent); cursor: pointer; padding: 4px 0 0 14px; user-select: none; }
+  .empty { padding: 40px 0; text-align: center; color: var(--muted); font-size: 14px; }
+  .stats { display: flex; gap: 20px; flex-wrap: wrap; margin: 18px 0 4px; }
+  .stats div { font-size: 13px; color: var(--muted); }
+  .stats b { color: var(--text); font-weight: 600; }
+  .note { margin-top: 34px; padding: 14px 16px; background: var(--accent-soft);
+          border-radius: 8px; font-size: 13px; color: #6b5a45; line-height: 1.8; }
+  /* 索引面板 */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+  .grid .item {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); cursor: pointer; font-size: 14px;
+  }
+  .grid .item:hover { border-color: var(--accent); }
+  .grid .item .n { font-family: var(--serif); }
+  .grid .item .c { color: var(--muted); font-size: 12px; }
+  /* 單字國名：左側加一道青碧細線，提示「與姓氏同形、判定非絕對」 */
+  .grid .item.char-place {
+    border-left: 3px solid var(--place);
+    background: linear-gradient(to right, var(--place-soft), var(--panel) 38%);
+  }
+  .grid .item.char-place .n { color: var(--place); }
+  .chap-row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+    padding: 9px 12px; border-bottom: 1px dashed var(--border); cursor: pointer;
+  }
+  .chap-row:last-child { border-bottom: none; }
+  .chap-row:hover { background: #fbf9f5; }
+  .chap-row .t { font-family: var(--serif); font-size: 15px; }
+  .chap-row .t .tag {
+    font-family: sans-serif; font-size: 11px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px; margin-left: 8px;
+  }
+  .chap-row .m { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  /* 全篇閱讀浮層 */
+  .reader {
+    position: fixed; inset: 0; background: rgba(30,28,25,.45);
+    display: none; z-index: 50;
+  }
+  .reader.on { display: block; }
+  .reader-inner {
+    position: absolute; inset: 3vh 50% 3vh auto; transform: translateX(50%);
+    width: min(860px, 94vw); background: var(--panel);
+    border-radius: 12px; display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0,0,0,.22);
+  }
+  .reader-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  .reader-head .title { font-family: var(--serif); font-size: 18px; }
+  .reader-head .title small { color: var(--muted); font-family: sans-serif; font-size: 12px; margin-left: 10px; }
+  .reader-head .title small.legend { display: block; margin: 5px 0 0; }
+  .reader-head .tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+  .reader-head button, .reader-head a {
+    font-size: 13px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+    text-decoration: none;
+  }
+  .reader-head button:hover, .reader-head a:hover { border-color: var(--accent); color: var(--accent); }
+  .reader-head button.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+  .reader-body { overflow-y: auto; padding: 20px 26px 40px; }
+  .reader-body p {
+    font-family: var(--serif); font-size: 16.5px; line-height: 2.05;
+    margin: 0 0 14px; text-indent: 2em; color: #33312d;
+    /* 两端对齐：正文左右齐整，中文按字距微调 */
+    text-align: justify;
+    text-justify: inter-ideograph;
+    /* 避免 justify 把注文标点拉散：注文自身不参与拉伸 */
+    text-align-last: auto;
+  }
+  /* 裴注 / 夹注 / 校勘：小字蓝色，与正文一眼可分（不进统计） */
+  .reader-body .annot {
+    font-size: 0.8em;
+    color: #2b6cb0;
+    letter-spacing: 0.01em;
+    text-indent: 0;
+  }
+  /* 脚注引用标记 [一] */
+  .reader-body .fn-mark {
+    font-size: 0.75em;
+    color: #2b6cb0;
+    vertical-align: 0.25em;
+    margin: 0 0.1em;
+    text-indent: 0;
+  }
+  /* 校勘/版本对照整段注：更小、蓝色、不缩进 */
+  .reader-body p.coll-note {
+    text-indent: 0;
+    font-size: 13px;
+    line-height: 1.75;
+    color: #2b6cb0;
+    padding-left: 0.6em;
+    border-left: 2px solid #c5daf0;
+    margin: -6px 0 14px 0.25em;
+    opacity: 0.95;
+  }
+  /* 整段脚注（段首 [一]…）：更小、蓝色、不缩进首字 */
+  .reader-body p.fn {
+    text-indent: 0;
+    font-size: 13px;
+    line-height: 1.85;
+    color: #2b6cb0;
+    padding-left: 0.5em;
+    border-left: 2px solid #c5daf0;
+    margin-left: 0.25em;
+  }
+  .reader-body mark { background: var(--mark); padding: 1px 2px; border-radius: 2px; }
+  .reader-body mark.guess {
+    background: transparent; color: var(--accent);
+    border-bottom: 1px dashed var(--accent); padding: 0; border-radius: 0;
+  }
+  .reader-body mark.approx {
+    background: transparent; color: var(--place);
+    border-bottom: 1px dashed var(--place); padding: 0; border-radius: 0;
+  }
+  .reader-body p.target { background: var(--target); border-radius: 6px; }
+  /* 裴注样例摘录：与正文句条区分，避免污染 .sentence 统计 */
+  .pei-line {
+    font-family: var(--serif); font-size: 14px; line-height: 1.85;
+    color: #5c6a7a; background: #f4f6f8;
+    border-left: 3px solid #b8c4d0;
+    padding: 8px 10px; margin: 6px 0; border-radius: 0 4px 4px 0;
+    cursor: pointer;
+  }
+  .pei-line:hover { background: #eef2f6; }
+  @media (max-width: 640px) {
+    .reader-inner { inset: 0; width: 100%; border-radius: 0; transform: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>古 籍 檢 索</h1>
+  <p class="sub" id="sub">史記 · 漢書 · 人名索引 + 地名索引</p>
+</header>
+
+<div class="wrap">
+  <div class="bookbar" id="books"></div>
+
+  <div class="searchbar">
+    <input id="q" type="text" list="names" placeholder="輸入人物名/稱謂 或 地名，如 劉邦、蘇武、霍光、梁王、滎陽、鉅鹿、齊" autocomplete="off">
+    <datalist id="names"></datalist>
+    <button id="btn">檢索</button>
+  </div>
+  <div class="quick" id="quick"></div>
+
+  <div class="tabs">
+    <span data-tab="search" class="on">檢索結果</span>
+    <span data-tab="persons">人物索引</span>
+    <span data-tab="places">地名索引</span>
+    <span data-tab="chapters">篇目一覽</span>
+  </div>
+
+  <div id="out"></div>
+  <div class="note" id="note"></div>
+</div>
+
+<div class="reader" id="reader">
+  <div class="reader-inner">
+    <div class="reader-head" id="readerHead">
+      <div class="title" id="readerTitle"></div>
+      <div class="tools" id="readerTools"></div>
+    </div>
+    <div class="reader-body" id="readerBody"></div>
+  </div>
+</div>
+
+<script src="app-data.js"></script>
+<script src="pei-data.js"></script>
+<script src="js-note-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
