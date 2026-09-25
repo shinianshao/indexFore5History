@@ -29,7 +29,17 @@
 - 改词典只跑 `annotate*` 子集；**轮末才全量** `run_pipeline`。
 - 复杂清洗脚本写 `pipeline/_*.py`，勿用 `python -c`（PowerShell 会吞引号/正则）。
 
-## 回归链
+## 回归链（优先用一键脚本）
+```bash
+bash scripts/run_all.sh            # 断言 → 字面层 → UI 四套（约 50 秒）
+bash scripts/run_all.sh --full     # 追加 _ui_sweep.js 全量扫描（慢）
+bash scripts/run_all.sh --no-ui    # 只跑 Python 侧，改词典时的快速回路
+```
+⚠ **python 必须挑装了 opencc 的那个**：本机是**系统 Python 3.12.10**
+（`C:\Users\dell\AppData\Local\Programs\Python\Python312\python.exe`）。
+PATH 上第一位的托管版 3.13.12 **没装 opencc**，拿它跑 `check_trad.py` 会假失败。
+
+手工等价步骤（脚本失效时才用）：
 ```
 python pipeline/verify.py --check        # 断言基线
 python pipeline/check_trad.py            # A–G 七道字面闸
