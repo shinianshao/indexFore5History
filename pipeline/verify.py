@@ -698,8 +698,8 @@ def check():
     cases.append(("臨海含别名 台州/臺州", "台州" in al and "臺州" in al, al))
 
     # ===== 散见人物补齐 + 武帝/魏王丕 错归修复（2026 用户报）=====
-    cases.append(("人物总数 ≥ 2000（散见补齐后）",
-                  len(DATA["persons"]) >= 2000,
+    cases.append(("人物总数 ≥ 2300（散见 + 类传/附传两次补齐后）",
+                  len(DATA["persons"]) >= 2300,
                   str(len(DATA["persons"]))))
     wudi_hhs_cc = sum(
         1 for s in DATA["sentences"]
@@ -816,6 +816,39 @@ def check():
                 if "曾祖" in t[max(0, i - 12): j + 12]:
                     gaozu_kin += 1
     cases.append(("「高祖…曾祖」親屬稱謂不標", gaozu_kin == 0, str(gaozu_kin)))
+
+    # ===== P1-b 类传/附传长尾缺人 =====
+    # 儒林/文苑/隐逸/艺术/载记从属里成建制的传主，过去整批不在典：
+    # 检索「嵇康」直接返回未收录。这批人是靠「X字Y」传主句式捞出来的。
+    # 判据点名标志性人物而不是读计划文件——计划文件是一次性产物（gitignore）。
+    _CLASS_FILL = ("嵇康", "劉琨", "祖逖", "陸機", "潘岳", "葛洪", "張華", "鍾會",
+                   "向秀", "陳琳", "杜預", "鄧艾", "荀勖", "蘇峻", "郗鑒", "楊駿",
+                   "殷浩")
+    _cls_stat = []
+    for _nm in _CLASS_FILL:
+        _ps = [p for p in persons
+               if p.get("tradName") == _nm or p.get("name") == _nm]
+        _cls_stat.append((_nm, max((p.get("mentionCount") or 0) for p in _ps)
+                          if _ps else 0))
+    _cls_zero = [nm for nm, n in _cls_stat if n <= 0]
+    _cls_total = sum(n for _, n in _cls_stat)
+    cases.append(("类传/附传传主已入典（嵇康/劉琨/祖逖…无零命中）",
+                  not _cls_zero and _cls_total >= 800,
+                  "零命中={} 合计={}".format(_cls_zero, _cls_total)))
+    # 负向：这批人是魏晉人，books 限在 js / sgz，绝不能漏进史記、漢書——
+    # 漏进去就是同名异人误挂（史記里没有嵇康，有也不该由这条补人链路标）。
+    _cls_leak = []
+    for _nm in _CLASS_FILL:
+        for p in persons:
+            if p.get("tradName") != _nm and p.get("name") != _nm:
+                continue
+            bb = p.get("byBook") or {}
+            leak = ((bb.get("sj") or {}).get("mentionCount") or 0) + \
+                   ((bb.get("hs") or {}).get("mentionCount") or 0)
+            if leak:
+                _cls_leak.append((_nm, leak))
+    cases.append(("类传补齐人物不越书到史記/漢書", not _cls_leak,
+                  "越书={}".format(_cls_leak)))
 
     print("=" * 72)
     print("回归断言")

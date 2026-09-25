@@ -38,8 +38,11 @@ bash scripts/run_all.sh
 |---|---|
 | 覆盖 | 史記 130 / 漢書 109 / 後漢書 130 / 三國志 65 / 晉書 130（含载记 30）= **564 篇** |
 | 语料 | 95,632 句 |
-| 词典 | 人物 **2013** / 地名 **1575** / 零命中 0 |
-| 验收 | `verify --check` **81/81** · `check_trad` A–G 七道闸 · UI 65 / 46 / 49 |
+| 词典 | 人物数见 `annotate.py` 输出 / 地名 **1575** / 零命中 0 |
+| 验收 | `verify --check` 全通过（条数只许升不许降）· `check_trad` A–G 七道闸 · UI 四套 |
+
+> 人数与断言条数会随补人变动，**以实跑为准**，勿抄此处的旧数：
+> `python pipeline/annotate.py`（看「人物 N」）、`python pipeline/verify.py --check`（看末行）。
 
 ---
 

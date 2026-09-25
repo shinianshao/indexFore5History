@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BD = ROOT / "pipeline" / "build_dict.py"
-PLAN = json.loads((ROOT / "pipeline" / "_persons_fill_plan.json").read_text(encoding="utf-8"))
+# 计划文件可换（默认散见补齐；类传/附传用 _gen_class_fill.py 产出的计划）
+_plan_path = Path(sys.argv[1]) if len(sys.argv) > 1 else \
+    ROOT / "pipeline" / "_persons_fill_plan.json"
+PLAN = json.loads(_plan_path.read_text(encoding="utf-8"))
 
 BOOKS_TABLE = {
     "sj": "PERSON_BOOKS_SJ",

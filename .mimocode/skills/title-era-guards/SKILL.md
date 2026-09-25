@@ -57,7 +57,15 @@ ALIAS_STOP_POST = {
 
 ## 三、泛称归属：追述择近
 
-`resolve_generic` 顺序：
+`resolve_generic` 顺序（**⓪ 是 2026-09-25 新增的，排在所有统计信号之前**）：
+
+⓪ **ctxRule 上下文硬证据**（`build_dict.GENERIC_CONTEXT_RULES`）：
+   年号 / 谥号 / 亲属称谓命中 → 直接定人，不看统计。
+   - 例：`元帝景元|咸熙`→曹奐、`元帝太興|永昌|建武`→司馬睿、
+     `元帝初元|永光|建昭|竟寧`→漢元帝；`高祖`+`曾祖/玄孫`→ `none`（亲属用法不标）。
+   - ⚠️ **必须写在「按书 narrowing」之前**。写反了硬证据会被书作用域挡掉
+     （第一版就是写反的：元帝仍落曹奐 46 处；改对后降到 6 处、且全是景元/咸熙处）。
+   - 规则里的 target 必须在候选内，否则 build_dict 启动即报错。
 
 1. owner / related / sentence / paragraph / chapter  
 2. era：**同代唯一候选** → 归他  
