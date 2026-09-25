@@ -904,6 +904,25 @@ def check():
     cases.append(("「無廢我高祖之景命」→ 司馬懿（晉室禪位詔）",
                   gm.get("p_simayi", 0) >= 1 and gm.get("p_liubang", 0) == 0, str(gm)))
 
+    # ===== P2-a 表字长尾补录 =====
+    # 表字**不能**批量补：抽查 14 条里 9 条是误抽（博士**弟子治**、
+    # 王**季思**慮、遭**世康**平、申**叔時**、**叔平**其实是敞/參的字）。
+    # 所以只收「与本人同句共现 ≥2 处且共现率 ≥70%」的那一档，
+    # 其余留进 docs/17-条目-表字长尾.md 走人工/AI 判。
+    _ZI_CASES = (("楊洪", "季休"), ("和嶠", "長輿"), ("崔琰", "季珪"),
+                 ("華佗", "元化"), ("譙周", "允南"), ("荀崧", "景猷"))
+    _zi_bad = []
+    for _nm, _zi in _ZI_CASES:
+        _ps = [p for p in persons if (p.get("tradName") or p.get("name")) == _nm]
+        if not _ps:
+            _zi_bad.append(_nm + "·" + _zi + "：人不在典")
+            continue
+        _al = {x["alias"]: x["n"] for x in _ps[0].get("topAliases") or []}
+        if _al.get(_zi, 0) < 1:
+            _zi_bad.append("{}·{}：未命中({})".format(_nm, _zi, sorted(_al)))
+    cases.append(("表字长尾补录生效（只收同句共现 ≥70% 那档）",
+                  not _zi_bad, "; ".join(_zi_bad)))
+
     print("=" * 72)
     print("回归断言")
     bad = 0
