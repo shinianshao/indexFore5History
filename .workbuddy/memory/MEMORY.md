@@ -28,6 +28,9 @@
 - 跨书同人**只扩 `books` 并集**，禁止新建 `p_xxx2`，禁止后表覆盖前表。
 - 改词典只跑 `annotate*` 子集；**轮末才全量** `run_pipeline`。
 - 复杂清洗脚本写 `pipeline/_*.py`，勿用 `python -c`（PowerShell 会吞引号/正则）。
+- **一次性脚本归 `pipeline/_scratch/`**，判据「下一轮还会不会用到」。
+  移动时必改两处：① `ROOT = Path(__file__).resolve().parents[1]` → **`parents[2]`**（多一层）；
+  ② 导入 `common`/`trad` 的要加 `sys.path.insert(0, 父目录)`。详见 `pipeline/_scratch/README.md`。
 
 ## 回归链（优先用一键脚本）
 ```bash
