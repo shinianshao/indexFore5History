@@ -4,7 +4,7 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 people = json.loads((ROOT / "data/dict/people.json").read_text(encoding="utf-8"))
 co = people["chapterOwners"]
 persons = {p["id"]: p for p in people["persons"]}

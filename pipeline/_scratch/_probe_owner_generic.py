@@ -3,7 +3,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 # --- people.json 篇主空缺 ---
 d = json.loads((ROOT / "data/dict/people.json").read_text(encoding="utf-8"))

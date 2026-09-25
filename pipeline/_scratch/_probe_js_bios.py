@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 v = json.loads((ROOT / "data/dict/volumes/js.json").read_text(encoding="utf-8"))
 
 # 姓+名 2-3 字，后接 字/諱/，/。/， 人也

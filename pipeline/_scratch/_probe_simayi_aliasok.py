@@ -6,8 +6,10 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "pipeline"))
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))  # 已移入 _scratch/，补回 pipeline/ 以便导入 common / trad
 from common import compile_alias_pattern, norm  # noqa: E402
 from annotate import alias_ok  # noqa: E402
 

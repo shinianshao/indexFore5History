@@ -2,7 +2,8 @@
 from pathlib import Path
 import re
 
-p = Path(r"C:\Users\dell\WorkBuddy\WeChatAPP-BOOKINDEX\web\corpus-data.js")
+ROOT = Path(__file__).resolve().parents[2]  # 已移入 _scratch/
+p = ROOT / "web" / "corpus-data.js"
 t = p.read_text(encoding="utf-8")
 print("size", len(t))
 print("notes count", t.count('"notes"'))

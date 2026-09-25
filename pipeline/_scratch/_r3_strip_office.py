@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BD = ROOT / "pipeline" / "build_dict.py"
 
 # —— 必须剥离（裸官职 / 地名+官职）——

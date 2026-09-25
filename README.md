@@ -81,7 +81,12 @@ pipeline/        离线管线（Python）
   check_trad.py    字面层守卫（必须最后跑）
   verify.py        回归断言
   run_pipeline.py  按顺序编排以上各步
-  _*.py            一次性探针/修复脚本（可删）
+  _ui_test*.js _ui_csscheck.js _ui_sweep.js   无头 UI 回归
+  _snapshot_counts.py   改动前后逐 id 对账
+  _shot*.js             截图取证
+  _probe_*.py _gen_*_fill.py _apply_*_fill.py
+                        **仍在用的**抽查探针与批量入典工具（见 _scratch/README.md）
+  _scratch/             一次性脚本存档（30 个，绑定某一轮，非工作流）
 
 data/
   raw/ corpus/ index/   抓取 / 切分 / 索引产物（**不入库**）

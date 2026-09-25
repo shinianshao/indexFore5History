@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BD = ROOT / "pipeline" / "build_dict.py"
 PEOPLE = json.loads((ROOT / "data/dict/people.json").read_text(encoding="utf-8"))
 BDATA = json.loads((ROOT / "data/index/book-data.json").read_text(encoding="utf-8"))

@@ -7,7 +7,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 bd = json.loads((ROOT / "data/index/book-data.json").read_text(encoding="utf-8"))
 pei = json.loads((ROOT / "data/index/pei-data.json").read_text(encoding="utf-8"))
 corpus = ROOT / "data/corpus"

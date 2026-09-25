@@ -4,7 +4,7 @@ import importlib.util
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location(
     "fill", ROOT / "pipeline" / "_fill_sgz_owners.py"
 )

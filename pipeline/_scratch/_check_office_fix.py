@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BD = (ROOT / "pipeline" / "build_dict.py").read_text(encoding="utf-8")
 AN = (ROOT / "pipeline" / "annotate.py").read_text(encoding="utf-8")
 

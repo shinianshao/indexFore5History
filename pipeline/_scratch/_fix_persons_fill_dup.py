@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BD = ROOT / "pipeline" / "build_dict.py"
 
 # 1) 整行删除（假召回/重复/零命中且无价值）

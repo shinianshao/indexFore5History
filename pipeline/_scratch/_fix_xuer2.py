@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BD = ROOT / "pipeline" / "build_dict.py"
 
 # 州部连称 / 「X二州」截断，不是人名

@@ -7,7 +7,7 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 ppl = json.loads((ROOT / "data/dict/people.json").read_text(encoding="utf-8"))
 
 # 官职/军号/散号核心词（含用户点名的骑都尉）
