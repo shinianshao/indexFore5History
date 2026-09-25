@@ -850,6 +850,60 @@ def check():
     cases.append(("类传补齐人物不越书到史記/漢書", not _cls_leak,
                   "越书={}".format(_cls_leak)))
 
+    # ===== docs/17 人工判定回填（2026-09 用户逐条勾选后落地）=====
+    # 用户是在「你的判定」列逐条写人名的，不是整体勾一个——所以这里
+    # 每条断言都对着一个具体上下文，而不是对着聚合数字。
+    def _js_alias(alias):
+        for s in DATA["sentences"]:
+            if not s["chapterId"].startswith("js-"):
+                continue
+            for m in s.get("marks") or []:
+                if m.get("alias") == alias:
+                    yield s, m
+
+    def _js_ctx(alias, key):
+        c = {}
+        for s, m in _js_alias(alias):
+            t = s.get("text") or ""
+            i, j = m.get("s", 0), m.get("e", 0)
+            if key in t[max(0, i - 12): j + 12]:
+                c[m["pid"]] = c.get(m["pid"], 0) + 1
+        return c
+
+    # 「魏武帝」是曹操长名。books 不含 js 时长名在晋书不生效，
+    # 裸「武帝」就把「魏武帝為司空」「封魏武帝玄孫曹勵」截走了。
+    weiwu = [m for _, m in _js_alias("魏武帝")]
+    cases.append(("「魏武帝」長名→曹操（js）",
+                  len(weiwu) >= 20 and all(m["pid"] == "p_caocao" for m in weiwu),
+                  "{} 处 {}".format(len(weiwu), sorted({m["pid"] for m in weiwu}))))
+
+    # 裸「武帝」归石虎 99 / 刘聪 43 处，**没一篇在载记**——全在志与列传里，
+    # 上下文是「武帝泰始二年」「武悼楊皇后配饗武帝廟」「安世，武帝字也」。
+    wudi_js = {}
+    for _, m in _js_alias("武帝"):
+        wudi_js[m["pid"]] = wudi_js.get(m["pid"], 0) + 1
+    cases.append(("晉書裸「武帝」不再歸石虎/劉聰（chapter 誤牽十六國）",
+                  wudi_js.get("p_shihu", 0) == 0 and wudi_js.get("p_liucong", 0) == 0
+                  and wudi_js.get("p_simayan", 0) >= 300,
+                  "司馬炎={} 石虎={} 劉聰={}".format(wudi_js.get("p_simayan", 0),
+                                                     wudi_js.get("p_shihu", 0),
+                                                     wudi_js.get("p_liucong", 0))))
+    ws = _js_ctx("武帝", "泰始")
+    cases.append(("「武帝泰始」→ 司馬炎（年號硬證據）",
+                  ws.get("p_simayan", 0) >= 30, str(ws)))
+    yj = _js_ctx("元帝", "京房")
+    cases.append(("「元帝…京房」→ 漢元帝劉奭（漢代追述，非司馬睿）",
+                  yj.get("p_hanyuandi", 0) >= 1 and yj.get("p_simarui", 0) == 0, str(yj)))
+    yd = _js_ctx("元帝", "渡江")
+    cases.append(("「元帝渡江」→ 司馬睿（志書跨代不再掉 guess）",
+                  yd.get("p_simarui", 0) >= 15, str(yd)))
+    gl = _js_ctx("高祖", "婁敬")
+    cases.append(("「高祖…婁敬」→ 劉邦（漢典，非劉淵）",
+                  gl.get("p_liubang", 0) >= 1 and gl.get("p_liuyuan", 0) == 0, str(gl)))
+    gm = _js_ctx("高祖", "景命")
+    cases.append(("「無廢我高祖之景命」→ 司馬懿（晉室禪位詔）",
+                  gm.get("p_simayi", 0) >= 1 and gm.get("p_liubang", 0) == 0, str(gm)))
+
     print("=" * 72)
     print("回归断言")
     bad = 0
