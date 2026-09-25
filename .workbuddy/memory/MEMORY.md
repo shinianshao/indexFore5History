@@ -28,6 +28,8 @@
 - 跨书同人**只扩 `books` 并集**，禁止新建 `p_xxx2`，禁止后表覆盖前表。
 - 改词典只跑 `annotate*` 子集；**轮末才全量** `run_pipeline`。
 - 复杂清洗脚本写 `pipeline/_*.py`，勿用 `python -c`（PowerShell 会吞引号/正则）。
+- **文档不写死统计数字**（人数/断言数/命中数）——一律「以当次输出为准」并给出取数命令。
+  历史教训：docs 里 74/75/79 三个数打架，实际 81；「2169 人」实际 2013。
 - **一次性脚本归 `pipeline/_scratch/`**，判据「下一轮还会不会用到」。
   移动时必改两处：① `ROOT = Path(__file__).resolve().parents[1]` → **`parents[2]`**（多一层）；
   ② 导入 `common`/`trad` 的要加 `sys.path.insert(0, 父目录)`。详见 `pipeline/_scratch/README.md`。
@@ -50,9 +52,25 @@ python pipeline/check_trad.py            # A–G 七道字面闸
 pipeline/_ui_test.js / _ui_test_books.js / _ui_test_places.js / _ui_csscheck.js
 ```
 
+## 人工判断清单的规矩（2026-09-25 用户拍板，以后都这么办）
+- **条目必须自带四项证据**：归属分布+tier 构成、原文上下文（前后各 14 字）、候选人的朝代、当前 default。
+  只有统计数字的清单用户判不了——旧 docs/17 因此作废重写。
+- **一律生成器产出，禁止手敲**：
+  ```bash
+  python pipeline/_gen_review_items.py --list                    # 挑：按 guess 处数降序
+  python pipeline/_gen_review_items.py --alias 武帝 --book js --per 6 \
+      --out "docs/17-条目-<批次>.md"
+  ```
+- 模板在 `docs/17-待办-人工判断清单.md` §二（生成器格式必须与之对齐）；
+  批次文件 `docs/17-条目-*.md` 是作业纸，判定回填后结论进 §五台账、文件可删。
+- 判不了就勾**未知**（`none`/`guess`），不要为填完而硬归。
+- 生成器要点：只扫规范形（防简繁重复计数）；「被更长别名接管」≠漏标
+  （漢高祖 由长名命中是正确行为）；上下文按 pid 轮转取样。
+
 ## 已知残留（未决）
-- `docs/17` 人工判断清单等用户勾选：10 条裸帝号/王号 default + 9 条 guess 池 TOP。
-- guess 池约 1473 处；晋书裸「武帝」仍有汉武帝 85 处追述；高祖 js 仍 guess 兜刘邦。
+- 待判批次：`docs/17-条目-晋书帝号.md`（高祖/武帝/元帝/惠帝/明帝 @js）。
+- guess 池规模以 `--list` 当次输出为准（曾约 1473 处）；晋书裸「武帝」仍有汉武帝追述。
+- guess 池下一个该看：周公、趙王、關內侯、文王、梁王、常山王。
 - 附传/类传长尾缺人、表字尊称命中≤10 的长尾。
 - 前端 `app-data.js` 31.9MB 整包注入（`docs/03` 决策的按书拆分从未实施）。
 - 文档 01–18 数字互相打架（74/75/79 vs 实际 81；2169 vs 实际 2013 人），待治理。

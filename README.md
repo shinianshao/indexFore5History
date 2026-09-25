@@ -67,6 +67,21 @@ NODE_PATH=<...> node pipeline/_ui_csscheck.js
 
 ---
 
+## 人工判断清单（裸帝号/王号到底归谁）
+
+算法硬兜不准的地方最终必须人判。条目**一律生成、禁止手敲**（光给统计数字判不了）：
+
+```bash
+python pipeline/_gen_review_items.py --list                   # 挑：按 guess 处数降序
+python pipeline/_gen_review_items.py --alias 武帝 --book js \
+    --per 6 --out "docs/17-条目-<批次>.md"                    # 生：带原文上下文
+```
+
+判定 → 回填 `GENERIC_*` / core → `verify.py` 加一条断言 → 结论记进 `docs/17` §五台账。
+模板与四步流程见 **`docs/17-待办-人工判断清单.md`**。
+
+---
+
 ## 目录结构
 
 ```
@@ -86,6 +101,7 @@ pipeline/        离线管线（Python）
   _shot*.js             截图取证
   _probe_*.py _gen_*_fill.py _apply_*_fill.py
                         **仍在用的**抽查探针与批量入典工具（见 _scratch/README.md）
+  _gen_review_items.py  人工判断条目生成器（带原文上下文）
   _scratch/             一次性脚本存档（30 个，绑定某一轮，非工作流）
 
 data/
@@ -121,7 +137,7 @@ scripts/run_all.sh      一键回归
 |---|---|
 | **`docs/16`** | **新会话交接书**：目标、抽查工作流、回归链、禁区 —— 接手先读这篇 |
 | `docs/18` | 人名筛查方法与原则（什么算人名、排除闸） |
-| `docs/17` | **待办：人工判断清单**（裸帝号 default + guess 池），等勾选后回填 |
+| **`docs/17`** | **人工判断清单：模板 + 四步流程 + 已判台账**（条目在 `docs/17-条目-*.md`） |
 | `docs/15` | 本轮问题与经验总结 |
 | `docs/11–12` | 以史记为标杆的问题报告 + R0–R5 修改方案 |
 | `docs/13–14` | 晋书接入流程与五轮落地 |
@@ -135,8 +151,9 @@ scripts/run_all.sh      一键回归
 
 ## 已知残留（未决）
 
-- `docs/17` 人工判断清单：10 条裸帝号/王号 default + 9 条 guess 池 TOP，需人工勾选
-- 泛称 `guess` 池约 1473 处；晋书裸「武帝」仍有汉武帝 85 处追述
+- `docs/17` 人工判断：待判批次 `docs/17-条目-晋书帝号.md`（高祖/武帝/元帝/惠帝/明帝 @js）
+- 泛称 `guess` 池（最可疑，硬兜 default）；规模以 `python pipeline/_gen_review_items.py --list` 当次输出为准
+- 晋书裸「武帝」仍有汉武帝追述（`GENERIC_BOOK_CANDIDATES` 已收过一轮，待复核）
 - 附传/类传长尾缺人；表字尊称命中 ≤10 的长尾
 - `web/app-data.js` 31.9 MB 整包注入（`docs/03` 已决策按书拆分，尚未实施）
 - 文档 01–18 数字互相打架，待治理
