@@ -746,6 +746,77 @@ def check():
             bad_zhou.append(n)
     cases.append(("州部连称不进人物表（徐二州等）", not bad_zhou, str(bad_zhou)))
 
+    # ===== P1-a 裸短名错挂修复（2026-09，晋书帝号）=====
+    def js_marks(alias, pid=None):
+        return [m for s in DATA["sentences"]
+                for m in (s.get("marks") or [])
+                if s["chapterId"].startswith("js-")
+                and m.get("alias") == alias
+                and (pid is None or m.get("pid") == pid)]
+
+    # 惠帝：晋书裸称一律晋惠帝，汉惠帝走「漢惠帝/孝惠帝」长名
+    huidi_js_liuying = len(js_marks("惠帝", "p_hanhuidi"))
+    huidi_js_zhong = len(js_marks("惠帝", "p_simazhong"))
+    cases.append(("晉書裸「惠帝」不歸漢惠帝劉盈",
+                  huidi_js_liuying == 0 and huidi_js_zhong >= 200,
+                  "劉盈={} 司馬衷={}".format(huidi_js_liuying, huidi_js_zhong)))
+
+    # 元帝：晋书裸称绝大多数晋元帝；曹奐只保留「景元/咸熙」年号那几处
+    yuandi_js_huan = len(js_marks("元帝", "p_caohuan"))
+    yuandi_js_rui = len(js_marks("元帝", "p_simarui"))
+    cases.append(("晉書裸「元帝」曹奐只剩年號那幾處",
+                  0 < yuandi_js_huan <= 10 and yuandi_js_rui >= 280,
+                  "曹奐={} 司馬睿={}".format(yuandi_js_huan, yuandi_js_rui)))
+    huan_bad = 0
+    for s in DATA["sentences"]:
+        for m in s.get("marks") or []:
+            if m.get("alias") == "元帝" and m.get("pid") == "p_caohuan":
+                tail = s["text"][m.get("e", 0): m.get("e", 0) + 6]
+                if "景元" not in tail and "咸熙" not in tail:
+                    huan_bad += 1
+    cases.append(("曹奐的裸「元帝」必帶景元/咸熙年號", huan_bad == 0,
+                  "无年号 {}".format(huan_bad)))
+
+    # 元帝景元/太興：年号守卫双向生效（不再互串）
+    def yuandi_post(key):
+        pids = Counter()
+        for s in DATA["sentences"]:
+            for m in s.get("marks") or []:
+                if m.get("alias") == "元帝" and \
+                        key in s["text"][m.get("e", 0): m.get("e", 0) + 6]:
+                    pids[m.get("pid")] += 1
+        return pids
+    jy = yuandi_post("景元")
+    tx = yuandi_post("太興")
+    cases.append(("「元帝景元」→ 曹奐、「元帝太興」→ 司馬睿",
+                  jy.get("p_caohuan", 0) >= 4
+                  and jy.get("p_simarui", 0) == 0
+                  and tx.get("p_simarui", 0) >= 20
+                  and tx.get("p_caohuan", 0) == 0,
+                  "景元{} 太興{}".format(jy.most_common(2), tx.most_common(2))))
+
+    # 高祖宣皇帝：司马懿庙号+谥号，长名优先不得被裸「高祖」截走
+    gx = [(s["chapterId"], m.get("pid"))
+          for s in DATA["sentences"]
+          for m in (s.get("marks") or [])
+          if m.get("alias") == "高祖宣皇帝"]
+    cases.append(("「高祖宣皇帝」→ 司馬懿", len(gx) >= 4
+                  and all(p == "p_simayi" for _, p in gx),
+                  "{} 处 {}".format(len(gx), gx[:2])))
+
+    # 高祖作「高祖父」亲属称谓时不标（宁缺勿滥）
+    gaozu_kin = 0
+    for s in DATA["sentences"]:
+        t = s.get("text") or ""
+        if "曾祖" not in t:
+            continue
+        for m in s.get("marks") or []:
+            if m.get("alias") == "高祖":
+                i, j = m.get("s", 0), m.get("e", 0)
+                if "曾祖" in t[max(0, i - 12): j + 12]:
+                    gaozu_kin += 1
+    cases.append(("「高祖…曾祖」親屬稱謂不標", gaozu_kin == 0, str(gaozu_kin)))
+
     print("=" * 72)
     print("回归断言")
     bad = 0

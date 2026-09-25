@@ -390,12 +390,32 @@ def dominant(counts, cands, need):
     return ranked[0][0]
 
 
+def match_ctx_rule(rules, text, s, e):
+    """泛称上下文守卫：邻域里出现关键词就按规则定归属。
+
+    返回 (是否命中, 目标 pid 或 None)；目标 None 表示判不出（走 none）。
+    与统计信号（owner/era/章）不同，这是**逐字硬证据**——年号、谥号、
+    亲属称谓这类搭配是确定的，所以优先级放在统计信号之前。
+    """
+    for scope, key, target in rules or ():
+        if scope == "post":
+            seg = text[e:e + 6]
+        elif scope == "pre":
+            seg = text[max(0, s - 6):s]
+        else:                                   # window
+            seg = text[max(0, s - 12):s] + text[e:e + 12]
+        if key in seg:
+            return True, target
+    return False, None
+
+
 def resolve_generic(entry, chapter_owners, chapter_local, sent_count,
                     para_count, chapter_count, chapter_dynasty, dynasty_of,
-                    book_id=None, person_books=None):
+                    book_id=None, person_books=None, text=None, span=None):
     """判定一处泛称归谁。
 
     依据由强到弱，逐级放宽，每级都记下来源以便呈现与复核：
+      ⓪ ctxRule   —— 邻域硬证据（年号/谥号/亲属称谓），见 GENERIC_CONTEXT_RULES
       ① owner     —— 本篇主人公里只有一位持有此称号
       ② related   —— 篇内相关人物里只有一位持有此称号
       ③ sentence  —— 本句里某候选用姓名/专属别名出现过
@@ -406,6 +426,19 @@ def resolve_generic(entry, chapter_owners, chapter_local, sent_count,
       ⑦ guess     —— 都判不出，落到词典默认归属（前端标注存疑）
     """
     cands = entry["candidates"]
+    # ⓪ 上下文硬证据：**最先判定**。年号/谥号/亲属称谓是逐字铁证，
+    # 强于分书收束与一切统计信号——「元帝景元」在天文志里会被 era 档判给晋元帝，
+    # 但景元是曹奐年号。目标须在本泛称候选内，且允许在本书出现（不越书硬归）。
+    if text is not None and span is not None:
+        ok, target = match_ctx_rule(entry.get("ctxRules"), text, span[0], span[1])
+        if ok:
+            if target is None:
+                return None, "none"
+            if target in cands:
+                pb = (person_books or {}).get(target)
+                if not pb or book_id is None or book_id in pb:
+                    return target, "sentence"
+
     # 分书收束：断代史里裸帝号优先本纪传统含义（後漢書「武帝」= 漢武帝）
     book_cands = entry.get("bookCandidates") or {}
     if book_id and book_id in book_cands:
@@ -738,7 +771,8 @@ def main():
                         gh["entry"], chapter_owners, chapter_local,
                         sent_sig[gh["si"]], para_sig.get(gh["paraSeq"], {}),
                         chap_sig, chapter_dynasty, dynasty_of,
-                        book_id=book_id, person_books=person_books_map)
+                        book_id=book_id, person_books=person_books_map,
+                        text=processed[gh["si"]][2], span=(gh["s"], gh["e"]))
                 for gi in gis:                          # 还原
                     got = assign.get(gi)
                     if not got or not got[0]:
