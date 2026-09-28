@@ -26,11 +26,20 @@
     font-size: 15px; line-height: 1.7;
   }
   header {
-    padding: 26px 20px 16px; text-align: center;
+    padding: 26px 20px 16px; text-align: center; position: relative;
     border-bottom: 1px solid var(--border); background: var(--panel);
   }
   header h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: 2px; }
   header .sub { margin: 6px 0 0; color: var(--muted); font-size: 13px; letter-spacing: 1px; }
+  /* 回退：固定在页头左上角，不随内容滚动，任何状态下都点得到 */
+  .backbtn {
+    position: absolute; left: 18px; top: 24px;
+    font-family: sans-serif; font-size: 13px; line-height: 1;
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 11px; color: var(--muted); cursor: pointer;
+  }
+  .backbtn:hover { border-color: var(--accent); color: var(--accent); }
+  .backbtn[hidden] { display: none; }
   .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px 60px; }
   .searchbar { display: flex; gap: 8px; margin: 22px 0 10px; }
   .searchbar input {
@@ -335,6 +344,7 @@
 </head>
 <body>
 <header>
+  <button id="back" class="backbtn" hidden>← 返回</button>
   <h1>古 籍 檢 索</h1>
   <p class="sub" id="sub">史記 · 漢書 · 人名索引 + 地名索引</p>
 </header>

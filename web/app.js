@@ -727,6 +727,7 @@
         var pno = parseInt(seg[2], 10);
         if (pno > 0) jumpToParagraph(pno);
       }
+      writeHash();          // readerState 已就绪，此时写 hash 才带得上 ?c=
     });
   }
 
@@ -740,7 +741,7 @@
     if (!el) return;
     var act = el.getAttribute("data-act");
     if (act === "close") {
-      reader.classList.remove("on");
+      closeReader();
     } else if (act === "filter") {
       readerState.hitOnly = !readerState.hitOnly;
       readerState.nums = paraNums();
@@ -758,10 +759,10 @@
     }
   });
   reader.addEventListener("click", function (ev) {
-    if (ev.target === reader) reader.classList.remove("on");
+    if (ev.target === reader) closeReader();
   });
   document.addEventListener("keydown", function (ev) {
-    if (ev.key === "Escape") reader.classList.remove("on");
+    if (ev.key === "Escape") closeReader();
   });
 
   /* ---------------- 命中句渲染 ---------------- */
@@ -859,6 +860,7 @@
 
   function renderPerson(person) {
     readerTarget = { kind: "person", id: person.id };
+    writeHash();                  // currentPerson 由调用方先设好，此处回写路由
     var pid = person.id;
     var primaryIds = (mainByPerson[pid] || []).filter(inScope);
     var mentionMap = mentionsByPerson[pid] || {};
@@ -1005,6 +1007,7 @@
 
   function renderPlace(place) {
     readerTarget = { kind: "place", id: place.id };
+    writeHash();                  // 同上
     var pid = place.id;
     var mainList = (place.mainChapters || []).filter(function (r) { return inScope(r.cid); });
     var mainIds = mainList.map(function (r) { return r.cid; });
@@ -1532,9 +1535,8 @@
 
   function switchTab(tab) {
     currentTab = tab;
-    document.querySelectorAll(".tabs span").forEach(function (el) {
-      el.classList.toggle("on", el.getAttribute("data-tab") === tab);
-    });
+    syncTabUI(tab);
+    if (tab !== "search") writeHash();   // 檢索页的 hash 由具体 person/place 决定
     if (tab === "search") {
       if (currentPlace) renderPlace(currentPlace);
       else if (currentPerson) renderPerson(currentPerson);
@@ -1547,6 +1549,131 @@
       renderChapterIndex();
     }
   }
+
+  /* ================= 回退 / hash 路由 =================
+     本地页可能以 file:// 打开，此时 history.pushState 抛 SecurityError，
+     所以一律走 hash 路由：file:// 与 http 都能用，浏览器「后退」天然可用。
+
+     路由格式：
+       #/search              檢索页（人物索引列表）
+       #/person/<pid>        人物详情
+       #/place/<plid>        地名详情
+       #/persons #/places #/chapters
+       ?c=<chapterId>        叠加原文层（reader）；后退一步即关闭它
+
+     渲染函数内部会调 writeHash() 回写；由 hash 触发的渲染期间用 suppressHash
+     掐断回写，否则会形成「渲染 → 写 hash → hashchange → 渲染」的死循环。 */
+  var suppressHash = false;
+  var ROUTE_RE = /^#\/(search|persons|places|chapters|person|place)(?:\/([^?]+))?(?:\?(.*))?$/;
+
+  function queryOf(q) {
+    var out = {};
+    (q || "").split("&").forEach(function (kv) {
+      var i = kv.indexOf("=");
+      if (i > 0) out[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
+    });
+    return out;
+  }
+
+  function syncTabUI(tab) {
+    document.querySelectorAll(".tabs span").forEach(function (el) {
+      el.classList.toggle("on", el.getAttribute("data-tab") === tab);
+    });
+  }
+
+  function routeHash() {
+    var base;
+    if (currentPerson) base = "#/person/" + currentPerson.id;
+    else if (currentPlace) base = "#/place/" + currentPlace.id;
+    else base = "#/" + (currentTab || "search");
+    var cid = reader.classList.contains("on") && readerState ? readerState.chapterId : null;
+    return base + (cid ? "?c=" + cid : "");
+  }
+
+  function syncBackBtn() {
+    var btn = document.getElementById("back");
+    if (!btn) return;
+    var onReader = reader.classList.contains("on");
+    // 有历史可退，或正停在详情/原文层，就把返回露出来
+    btn.hidden = !(history.length > 1 || currentPerson || currentPlace || onReader);
+    btn.textContent = onReader ? "← 關閉原文" : "← 返回";
+    btn.title = onReader ? "關閉原文層（Esc）" : "回到上一層";
+  }
+
+  /* lastWritten：记住「刚由我们自己写进去」的那个 hash。
+     hashchange 是异步派发的，自己写的那一次也会回头触发 applyHash；
+     若不去重，界面会被**重渲染一遍**——在测试里表现为刚切到篇目一覽
+     又被拉回人物页（实测【7】因此失败）。自己写的不重渲染，
+     只有浏览器后退/前进或手改地址栏才真正重新渲染。 */
+  var lastWritten = null;
+
+  function writeHash() {
+    if (suppressHash) return;
+    var h = routeHash();
+    if (location.hash === h) { syncBackBtn(); return; }
+    lastWritten = h;              // 入历史栈 → 浏览器后退可用
+    location.hash = h;
+    syncBackBtn();
+  }
+
+  /* 统一的「关闭原文层」：三处入口（遮罩 / Esc / 关闭按钮）都走这里，
+     否则关了浮层但 hash 里还留着 ?c=，后退会莫名其妙。 */
+  function closeReader() {
+    if (!reader.classList.contains("on")) return;
+    reader.classList.remove("on");
+    writeHash();                  // 清掉 ?c=
+  }
+
+  function applyHash() {
+    var cur = location.hash || "";
+    if (lastWritten && cur === lastWritten) {   // 自己刚写的，界面已是这个状态
+      lastWritten = null;
+      syncBackBtn();
+      return;
+    }
+    lastWritten = null;
+    var m = ROUTE_RE.exec(cur);
+    var type = m ? m[1] : "search";
+    var id = m && m[2] ? decodeURIComponent(m[2]) : null;
+    var q = m ? queryOf(m[3]) : {};
+    suppressHash = true;
+    try {
+      var tab = (type === "person" || type === "place") ? "search" : type;
+      currentTab = tab;
+      syncTabUI(tab);
+      if (type === "person" && personMap[id]) {
+        currentPerson = personMap[id]; currentPlace = null;
+        renderPerson(currentPerson);
+      } else if (type === "place" && placeMap[id]) {
+        currentPlace = placeMap[id]; currentPerson = null;
+        renderPlace(currentPlace);
+      } else {
+        currentPerson = null; currentPlace = null;
+        if (tab === "places") renderPlacesIndex();
+        else if (tab === "chapters") renderChapterIndex();
+        else renderPersonsIndex();
+      }
+      if (q.c && chapterMap[q.c]) {
+        if (!(reader.classList.contains("on") && readerState &&
+              readerState.chapterId === q.c)) {
+          openChapter(q.c);
+        }
+      } else if (reader.classList.contains("on")) {
+        reader.classList.remove("on");
+      }
+    } finally {
+      suppressHash = false;
+    }
+    syncBackBtn();
+  }
+
+  window.addEventListener("hashchange", applyHash);
+  document.getElementById("back").addEventListener("click", function () {
+    // 原文层开着就先关它（更符合「退一步」的直觉），否则退真正的上一步
+    if (reader.classList.contains("on")) { closeReader(); return; }
+    if (history.length > 1) history.back();
+    else { location.hash = "#/search"; }
+  });
 
   /* ---------------- 初始化 ---------------- */
 
@@ -1653,5 +1780,8 @@
 
   initQuick();
   initDatalist();
-  search("劉邦");
+  /* 帶 hash 進來（後退回來、或別人分享的鏈接）就先按路由還原，
+     否則走默認的「劉邦」首屏。注意順序：先 applyHash 再 search。 */
+  if (location.hash) applyHash();
+  else search("劉邦");
 })();

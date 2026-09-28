@@ -1,0 +1,21 @@
+# 判定表 · 第 5 批（剩余 19 条表字；共現率 0 是因為**詞典正名是繁體、語料此處是簡體**，不是沒共現）
+# 第 6 列 = 要寫進詞典的繁體規範形（別名鐵律：只寫繁體）
+zi|p_zhangzong|诸君	reject	0.1	-	「诸君被问，悉当以罪推燕」中「诸君」＝諸位，是代詞不是表字；誤抽自傳主句
+zi|p_x89924|弘文	alias	0.9	p_x89924	「城陽邴郁字弘文」傳主獨證，全庫僅此1處，無誤掛空間（另：詞典正名「邴鬱」與語料「邴郁」異寫）
+zi|p_zhaobao|威豪	alias	0.9	p_zhaobao	「赵苞字威豪」傳主獨證，全庫僅此1處
+zi|p_zhangji_sg|德容	alias	0.9	p_zhangji_sg	「張旣字德容」傳主獨證，全庫僅此1處
+zi|p_zhengzhong|季产	alias	0.9	p_zhengzhong	「鄭众字季产」傳主獨證，全庫僅此1處	季產
+zi|p_yanglun|仲理	alias	0.9	p_yanglun	「楊伦字仲理」傳主獨證，全庫僅此1處
+zi|p_x88425|汉盛	alias	0.9	p_x88425	「吕强字汉盛」傳主獨證，全庫僅此1處	漢盛
+zi|p_x67252|豫公	alias	0.9	p_x67252	「缪肜字豫公」傳主獨證，全庫僅此1處
+zi|p_x53462|子鯭	alias	0.85	p_x53462	「張驯字子鯭」傳主獨證，全庫僅此1處；字形與今本「子雋」有出入，但語料即此形且不他見
+zi|p_x27724|君阳	alias	0.9	p_x27724	「索卢放字君阳」傳主獨證，全庫僅此1處	君陽
+zi|p_x20448|次房	alias	0.9	p_x20448	「温序字次房」傳主獨證，全庫僅此1處
+zi|p_weizhen_sg|公振	alias	0.9	p_weizhen_sg	「卫臻字公振」傳主獨證，全庫僅此1處
+zi|p_weikan_sg|伯儒	alias	0.9	p_weikan_sg	「衞覬字伯儒」傳主獨證，全庫僅此1處
+zi|p_simayan2|世根	alias	0.9	p_simayan2	「成皇帝諱衍，字世根」帝紀本紀獨證，全庫僅此1處
+zi|p_simadan2|彭子	alias	0.9	p_simadan2	「穆皇帝諱聃，字彭子」帝紀本紀獨證，全庫僅此1處
+zi|p_qiaoxuan_dx|君黄	alias	0.9	p_qiaoxuan_dx	「谯玄字君黄」傳主獨證，全庫僅此1處	君黃
+zi|p_luxu|智初	alias	0.9	p_luxu	「陆续字智初」傳主獨證，全庫僅此1處
+zi|p_liye|巨游	alias	0.9	p_liye	「李业字巨游」傳主獨證，全庫僅此1處
+zi|p_banzhao|惠班	alias	0.9	p_banzhao	「名昭，字惠班，一名姬」列女傳獨證，全庫僅此1處

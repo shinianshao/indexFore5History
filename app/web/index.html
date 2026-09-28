@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>古籍檢索 · 本地索引</title>
+<style>
+  /* 克制的古典：宣紙底 / 墨色字 / 朱砂點綴。不做豎排、印章、漢字數字——
+     可讀性優先（docs/21 §12.4）。正文與書名用宋體，控件與數字用 sans。 */
+  :root {
+    --bg: #F7F4EC;      /* 宣紙 */
+    --panel: #FFFDF7;   /* 面板，比底略亮 */
+    --text: #2B2A27;    /* 墨 */
+    --muted: #7A756B;   /* 淡墨 */
+    --border: #DED8C8;  /* 版框線 */
+    --accent: #9E3D32;  /* 朱砂 */
+    --accent-soft: #F5E9E6;
+    --serif: "Songti SC", "SimSun", "Source Han Serif SC", "Noto Serif CJK SC", serif;
+    --sans: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: var(--sans); font-size: 15px; line-height: 1.7;
+  }
+  header {
+    padding: 24px 20px 14px; text-align: center; position: relative;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 {
+    margin: 0; font-family: var(--serif); font-size: 21px;
+    font-weight: 500; letter-spacing: 3px;
+  }
+  header .sub { margin: 4px 0 0; color: var(--muted); font-size: 12px; letter-spacing: 1px; }
+  .backbtn {
+    position: absolute; left: 18px; top: 22px; font-family: var(--sans);
+    font-size: 13px; line-height: 1; background: transparent;
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 7px 11px; color: var(--muted); cursor: pointer;
+  }
+  .backbtn:hover { border-color: var(--accent); color: var(--accent); }
+  .backbtn[hidden] { display: none; }
+
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 20px 60px; }
+  .searchbar { display: flex; gap: 8px; margin: 22px 0 8px; }
+  .searchbar input {
+    flex: 1; padding: 9px 12px; font-family: var(--serif); font-size: 15px;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; outline: none;
+  }
+  .searchbar input:focus { border-color: var(--accent); }
+  .searchbar button {
+    padding: 9px 16px; font-family: var(--sans); font-size: 14px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  .modes { display: flex; gap: 6px; margin-bottom: 14px; }
+  .modes span {
+    padding: 5px 12px; font-size: 13px; border: 1px solid var(--border);
+    border-radius: 8px; color: var(--muted); cursor: pointer; background: var(--panel);
+  }
+  .modes span.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; margin-bottom: 12px;
+  }
+  .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 9px 0; border-bottom: 1px dashed var(--border); cursor: pointer;
+  }
+  .row:last-child { border-bottom: none; }
+  .row:hover .name { color: var(--accent); }
+  .row .name { font-family: var(--serif); font-size: 17px; }
+  .row .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+  .person-head { display: flex; align-items: baseline; gap: 12px; }
+  .person-head .name { font-family: var(--serif); font-size: 22px; }
+  .person-head .dyn { color: var(--muted); font-size: 13px; }
+  .alias-tag {
+    display: inline-block; font-family: var(--serif); font-size: 13px;
+    background: var(--accent-soft); color: var(--text);
+    border-radius: 6px; padding: 2px 8px; margin: 3px 5px 0 0;
+  }
+  .summary { color: #6b6559; font-size: 14px; font-family: var(--serif); margin: 8px 0 0; }
+
+  .chapter-title {
+    font-family: var(--serif); font-size: 15px; font-weight: 500;
+    margin: 16px 0 6px; color: var(--text);
+    border-bottom: 1px solid var(--border); padding-bottom: 4px;
+  }
+  .sent {
+    font-family: var(--serif); font-size: 15px; line-height: 1.95;
+    padding: 5px 0 5px 14px; border-left: 2px solid var(--border);
+    margin-bottom: 5px; cursor: pointer;
+  }
+  .sent:hover { border-left-color: var(--accent); background: #FBF9F5; }
+  /* 命中：core 實線朱砂；推斷（guess 等）虛線 + 問號——一眼分出硬證據與推測 */
+  .sent mark {
+    background: transparent; color: var(--accent);
+    border-bottom: 1.5px solid var(--accent); padding: 0 1px;
+  }
+  .sent mark.guess { border-bottom: 1.5px dashed var(--accent); color: var(--accent); }
+  .tier-note { font-family: var(--sans); font-size: 11px; color: var(--muted); margin-left: 6px; }
+
+  .empty { color: var(--muted); font-size: 14px; padding: 22px 0; text-align: center; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .err { color: var(--accent); font-size: 13px; padding: 10px 0; }
+
+  /* 原文層 */
+  .reader { position: fixed; inset: 0; background: rgba(43,42,39,.35); display: none; z-index: 20; }
+  .reader.on { display: block; }
+  .reader-inner {
+    position: absolute; right: 0; top: 0; bottom: 0; width: min(760px, 92%);
+    background: var(--bg); border-left: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  .reader-head {
+    padding: 14px 18px; border-bottom: 1px solid var(--border);
+    background: var(--panel); display: flex; justify-content: space-between; align-items: center;
+  }
+  .reader-head .t { font-family: var(--serif); font-size: 16px; }
+  .reader-head button {
+    font-family: var(--sans); font-size: 13px; padding: 5px 11px;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); color: var(--muted); cursor: pointer;
+  }
+  .reader-body { flex: 1; overflow-y: auto; padding: 16px 20px 40px; }
+  .reader-body p {
+    font-family: var(--serif); font-size: 15px; line-height: 1.95;
+    margin: 0 0 10px; color: var(--text);
+  }
+  .reader-body p.target { background: var(--accent-soft); }
+</style>
+</head>
+<body>
+<header>
+  <button id="back" class="backbtn" hidden>← 返回</button>
+  <h1>古籍檢索</h1>
+  <p class="sub" id="sub">史記 · 漢書 · 後漢書 · 三國志 · 晉書</p>
+</header>
+
+<div class="wrap">
+  <div class="searchbar">
+    <input id="q" type="text" placeholder="輸入人名／稱謂，如 劉邦、梁王、霍光" autocomplete="off">
+    <button id="btn">檢索</button>
+  </div>
+  <div class="modes">
+    <span data-mode="person" class="on">人物檢索</span>
+    <span data-mode="fts">全文檢索</span>
+  </div>
+  <div id="out"></div>
+  <div class="hint" id="hint"></div>
+</div>
+
+<div class="reader" id="reader">
+  <div class="reader-inner">
+    <div class="reader-head">
+      <span class="t" id="readerTitle"></span>
+      <button data-act="close">關閉</button>
+    </div>
+    <div class="reader-body" id="readerBody"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

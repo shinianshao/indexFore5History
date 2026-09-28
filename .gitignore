@@ -40,10 +40,26 @@ __pycache__/
 .mimocode/node_modules/
 
 # ===========================================================
+# Excel 权威源目录（workbook/）
+#   persons.xlsx   = **人写的权威源**，build_dict.py 优先读它 → 必须入库
+#   places.xlsx / sentences-*.xlsx = 脚本可再生的派生视图 → 不入库
+#   .bak-<时间戳>.xlsx / *.new.xlsx = 覆盖前备份与人改保护产物 → 不入库
+# ===========================================================
+workbook/places.xlsx
+workbook/sentences-*.xlsx
+workbook/*.bak-*.xlsx
+workbook/*.new.xlsx
+
+# ===========================================================
 # 注意：以下为「人工资产，不可再生，必须入库」
 #   data/dict/books.json          书注册表（手写）
 #   data/dict/volumes/*.json      五书篇名表（130×N 条人工审定，工作量最大）
 #   data/dict/alias-rules.json    别名规则（手写）
-#   pipeline/build_dict.py        PERSONS / CHAPTER_OWNERS 唯一来源
+#   pipeline/persons_data.py      PERSONS 种子数据（表格缺失时的回退源）
+#   workbook/persons.xlsx         **PERSONS 的权威源**（人写，2026-09-28 起）
+#   pipeline/build_dict.py        规则部分：GENERIC_* / BOOK_CANDIDATES / OFFICE_WORDS
 #   pipeline/build_places.py      PLACES 唯一来源
+#
+# ⚠️ 2026-09-28 更正：PERSONS 的权威源不再是 build_dict.py 本身，
+#    而是 workbook/persons.xlsx（缺文件时才回退 persons_data.py）。
 # ===========================================================

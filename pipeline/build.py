@@ -110,6 +110,13 @@ INLINE_TAIL_NOTE_RE = re.compile(
 
 SENT_END = "。！？"
 
+# 句末标点后紧跟的**闭合**符号（引号/括号）必须跟着本句走。
+# 不这么做就会「把第二个引号甩到下一句开头」——用户 2026-09-26 报，
+# 实测 96,444 句里有 **7,259 句**以 」』 开头（7.5%），例如上一句断成
+# 「……堯曰：「吁」　下一句变成　」堯又曰：「誰可者？
+# 闭合符号可嵌套多层（。」』、。」）），所以要**连续**吃。
+SENT_CLOSERS = set("」』）〕】》〉”’］｝〉」』)〕】>")
+
 # 导航、版权模板与「三家注」残渣的关键词：出现即丢弃该段
 NAV_KEYWORDS = (
     "姊妹计划", "姊妹計畫", "参阅维基百科", "閲文言維基大典", "数据项", "評論",
@@ -439,11 +446,21 @@ def extract_blocks(html, keep_angle=False):
 
 def split_sentences(text):
     out, buf = [], ""
-    for ch in text:
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
         buf += ch
         if ch in SENT_END:
+            # 句末标点后**连续**吃掉闭合符号，让它留在本句
+            j = i + 1
+            while j < n and text[j] in SENT_CLOSERS:
+                buf += text[j]
+                j += 1
             out.append(buf)
             buf = ""
+            i = j
+            continue
+        i += 1
     if buf:
         out.append(buf)
     return [s for s in out if s]

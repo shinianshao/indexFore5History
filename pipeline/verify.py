@@ -14,6 +14,45 @@ import sys
 from collections import Counter
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+# ── 人名纠正第一批（2026-09-26）已判「不是人名」的碎片，不许再被自动补人加回来 ──
+# 判定依据逐条记在 pipeline/_name_plan.txt，取证数据在 pipeline/_name_batch.json。
+DEAD_NAMES = (
+    "趙分", "衛分", "周分", "燕分", "鄭分", "王子分", "單于既", "王如故", "徐偃又",
+    "王子及", "王子於", "荊門", "東泰山", "盧水胡", "黎陽營", "倉部", "金部",
+    "時匈奴", "相國何", "公子棄",
+    "公子為", "公子亡", "公子奔", "公子行", "公子過", "公子及", "公子引", "公子患",
+    "公子故", "公子傅", "公子列", "公子畏", "公子云", "公子何", "公子作", "公子八",
+    "公子勉", "公子十", "公子竟", "公子美", "公子舉", "公子色", "公子誠", "公子謂",
+    "公子貴", "公子逐", "公子馳", "公子齋", "公子率", "公子當", "公子恐", "公子或",
+    "公子於", "公子復", "公子師", "公子尚", "公子賢", "公子留",
+)
+# ── 第二批（D 类召回，2026-09-27）：判定「不是人名」的 36 条 ──────────
+# D 类 90 条里真人与噪声混杂，只能逐条看上下文，不能批量删。下面这些是噪声：
+DEAD_NAMES_2 = (
+    "夏帝卜", "王秦降", "羊十餘", "齊還報", "魏而攻", "徐盜賊", "梁冀被",
+    "臧自殺", "漢軍方", "趙共擊", "趙有蛇", "益封去", "賁軍開", "薛公戰",
+    "桂陽三", "安定三", "沈黎", "蒲陽", "索間", "危須", "弘農楊", "會稽虞",
+    "安夷護", "尉竇固", "國將哀", "國共敖", "龍旂", "方軌", "懷安",
+    "方丈", "風伯", "文昌", "文始", "管蔡", "王聖", "梁丘",
+)
+# ── 同一批判为「真人」的，钉住不许被后续清理误删 ──────────────────────
+KEEP_REAL = (
+    "郭汜", "慕容恪", "殷仲堪", "周顗", "朱然", "淳于瓊", "段幹木", "柳下惠",
+    "梁丘賀", "尹更始", "左悺", "石慶", "薛瑩", "謝鯤", "鄧颺", "劉岱",
+    "翟遼", "蘇茂", "戴若思", "王甫", "慕容沖", "夏侯玄", "張天錫", "何晏",
+    "張安世", "楊奉", "何無忌", "庾峻", "嚴青翟", "王欽盧", "狐蘭支", "翟景",
+)
+
+# ── 句末闭合符号：这些不该出现在句子开头（断句把引号甩到下一句了）──
+SENT_CLOSERS = ("」", "』", "）", "〕", "】", "》")
+
+# ── 同一批里「被切短」而补长的名字：原文写的是全称，提取器只取了前两字 ──
+LENGTHENED = (
+    "公孫戎奴", "公子開方", "公子黔牟", "公子奚斯", "公子燭庸",
+    "公子商人", "公子曼滿", "公子追舒", "公子目夷", "公子呂伋",
+)
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = json.load(open(os.path.join(ROOT, "data", "index", "book-data.json"), encoding="utf-8"))
 
@@ -21,6 +60,11 @@ persons = DATA["persons"]
 chapters = {c["id"]: c for c in DATA["chapters"]}
 by_id = {p["id"]: p for p in persons}
 by_name = {p["name"]: p for p in persons}
+# 按名查存在性：简体 name 与繁体 tradName 都收（自动补齐条目的 name 字段未必转过简繁）
+persons_by_name = set()
+for _p in persons:
+    persons_by_name.add(_p.get("name") or "")
+    persons_by_name.add(_p.get("tradName") or "")
 generic_of = {}
 for g in DATA.get("genericAliases", []):
     for form in g["forms"]:
@@ -698,9 +742,39 @@ def check():
     cases.append(("臨海含别名 台州/臺州", "台州" in al and "臺州" in al, al))
 
     # ===== 散见人物补齐 + 武帝/魏王丕 错归修复（2026 用户报）=====
-    cases.append(("人物总数 ≥ 2300（散见 + 类传/附传两次补齐后）",
-                  len(DATA["persons"]) >= 2300,
+    # 阈值两次下调，都是**删噪声**而非回退，每次都另配「不许回归」的断言：
+    #   2300 → 2270（2026-09-26 第一批：删 59 条 C 类切词碎片，2335 → 2276）
+    #   2270 → 2230（2026-09-27 第二批：删 36 条 D 类噪声，2276 → 2240）
+    # 详见 pipeline/_name_plan.txt（逐条带语料上下文）。
+    cases.append(("人物总数 ≥ 2230（散见 + 类传/附传补齐，已剔两批切词碎片）",
+                  len(DATA["persons"]) >= 2230,
                   str(len(DATA["persons"]))))
+
+    # ===== 人名纠正第一批（2026-09-26，_gen_name_batch.py 取证 + _name_plan.txt 判定）=====
+    # ① 判为「不是人名」的切词碎片/非人实体，不许再被自动补人加回来。
+    #    完整清单见 pipeline/_name_plan.txt（含逐条语料上下文）。
+    back = [n for n in DEAD_NAMES if n in persons_by_name]
+    cases.append(("已删的 {} 条非人名碎片未回归".format(len(DEAD_NAMES)),
+                  not back, "、".join(back[:8]) or "无"))
+    back2 = [n for n in DEAD_NAMES_2 if n in persons_by_name]
+    cases.append(("第二批 {} 条 D 类噪声未回归".format(len(DEAD_NAMES_2)),
+                  not back2, "、".join(back2[:8]) or "无"))
+    # 真人保留清单：防「清理假人名」时误伤。这条比"总数"更能说明质量。
+    lost = [n for n in KEEP_REAL if n not in persons_by_name]
+    cases.append(("判为真人的人名未被误删（郭汜/慕容恪/柳下惠…）",
+                  not lost, "、".join(lost[:8]) or "无"))
+    # ② 被切短的名字已补长（原文写的是全称，提取器只取了前两字）
+    miss = [n for n in LENGTHENED if n not in persons_by_name]
+    cases.append(("切短的名字已补长（公孫戎奴/公子開方…）",
+                  not miss, "、".join(miss) or "无"))
+
+    # ===== 断句：闭合符号不许被甩到下一句（2026-09-26 用户报）=====
+    # split_sentences 原先遇到 。！？ 立刻断，导致「……。」　下一句以 」』 开头，
+    # 实测 96,444 句里 7,259 句（7.5%）受害。修法：句末后连续吃掉闭合符号。
+    stranded = [s["text"][:12] for s in DATA["sentences"]
+                if (s.get("text") or "").startswith(SENT_CLOSERS)]
+    cases.append(("没有句子以闭合符号开头（引号不被甩到下一句）",
+                  not stranded, "／".join(stranded[:5]) or "无"))
     wudi_hhs_cc = sum(
         1 for s in DATA["sentences"]
         for m in s.get("marks") or []
@@ -922,6 +996,89 @@ def check():
             _zi_bad.append("{}·{}：未命中({})".format(_nm, _zi, sorted(_al)))
     cases.append(("表字长尾补录生效（只收同句共现 ≥70% 那档）",
                   not _zi_bad, "; ".join(_zi_bad)))
+
+    # ===== AI 概率判定闭环（2026-09-26，docs/19 §三①）=====
+    # 判定链路：_gen_ai_batch.py 出条目 → _ai_judge.py/_ai_autorule.py 出概率
+    # → _apply_ai.py 只落 prob≥0.9 那堆 → 这里把结论钉成断言。
+    # 每条断言对应一条**带依据**的判定，依据改了断言就改。
+    def marks_of(alias, book=None):
+        out = []
+        for s in DATA["sentences"]:
+            if book and not s["chapterId"].startswith(book + "-"):
+                continue
+            for m in s.get("marks") or []:
+                if m.get("alias") == alias:
+                    out.append((s, m))
+        return out
+
+    def pid_count(alias, book=None):
+        c = Counter()
+        for _s, m in marks_of(alias, book):
+            c[m.get("pid")] += 1
+        return c
+
+    def alias_of_person(pid):
+        for p in persons:
+            if p["id"] == pid:
+                return set(p.get("aliases") or [])
+        return set()
+
+    # ① 爵位名不是人名：「關內侯」整串出索引
+    #    依据：漢書「賜爵關內侯」「爵皆關內侯」、三國志「與舊列侯、關內侯凡六等」
+    gh = len(marks_of("關內侯")) + len(marks_of("关内侯"))
+    cases.append(("「關內侯」是爵位不是人名 → 整串出索引",
+                  gh == 0 and "關內侯" not in alias_of_person("p_xiaowangzhi"),
+                  "标记={} 蕭望之别名含={}".format(
+                      gh, "關內侯" in alias_of_person("p_xiaowangzhi"))))
+
+    # ② 斷代史裸「文王」＝周文王：era 檔被西漢劉禮拉偏（漢書 61/70、後漢書 23/28）
+    _w = Counter()
+    for bk in ("hs", "hhs"):
+        _w.update(pid_count("文王", bk))
+    cases.append(("漢書/後漢書裸「文王」→ 周文王（不再被 era 拉給劉禮）",
+                  _w.get("p_liuli", 0) == 0 and _w.get("p_zhouwen", 0) >= 80,
+                  "周文王={} 劉禮={}".format(_w.get("p_zhouwen", 0),
+                                            _w.get("p_liuli", 0))))
+
+    # ③ 三國志裸「武王」＝曹操（候選原本沒有曹操，14 處全誤歸司馬炎）
+    _g = pid_count("武王", "sgz")
+    cases.append(("三國志裸「武王」→ 曹操（「謚曰武王」，原誤歸司馬炎）",
+                  _g.get("p_caocao", 0) >= 10 and _g.get("p_simayan", 0) == 0,
+                  "曹操={} 司馬炎={}".format(_g.get("p_caocao", 0),
+                                            _g.get("p_simayan", 0))))
+
+    # ④ 「《文王世子》」是《禮記》篇名，不是人
+    _wz = 0
+    for s, m in marks_of("文王"):
+        t = s.get("text") or ""
+        if "世子" in t[max(0, m.get("s", 0) - 8): m.get("e", 0) + 8]:
+            _wz += 1
+    cases.append(("「《文王世子》」篇名不標為人", _wz == 0, str(_wz)))
+
+    # ⑤ 高置信那堆表字已生效（抽查傳主字，不是抽批量數字）
+    _AI_ZI = (("嵇康", "叔夜"), ("祖逖", "士稚"), ("陸機", "士衡"),
+              ("刁協", "玄亮"), ("秦宓", "子敕"), ("郗鑒", "道徽"))
+    _zi_bad2 = []
+    for _nm, _z in _AI_ZI:
+        _ps = [p for p in persons if (p.get("tradName") or p.get("name")) == _nm]
+        if not _ps or _z not in (_ps[0].get("aliases") or []):
+            _zi_bad2.append(_nm + "·" + _z)
+    cases.append(("AI 判定高置信表字已入典（嵇康叔夜/祖逖士稚…）",
+                  not _zi_bad2, "缺={}".format(_zi_bad2)))
+
+    # ⑥ 被判「不收」的那批**沒有**混進別名——負向斷言比正向更要緊
+    _AI_REJ = (("蔡玄", "叔陵"), ("費直", "長翁"), ("蘇順", "孝山"),
+               ("傅毅", "武仲"), ("龔壯", "子瑋"), ("孟觀", "叔時"),
+               ("趙誘", "元孫"), ("鄭弘", "巨君"))
+    _bad_rej = []
+    for _nm, _z in _AI_REJ:
+        for p in persons:
+            if (p.get("tradName") or p.get("name")) != _nm:
+                continue
+            if _z in (p.get("aliases") or []):
+                _bad_rej.append(_nm + "·" + _z)
+    cases.append(("AI 判定「不收」的表字未進別名（同字他人/跨詞邊界）",
+                  not _bad_rej, "误收={}".format(_bad_rej)))
 
     print("=" * 72)
     print("回归断言")

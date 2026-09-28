@@ -16,7 +16,10 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-PORT="${PORT:-8770}"
+# 默认端口 8770 → 8790：8770 被本机的 VPN 客户端（iKuuuVPNCore）占着，
+# 每次回归都会卡在「服务未能在 12 秒内就绪」。换一个不常用的端口。
+# 临时想换回来：PORT=8770 bash scripts/run_all.sh
+PORT="${PORT:-8790}"
 BASE="http://127.0.0.1:${PORT}/index.html"
 RUN_FULL=0
 RUN_UI=1
