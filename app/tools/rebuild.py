@@ -52,20 +52,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))          # app/tools → app → 根
 DB_PATH = os.path.join(ROOT, "data", "index", "index.db")
 
-# （步驟名, 相對於 ROOT 的腳本路徑, 一句話說明）
+# （步驟名, 相對於 ROOT 的腳本路徑, 一句話說明, 額外參數）
 STEPS = [
+    ("sentence_edits", "pipeline/apply_sentence_edits.py",
+     "句級編輯（拆/併/棄用）→ 語料（**必須在 annotate 之前**）", ("apply",)),
     ("build_dict", "pipeline/build_dict.py",
-     "讀 workbook/*.xlsx → people.json / places.json（⚠️ 只讀，不回寫）"),
+     "讀 workbook/*.xlsx → people.json / places.json（⚠️ 只讀，不回寫）", ()),
     ("annotate", "pipeline/annotate.py",
-     "主帳本標註（別名匹配 + 泛稱歸屬判定）"),
+     "主帳本標註（別名匹配 + 泛稱歸屬判定）", ()),
     ("annotate_pei", "pipeline/annotate_pei.py",
-     "裴注帳本（獨立記，不進 mentionCount）"),
+     "裴注帳本（獨立記，不進 mentionCount）", ()),
     ("annotate_js_note", "pipeline/annotate_js_note.py",
-     "晉書舊史注帳本"),
+     "晉書舊史注帳本", ()),
     ("annotate_places", "pipeline/annotate_places.py",
-     "地名標註"),
+     "地名標註", ()),
     ("build_index_db", "app/tools/build_index_db.py",
-     "→ SQLite（含 FTS5 全文索引）"),
+     "→ SQLite（含 FTS5 全文索引）", ()),
 ]
 
 # P3-3：這一步不是獨立腳本，而是直接改 book-data.json 的一層 post 修正，
@@ -76,10 +78,14 @@ OVERRIDE_STEP = "apply_overrides"
 BUILD_STEP = ("build", "pipeline/build.py", "raw HTML → corpus 切分（慢，預設不跑）")
 
 
-def run_step(name: str, rel: str, desc: str, dry: bool) -> float:
-    """跑一步，失敗即拋。回傳耗時（秒）。"""
+def run_step(name: str, rel: str, desc: str, dry: bool, extra=()) -> float:
+    """跑一步，失敗即拋。回傳耗時（秒）。
+
+    ⚠️ extra 參數必須是序列，不能寫成 "apply_sentence_edits.py apply"——
+    那會被當成一個含空格的檔案路徑（踩過，見 docs/24 §三之二）。
+    """
     script = os.path.join(ROOT, rel)
-    cmd = [sys.executable, script]
+    cmd = [sys.executable, script] + list(extra)
     print("\n── [{}] {}   {}".format(name, desc, "" if not dry else "(dry-run)"))
     print("   $ {}".format(" ".join(cmd)))
     if dry:
@@ -127,6 +133,8 @@ def main() -> int:
                     help="不存快照、不報 diff")
     ap.add_argument("--no-overrides", action="store_true",
                     help="不套用 workbook/overrides.xlsx 的單條糾錯")
+    ap.add_argument("--no-sentence-edits", action="store_true",
+                    help="不套用 workbook/sentence-edits.xlsx 的句級編輯")
     ap.add_argument("--keep", type=int, default=snapshot.KEEP_DEFAULT,
                     help="快照保留最近幾份（預設 {}）".format(snapshot.KEEP_DEFAULT))
     ap.add_argument("--diff-top", type=int, default=10,
@@ -155,13 +163,16 @@ def main() -> int:
             print("（跳過快照：{}）".format(e))
 
     t0 = time.time()
-    for i, (name, rel, desc) in enumerate(todo, start=args.start):
+    for i, (name, rel, desc, extra) in enumerate(todo, start=args.start):
         try:
             # 糾錯必須在建庫之前套用：改的是 book-data.json，庫是由它生成的
             if name == "build_index_db" and not args.no_overrides \
                     and not args.dry_run:
                 overrides.cmd_apply(argparse.Namespace(dry_run=False))
-            run_step(name, rel, desc, args.dry_run)
+            if name == "sentence_edits" and args.no_sentence_edits:
+                print("\n── [sentence_edits] 已用 --no-sentence-edits 跳過")
+                continue
+            run_step(name, rel, desc, args.dry_run, extra)
         except RuntimeError as e:
             print("\n✗ {}".format(e))
             return i

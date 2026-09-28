@@ -20,6 +20,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import books_sorted, slug_number, volume_sort_key   # noqa: E402
+from tag_uids import stable_uid                                 # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW = os.path.join(ROOT, "data", "raw")
@@ -554,6 +555,9 @@ def build_volume(book, slug, title):
             sents.append({
                 "id": "{}-{:04d}-{:03d}".format(chapter_id, p_index, s_index),
                 "seq": s_index,
+                # uid 跟著句子走（P4-0）：往後語料 → book-data → index.db 一路透傳，
+                # 編輯切分時按「拆前半繼承 / 併留第一 / 棄用標 dead」維護。
+                "uid": stable_uid(chapter_id, p_index, s_index),
                 "text": sent,
             })
         total_sentences += len(sents)

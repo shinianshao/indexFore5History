@@ -59,7 +59,7 @@ app/web           ← 查询与编辑界面（FastAPI）
 | **P1** | 稳定 `uid` 落地、SQLite 索引库、**`relations` 表先建后填** | ✅ **已完成** |
 | **P2** | FastAPI + 全文检索 + 原文对照界面 | ✅ **已完成** |
 | **P3** | 编辑 → 重建 → 快照 diff | ✅ **已完成**（`rebuild.py` / `snapshot.py` / `overrides.py` / `verify_p3.py`） |
-| P4 | 句级拆分/合并/弃用 UI | 未开始 |
+| P4 | 句级拆分/合并/弃用 | **进行中**：数据层已通（uid 下沉 + 命令行编辑），**UI 未做** |
 | P5 | `verify.py` 断言接入新链路 | 未开始 |
 
 ### P3 已交付什么
@@ -108,6 +108,35 @@ python app/tools/overrides.py revoke --uid <uid>    # 反悔（状态改 dead，
 > ⚠️ **pipeline 对 `overrides.xlsx` 只有读权限**。会由脚本填的列（`上下文`/`原pid`/`原tier`）
 > **只在录入那一刻写，重建绝不刷新**——否则就是 P0「导出脚本冲掉权威源」那次事故的重演。
 > 写由 `add` / `revoke`（以及将来的 UI）承担，两者是「人」这一侧的动作。
+
+### P4 进展（数据层已通，UI 未做）
+
+**P4-0 uid 下沉到语料层**（原本在建库时按位置现算，一改切分就漂移）：
+
+```
+corpus（tag_uids.py 打标 / build.py 新切）→ book-data.json（annotate 透传）→ index.db（直接采用）
+```
+
+优先级是**语料层 uid > 旧库按位置复用 > 现算**。语料层的才是权威——句子可编辑后位置会位移，
+再按位置去旧库捡，会把上一句的 uid 错配到这一句身上。
+
+**P4-1 句级编辑**（`pipeline/apply_sentence_edits.py` + `workbook/sentence-edits.xlsx`）：
+
+```bash
+python pipeline/apply_sentence_edits.py show --uid <uid>       # 看原文与字数
+python pipeline/apply_sentence_edits.py add --uid <uid> --action split --at 7
+python pipeline/apply_sentence_edits.py add --uid <uid> --action merge
+python pipeline/apply_sentence_edits.py add --uid <uid> --action dead
+python app/tools/rebuild.py                                     # 第 1 步自动套用
+python pipeline/apply_sentence_edits.py revoke --uid <uid>      # 反悔
+```
+
+uid 三条继承规则：**拆**→前半继承原 uid、后半生成新 uid；**并**→留第一句、第二句标 `merged`；
+**弃用**→标 `dead`。后两种**不物理删**，句子仍留在语料里，只是 annotate 跳过。
+
+> **撤销为什么能生效**：不是就地改语料，而是**每次都从原始副本 `data/corpus-orig/` 重放**
+> 全部生效编辑。撤销一条后重跑，那篇自然回到原样——不需要额外的回滚代码。
+> 顺带解决了幂等：重跑不会二次拆分。
 
 ### P2 已交付什么
 
@@ -201,8 +230,9 @@ python app/tools/build_index_db.py
 
 # 一键重建（含 dump 快照 + 自动 diff）
 python app/tools/rebuild.py
-python app/tools/rebuild.py --from 2         # 从第 2 步（annotate）开始
+python app/tools/rebuild.py --from 3         # 从第 3 步（annotate）开始
 python app/tools/rebuild.py --dry-run        # 只列命令
+python pipeline/tag_uids.py                  # 语料补打 uid（幂等，新切分已自动带）
 
 # 快照与 diff
 python app/tools/snapshot.py list
@@ -216,7 +246,13 @@ python app/tools/overrides.py add --uid <uid> --nth 1 --new 刘邦
 python app/tools/overrides.py revoke --uid <uid>
 python app/tools/overrides.py list
 
-# 新链路断言
+# 句级编辑（P4）
+python pipeline/apply_sentence_edits.py show --uid <uid>
+python pipeline/apply_sentence_edits.py add --uid <uid> --action split --at 7
+python pipeline/apply_sentence_edits.py revoke --uid <uid>
+python pipeline/apply_sentence_edits.py list
+
+# 新链路断言（P3 + P4，条数以当次输出为准）
 python app/tools/verify_p3.py
 
 # 查询：查人 / 全文检索 / 按 tier 抽待确认项
@@ -263,9 +299,10 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 2. `p_xNNNNN` 随机 id 批量改拼音语义 id
 3. 18 组同名异人（劉焉 ×3 等）的 UI 消歧
 4. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")` → DeprecationWarning
-5. **下一个该做的是 P4**（句级拆分/合并/弃用 UI）。前置是 `make_uid()` 从
-   「按 (篇,段序,句序) 匹配」改成「按文本内容匹配」——否则一改切分 uid 就位移。
-   P3-4（前端标错入口 / 网页 diff 页）**本轮不做**（Q1 做到落 SQLite 即止），
+5. **P4 剩最后一段：网页上的句级编辑 UI**。数据层与命令行都通了（见「P4 进展」），
+   缺的是界面——在原文层上加「拆分/合并/弃用」三个按钮，调
+   `apply_sentence_edits.py add`，然后提示重建。
+6. P3-4（前端标错入口 / 网页 diff 页）**本轮不做**（Q1 做到落 SQLite 即止），
    现在走命令行闭环（`overrides.py add`）。
 
 > 三个已拍板的决策（详见 `docs/24` §二）：快照 diff **落 SQLite、可翻历史**（不做网页页）；

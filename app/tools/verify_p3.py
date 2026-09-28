@@ -17,6 +17,7 @@
 4. **`--keep` 生效**：快照數不會無限增長
 5. **override 生效**：`reassign` 改對 pid、`drop` 讓命中消失——
    跑完自動 revoke 並重跑 annotate 復原
+6. **句級編輯**（P4）：拆句後前半**繼承 uid**、重放冪等、撤銷後還原
 
 快照一律寫在**臨時庫**裡（monkeypatch `snapshot.SNAP_DB`），不污染真實歷史。
 
@@ -25,6 +26,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import sqlite3
 import subprocess
@@ -235,6 +237,86 @@ def test_overrides() -> None:
     print("  （已 revoke 兩條自檢糾錯；book-data.json 由 rebuild 復原）")
 
 
+def test_sentence_edits() -> None:
+    """P4 句級編輯：拆句後**前半繼承 uid**，撤銷後能還原。"""
+    print("\n[6] 句級編輯（拆句 / 還原）")
+    sys.path.insert(0, os.path.join(ROOT, "pipeline"))
+    import apply_sentence_edits as SE
+
+    conn = snapshot.connect(snapshot.DB_PATH)
+    # 挑一句：命中在句子前半，這樣拆完前半仍帶著命中
+    uid = at = None
+    for r in conn.execute(
+            "SELECT m.sentence_uid, m.e FROM mentions m "
+            "WHERE m.person_id='p_liubang' AND m.tier='core' ORDER BY m.s LIMIT 20"):
+        t = conn.execute("SELECT text FROM sentences WHERE uid=?",
+                         (r[0],)).fetchone()
+        if t and r[1] + 1 < len(t[0]):
+            uid, at = r[0], r[1] + 1
+            break
+    text0 = conn.execute("SELECT text FROM sentences WHERE uid=?",
+                         (uid,)).fetchone()[0]
+    conn.close()
+    if not uid:
+        check("取到測試樣本", False)
+        return
+
+    _idx = {}
+
+    def _corpus_text(u):
+        """直接從語料讀（不等建庫）。uid→檔案的索引只掃一次。"""
+        if not _idx:
+            _idx.update(SE.uid_index())
+        path = _idx.get(u)
+        if not path:
+            return None
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        _, _, s = SE.find_sentence(d, u)
+        return s["text"] if s else None
+
+    try:
+        subprocess.run([PY, os.path.join(ROOT, "pipeline",
+                                         "apply_sentence_edits.py"),
+                        "add", "--uid", uid, "--action", "split",
+                        "--at", str(at), "--note", "P4 自檢"], cwd=ROOT)
+        run("pipeline/apply_sentence_edits.py", "apply")
+
+        n_after = _corpus_text(uid)
+        check("拆句：前半繼承原 uid（文本變短）",
+              n_after == text0[:at], "「{}」".format(n_after))
+        check("拆句：後半生成新 uid 進語料",
+              _corpus_text(SE.new_uid_for_split(uid, at)) == text0[at:])
+
+        # 冪等：再跑一次不該二次拆分
+        run("pipeline/apply_sentence_edits.py", "apply")
+        check("重放冪等（不會二次拆分）", _corpus_text(uid) == text0[:at])
+
+        run("app/tools/rebuild.py", "--no-snapshot")
+        conn = snapshot.connect(snapshot.DB_PATH)
+        row = conn.execute("SELECT text FROM sentences WHERE uid=?",
+                           (uid,)).fetchone()
+        n_hit = conn.execute(
+            "SELECT COUNT(*) FROM mentions WHERE sentence_uid=?", (uid,)).fetchone()[0]
+        conn.close()
+        check("建庫後前半 uid 仍在且文本正確", row is not None and row[0] == text0[:at])
+        check("歷史命中沒被打散（該 uid 仍有命中）", n_hit >= 1,
+              "{} 條".format(n_hit))
+    finally:
+        # 還原：撤銷 + 重放（重放機制天然回滾，不需要額外的還原代碼）
+        subprocess.run([PY, os.path.join(ROOT, "pipeline",
+                                         "apply_sentence_edits.py"),
+                        "revoke", "--uid", uid], cwd=ROOT)
+        run("pipeline/apply_sentence_edits.py", "apply")
+        run("app/tools/rebuild.py", "--no-snapshot")
+        conn = snapshot.connect(snapshot.DB_PATH)
+        row = conn.execute("SELECT text FROM sentences WHERE uid=?",
+                           (uid,)).fetchone()
+        conn.close()
+        check("撤銷後還原（文本回到原樣）", row is not None and row[0] == text0,
+              "「{}」".format(row[0] if row else "—"))
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -245,6 +327,7 @@ def main() -> int:
         test_one_way()
         test_snapshots(tmpdb)
         test_overrides()
+        test_sentence_edits()
     finally:
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
         for suffix in ("", "-wal", "-shm"):

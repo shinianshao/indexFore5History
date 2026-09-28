@@ -218,12 +218,21 @@ def main():
     # ── sentences + mentions ──────────────────────────────────────────
     srows, mrows = [], []
     uid_of = {}
+    n_corpus = n_db = 0
     for s in d["sentences"]:
         cid = s["chapterId"]
         para, seq = s.get("paraSeq"), s.get("seq")
         key = (cid, para, seq)
-        if key in existing:
+        # 優先級：**語料層透傳的 uid > 舊庫按位置複用 > 現算**。
+        # 語料層的 uid 才是權威——句子一旦可編輯（P4），位置會位移，
+        # 若還按位置去舊庫撿，會把上一句的 uid 錯配到這一句身上。
+        if s.get("uid"):
+            uid = s["uid"]
+            n_corpus += 1
+            reused += 1
+        elif key in existing:
             uid = existing[key]
+            n_db += 1
             reused += 1
         else:
             uid = make_uid(cid, para, seq)
@@ -282,7 +291,8 @@ def main():
     for t in ("books", "chapters", "sentences", "mentions",
               "persons", "aliases", "places", "relations"):
         print("  {:<10s} {:>8,d}".format(t, cnt(t)))
-    print("  uid 复用 {} 条 / 新建 {} 条".format(reused, len(srows) - reused))
+    print("  uid 来源：语料透传 {} / 旧库复用 {} / 新建 {} 条".format(
+        n_corpus, n_db, len(srows) - reused))
     print("  FTS5 全文索引: {}".format("已建" if fts else "未建"))
 
     tiers = dict(conn.execute(

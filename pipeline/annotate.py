@@ -43,6 +43,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (CORPUS, DICT, INDEX, PIPELINE, WEB, books_sorted,
                     compile_alias_pattern, corpus_paths, load_json, norm,
+                    stable_uid,
                     write_json)
 from trad import tradify
 
@@ -645,6 +646,10 @@ def main():
         for para in doc["paragraphs"]:
             para_count = {}
             for sent in para["sentences"]:
+                # P4：被合併掉或棄用的句子（status != active）不參與標註。
+                # 它們**仍留在語料裡**（不物理刪，留著可追溯），只是不再產出命中。
+                if sent.get("status", "active") != "active":
+                    continue
                 text = sent["text"]
                 normalized = norm(text)
                 marks = []
@@ -825,6 +830,10 @@ def main():
                 chapter_by_book[pid].setdefault(book_id, set()).add(chapter_id)
             hit_sentences.append({
                 "id": sent["id"],
+                # uid 由語料層透傳（P4-0）。沒有就現場算——老語料沒打過標，
+                # 算法與 tag_uids.stable_uid 一致，所以補出來的值不會變。
+                "uid": sent.get("uid") or stable_uid(
+                    chapter_id, para_seq, sent["seq"]),
                 "chapterId": chapter_id,
                 "paraSeq": para_seq,
                 "seq": sent["seq"],

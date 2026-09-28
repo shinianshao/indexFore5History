@@ -316,3 +316,18 @@ def same_title_family(simp, core, suffix):
     if rest[0] in POSTHUMOUS_CHARS and len(rest) > 1 and rest[1:].startswith(suffix):
         return True
     return False
+
+
+def stable_uid(chapter_id, para, seq) -> str:
+    """句子的穩定主鍵（P4-0）。
+
+    三處共用同一個算法：`build.py`（切分時分配）、`tag_uids.py`（補打老語料）、
+    `app/tools/build_index_db.py`（建庫時兜底）。**改一處必須改三處**，
+    否則歷史命中、override 錨點、快照 diff 會全部對不上。
+
+    注意它吃的是**位置**（篇/段/句序），所以編輯切分後會位移——
+    正解是讓 uid 在語料層就定好、一路透傳，而不是每次現算。
+    """
+    import hashlib
+    raw = "{}|{}|{}".format(chapter_id, para, seq)
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]

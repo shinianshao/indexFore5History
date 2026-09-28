@@ -9,6 +9,10 @@ data/raw/
 # 切分产物（build.py）                      约 50MB / 564 文件
 data/corpus/
 
+# 句级编辑前的原始副本（apply_sentence_edits.py 首次编辑时备份）
+# 用途：每次重放都从这里出发，撤销一条编辑后重跑即可还原
+data/corpus-orig/
+
 # 索引产物（annotate.py / annotate_places.py）约 46MB
 data/index/
 
@@ -57,6 +61,8 @@ workbook/*.new.xlsx
 #   data/dict/alias-rules.json    别名规则（手写）
 #   pipeline/persons_data.py      PERSONS 种子数据（表格缺失时的回退源）
 #   workbook/persons.xlsx         **PERSONS 的权威源**（人写，2026-09-28 起）
+#   workbook/overrides.xlsx       单条纠错的权威源（人写，P3）
+#   workbook/sentence-edits.xlsx  句级编辑的权威源（人写，P4）
 #   pipeline/build_dict.py        规则部分：GENERIC_* / BOOK_CANDIDATES / OFFICE_WORDS
 #   pipeline/build_places.py      PLACES 唯一来源
 #

@@ -256,6 +256,20 @@ Excel 侧依赖 `openpyxl` + `pypinyin`，已装进系统 Python 3.12.10（与 o
 P3 动工顺序：1 一键重建 → 2 快照库+diff → 3 overrides+应用器 → 5 断言；
 **P3-4（UI 写入口/diff 页）本轮不做**。
 
+## P4 数据层（2026-09-29 凌晨完成，UI 未做）
+- **uid 已下沉到语料层**：`pipeline/tag_uids.py` 给 223,164 句补打（幂等），
+  `common.stable_uid` 是算法唯一来源；`build.py` 新切分时带 uid、`annotate.py` 透传、
+  `build_index_db.py` 采用。⚠️ 算法实际有**四处**（common / build / tag_uids /
+  build_index_db.make_uid，后者因 app 与 pipeline 刻意不互相 import），改一处要改四处。
+- **优先级：语料 uid > 旧库按位置复用 > 现算**。反了会在句子位移后错配上一句的 uid。
+- **句级编辑**：`pipeline/apply_sentence_edits.py` + `workbook/sentence-edits.xlsx`，
+  是 rebuild 的**第 1 步**（句子边界是 annotate 的输入，必须在它之前）。
+  拆→前半继承原 uid；并→留第一句、次句标 `merged`；弃用→标 `dead`，后两者不物理删，
+  `annotate` 跳过 `status != active`。
+- **撤销靠「从 `data/corpus-orig/` 原始副本重放」**：不就地改语料。
+  这一条同时解决撤销与幂等（重跑不会二次拆分），不需要额外回滚代码。
+- 已知限制：拆分出的**新句**暂不能再编辑（不在原始副本里，报「未匹配」）。
+
 ### P3 已交付（2026-09-28 夜）
 `app/tools/rebuild.py`（一键重建，约 30–45s）/ `snapshot.py`（快照+diff）/
 `overrides.py`（单条纠错）/ `verify_p3.py`（新链路断言 14 条）。
