@@ -236,3 +236,44 @@ Excel 侧依赖 `openpyxl` + `pypinyin`，已装进系统 Python 3.12.10（与 o
 - ✅ P1-a 裸短名错挂（长名 + 分书收束 + ctxRule）— 提交 a0e5a07
 - ✅ P1-b 类传/附传长尾缺人（补 322 人）— 同轮完成
 - 下一档是 P2：表字长尾 / guess 池 / 类传书外漏召
+
+## P3 三决策（2026-09-28 用户拍板，计划见 docs/24）
+1. **快照 diff 做到「落 SQLite」**：独立库 `data/index/snapshots.db`
+   （**不能进 index.db**——它是可删重建的产物，快照放进去会被冲掉）。
+   表 `snapshots` / `snapshot_mentions` / `diffs` / `diff_items`；跨库比较用 `ATTACH`。
+   比较键 `uid+s+e+surface`；变化**四类**：added / removed / pid_changed / **tier_changed**。
+   快照在**重建第一步、build_dict 之前**取（这样 diff 才含 override 效果）。
+   **网页 diff 页本轮不做**；终端照打印。
+2. **`overrides` 落 `workbook/overrides.xlsx`**（人/UI 写、pipeline 只读）。
+   列分"录入时写"（uid/s/e/surface/nth/chapter/context/old_pid/old_tier）与
+   "人写"（new_pid/action=reassign|drop|keep/status/note）。
+   ⚠️ 脚本会填的列**只在录入那一刻写，重建绝不刷新**——否则重演 P0 冲掉权威源的事故。
+   应用器 `apply_overrides.py` 在 annotate 四步**之后**、build_index_db **之前**跑，
+   **不动 annotate 引擎**。
+3. **静态版 `web/` 冻结**：只作分享产物，不再改视觉与交互；新能力只长在 `app/web/`。
+   后续静态版 bug 的修复判据：**影响"能打开、能查"才修，否则留着**。
+
+P3 动工顺序：1 一键重建 → 2 快照库+diff → 3 overrides+应用器 → 5 断言；
+**P3-4（UI 写入口/diff 页）本轮不做**。
+
+### P3 已交付（2026-09-28 夜）
+`app/tools/rebuild.py`（一键重建，约 30–45s）/ `snapshot.py`（快照+diff）/
+`overrides.py`（单条纠错）/ `verify_p3.py`（新链路断言 14 条）。
+旧断言基线不变（108/108），people.json md5 回到基准。
+
+**三个坑（都会"静悄悄出错"）**：
+1. **两份快照互比恒为 0**——快照都在重建**前**取。diff 的「新」侧必须是
+   **重建后的当前库**（`_load_live()`）。`diffs.new_id` 因此为 NULL，
+   历史 diff 不能重算，只能翻 `diff_items` 明细。
+2. **复原只跑 `annotate.py` 会丢 `places`**——地名是 `annotate_places.py` 加的。
+   少了它 book-data.json 缺键，旧断言 `verify.py` 直接 `KeyError: 'places'`。
+   **凡"重标注"一律走 `rebuild.py`（四步连跑）**，新链路同样守这条。
+3. **subprocess 参数不能并成一个字符串**：`run("overrides.py apply")` 被当成
+   含空格的文件路径 → 退出码非 0，却像"脚本失败"。参数必须分开传。
+
+**两处实现偏差**（计划 vs 实际）：
+- `reassign` 不改 tier，保留原 tier + 加 `override:1` 字段（不引入前端不认识的 tier 值）。
+- 快照默认 **keep=5**（不是 20）：每份与命中数等行，20 份约 200MB。
+
+**断言写法**：drop 的验证要**数条数**（一句常有同名多命中），
+不能查"找不找得到"——移掉一条后仍找得到，会误判 drop 没生效。

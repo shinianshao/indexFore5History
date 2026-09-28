@@ -64,7 +64,8 @@ def show_person(conn, pids, tier, limit):
                          (pid,)).fetchone()[0]
         print("\n■ {} 【{}】{}　命中 {} 處　({})".format(
             tn, dyn or "", title or "", n, pid))
-        sql = ("SELECT c.full_title, s.text, m.surface, m.tier "
+        # uid 一定要帶：這是「看見一條可疑命中 → 寫 override 糾錯」的入口
+        sql = ("SELECT c.full_title, s.text, m.surface, m.tier, s.uid "
                "FROM mentions m JOIN sentences s ON s.uid=m.sentence_uid "
                "LEFT JOIN chapters c ON c.id=s.chapter_id "
                "WHERE m.person_id=?")
@@ -75,12 +76,13 @@ def show_person(conn, pids, tier, limit):
         sql += " LIMIT ?"
         args.append(limit)
         last = None
-        for full, text, surf, tr in conn.execute(sql, args):
+        for full, text, surf, tr, uid in conn.execute(sql, args):
             if full != last:
                 print("  《{}》".format(full))
                 last = full
             mark = "「{}」".format(surf) if surf in (text or "") else "[{}]".format(surf)
-            print("    {}  {}".format(
+            print("    {}  {}  {}".format(
+                uid,
                 (text or "").replace(surf, mark, 1)[:64],
                 "" if tr == "core" else "…{}".format(TIER_NOTE.get(tr, tr))))
 
@@ -101,14 +103,16 @@ def show_fts(conn, word, limit):
 
 def show_tier(conn, tier, limit):
     rows = conn.execute(
-        "SELECT m.surface, s.text, c.full_title "
+        "SELECT m.surface, s.text, c.full_title, s.uid "
         "FROM mentions m JOIN sentences s ON s.uid=m.sentence_uid "
         "LEFT JOIN chapters c ON c.id=s.chapter_id "
         "WHERE m.tier=? LIMIT ?", (tier, limit)).fetchall()
     print("\ntier={}（{}）：抽 {} 條".format(
         tier, TIER_NOTE.get(tier, tier), len(rows)))
-    for surf, text, full in rows:
-        print("  《{}》{}".format(full, text.replace(surf, "「{}」".format(surf), 1)[:64]))
+    print("  （uid 是糾錯入口：python app/tools/overrides.py show --uid <uid>）")
+    for surf, text, full, uid in rows:
+        print("  {} 《{}》{}".format(
+            uid, full, text.replace(surf, "「{}」".format(surf), 1)[:64]))
 
 
 def show_stats(conn):

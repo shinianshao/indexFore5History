@@ -1,11 +1,15 @@
 # 新开发入口（本地索引 + 可编辑数据库）
 
-> **这是新开发的唯一入口。** 完整背景与决策推演见 `docs/21`、
-> 本次对话的回顾分析见 `docs/22`。日常施工只看本文件就够。
+> **这是新开发的唯一入口。** 完整背景与决策推演见 `docs/21`，
+> 回顾分析见 `docs/22`–`23`，**下一步施工计划见 `docs/24`**。日常施工只看本文件就够。
+>
+> **事实源只有四处**：本文件 / `workbook/*.xlsx` / `pipeline/` 里的非 `_` 脚本 /
+> `docs/21`–`24`。其余旧文档的数字互相打架，别拿它们当事实。
 
 ## 一、定位
 
-`web/` 是**静态版，保留不动**（仍按原流程产出，用于分享）。
+`web/` 是**静态版，已冻结**（2026-09-28 拍板）：仍按原流程产出、仍用于分享，
+但**不再改视觉与交互**。新能力一律只长在 `app/web/`。
 `app/` 是**新版**：本地服务 + SQLite + Excel 权威源，用于日常查询与编辑。
 
 一句话架构：**规则进代码，数据进表格；表格归你写，管道只读它。**
@@ -43,6 +47,9 @@ app/web           ← 查询与编辑界面（FastAPI）
 | 证据句 | 可有可无；无证据的 confidence 压上限，图上用虚线浅色 |
 | 朝代 | 可跨朝代，用「度数 / 关系类型 / 朝代 / 书」四个旋钮控密度 |
 | 图控件 | **ECharts**；接口固定 `renderGraph(adjacency, options)` |
+| **快照 diff（P3）** | **做到「落 SQLite」**：独立快照库 `data/index/snapshots.db`（为什么独立见 docs/24 §三 P3-2），可翻历史；终端照打印。**网页 diff 页本次不做** |
+| **`overrides`（P3）** | **`workbook/overrides.xlsx`**：人（含将来的 UI）写、pipeline **只读**；写冲突走 `.new.xlsx` + 报差异。⚠️ 脚本会填的列（`context`/`old_*`）**只在录入那一刻写，重建绝不刷新** |
+| **静态版 `web/`** | **冻结**：只作分享产物，不再改视觉与交互；视觉演进只发生在 `app/web/`。抽共享 CSS 不做 |
 
 ## 四、施工顺序（每段结束都能用）
 
@@ -51,9 +58,56 @@ app/web           ← 查询与编辑界面（FastAPI）
 | **P0** | PERSONS 抽到 xlsx + `build_dict.py` 只留规则 | ✅ **已完成** |
 | **P1** | 稳定 `uid` 落地、SQLite 索引库、**`relations` 表先建后填** | ✅ **已完成** |
 | **P2** | FastAPI + 全文检索 + 原文对照界面 | ✅ **已完成** |
-| P3 | 编辑 → 重建 → 快照 diff（新增/消失/改归三类） | 未开始 |
+| **P3** | 编辑 → 重建 → 快照 diff | ✅ **已完成**（`rebuild.py` / `snapshot.py` / `overrides.py` / `verify_p3.py`） |
 | P4 | 句级拆分/合并/弃用 UI | 未开始 |
 | P5 | `verify.py` 断言接入新链路 | 未开始 |
+
+### P3 已交付什么
+
+**一条命令走完全流程**（约 30–45 秒）：
+
+```bash
+python app/tools/rebuild.py
+```
+
+```
+（dump 快照）→ build_dict → annotate → annotate_pei → annotate_js_note
+            → annotate_places → apply_overrides → build_index_db →（自動 diff）
+```
+
+| 文件 | 职责 |
+|---|---|
+| `app/tools/rebuild.py` | 一键重建：顺序固定、任一步失败即停、末尾对账。选项 `--from N` / `--with-build` / `--no-snapshot` / `--no-overrides` / `--dry-run` / `--keep` / `--diff-top` |
+| `app/tools/snapshot.py` | 快照与 diff：`dump` / `list` / `diff` / `drop`。独立库 `data/index/snapshots.db` |
+| `app/tools/overrides.py` | 单条纠错：`init` / `show` / `add` / `revoke` / `list` / `apply`。表在 `workbook/overrides.xlsx` |
+| `app/tools/verify_p3.py` | 新链路断言（条数以当次输出为准，只许升不许降） |
+
+两个要点（都是踩过才知道的）：
+
+- **快照库必须独立于 `index.db`**。后者是「可删重建」的产物，历史快照放进去会被重建冲掉。
+- **diff 的「新」侧是当前库，不是另一份快照**。快照都在重建**前**取，两份快照互比恒为 0
+  （第一版就犯了这个错，改完才报得出变化）。
+
+三类变化 + tier 变化，每条自带上下文：
+
+```bash
+python app/tools/snapshot.py diff --live            # 上次快照 → 现在
+python app/tools/snapshot.py diff --live --kind removed --top 30
+```
+
+单条纠错的闭环（P3-4 没做 UI，走命令行）：
+
+```bash
+python app/tools/query.py --tier guess -n 20        # 挑可疑命中（带 uid）
+python app/tools/overrides.py show --uid <uid>      # 看这句有哪些命中
+python app/tools/overrides.py add --uid <uid> --nth 1 --new 刘邦
+python app/tools/rebuild.py                          # 套用 + 报出变化
+python app/tools/overrides.py revoke --uid <uid>    # 反悔（状态改 dead，不删行）
+```
+
+> ⚠️ **pipeline 对 `overrides.xlsx` 只有读权限**。会由脚本填的列（`上下文`/`原pid`/`原tier`）
+> **只在录入那一刻写，重建绝不刷新**——否则就是 P0「导出脚本冲掉权威源」那次事故的重演。
+> 写由 `add` / `revoke`（以及将来的 UI）承担，两者是「人」这一侧的动作。
 
 ### P2 已交付什么
 
@@ -145,6 +199,26 @@ python pipeline/build_workbook.py --force         # 强行重建（见下方⚠�
 # SQLite 索引库（全量重建；加 --fresh 表示不复用旧 uid）
 python app/tools/build_index_db.py
 
+# 一键重建（含 dump 快照 + 自动 diff）
+python app/tools/rebuild.py
+python app/tools/rebuild.py --from 2         # 从第 2 步（annotate）开始
+python app/tools/rebuild.py --dry-run        # 只列命令
+
+# 快照与 diff
+python app/tools/snapshot.py list
+python app/tools/snapshot.py diff --live                    # 上次快照 → 现在
+python app/tools/snapshot.py diff --live --kind removed --top 30
+python app/tools/snapshot.py drop --id 3 4                  # 删脏快照
+
+# 单条纠错（overrides）
+python app/tools/overrides.py show --uid <uid>
+python app/tools/overrides.py add --uid <uid> --nth 1 --new 刘邦
+python app/tools/overrides.py revoke --uid <uid>
+python app/tools/overrides.py list
+
+# 新链路断言
+python app/tools/verify_p3.py
+
 # 查询：查人 / 全文检索 / 按 tier 抽待确认项
 python app/tools/query.py --stats
 python app/tools/query.py 梁王            # 自动识别同名异人
@@ -189,5 +263,10 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 2. `p_xNNNNN` 随机 id 批量改拼音语义 id
 3. 18 组同名异人（劉焉 ×3 等）的 UI 消歧
 4. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")` → DeprecationWarning
-5. **下一个该做的是 P3**（编辑 → 重建 → 快照 diff：新增/消失/改归三类），
-   DEV.md §四 标为「最值钱的一段」
+5. **下一个该做的是 P4**（句级拆分/合并/弃用 UI）。前置是 `make_uid()` 从
+   「按 (篇,段序,句序) 匹配」改成「按文本内容匹配」——否则一改切分 uid 就位移。
+   P3-4（前端标错入口 / 网页 diff 页）**本轮不做**（Q1 做到落 SQLite 即止），
+   现在走命令行闭环（`overrides.py add`）。
+
+> 三个已拍板的决策（详见 `docs/24` §二）：快照 diff **落 SQLite、可翻历史**（不做网页页）；
+> `overrides` 落 **`workbook/overrides.xlsx`**（人写、管道只读）；**静态版 `web/` 冻结**。
