@@ -125,13 +125,22 @@ GET /api/person/{pid}/relations  **关系接口预留**，当前返回空数组
 > 若导出时按拼音排了序，读回来 `people.json` 的条目顺序就变了（实测 md5 因此不同）。
 > 拼音只是给你**自己在 Excel 里排序看**的辅助列。
 
+> ⚠️ **不会把你的审定冲掉的机制**（2026-09-28 补）：导出前先比一遍「人会写的列」
+> （正名/朝代/头衔/简介/别名/状态/备注）。
+> - **完全一致** → 幂等重建，直接覆盖，一句话都不多说；
+> - **检测到你改过** → 原表一根手指不碰，改写 `persons.new.xlsx` 并把差异打印出来；
+> - 真要以源数据为准重来 → 加 `--force`（会先把原表備份成 `.bak-<时间戳>.xlsx`）。
+>
+> 只读辅助列（`pinyin` / `in_<书>` / `命中数`）**不参与比对**——它们每次重跑都可能变，
+> 拿它们比会永远判成「你改过」。
+
 ## 五、常用命令
 
 ```bash
 # Excel 工作簿（persons / places / sentences-<书>）
-# ⚠ 生成器只有 pipeline/build_workbook.py 这一份，别跑 app/tools/ 下那个同名副本
 python pipeline/build_workbook.py                 # 句子默认只出史記
 python pipeline/build_workbook.py --all-books     # 句子全五书（文件大、慢）
+python pipeline/build_workbook.py --force         # 强行重建（见下方⚠，会备份）
 
 # SQLite 索引库（全量重建；加 --fresh 表示不复用旧 uid）
 python app/tools/build_index_db.py
@@ -176,14 +185,9 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 
 ## 七、待办（按优先级）
 
-1. **P0–P2 的成果还没进 git**（最后一次提交停在 docs/19）——其中 `workbook/persons.xlsx`
-   是人工审定资产，丢了补不回来，建议先提交一次
-2. `app/tools/build_workbook.py` 是过期副本（读 `people.json`、按拼音排序、输出
-   `bookindex-sj.xlsx`），与 `pipeline/build_workbook.py` 重复 93 行差异，待裁决删哪份
-3. `.gitignore` 底部「人工资产」注释已过时：PERSONS 的权威源现在是
-   `pipeline/persons_data.py` + `workbook/persons.xlsx`；`workbook/sentences-*.xlsx`
-   属可再生，应显式忽略
-4. 断句第二类（跨句对话引号）已定方案：**不动数据层，只在显示层做续接标记**
-5. `p_xNNNNN` 随机 id 批量改拼音语义 id
-6. 18 组同名异人（劉焉 ×3 等）的 UI 消歧
-7. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")`，有 DeprecationWarning
+1. **断句第二类（跨句对话引号）**：已定方案——**不动数据层，只在显示层做续接标记**
+2. `p_xNNNNN` 随机 id 批量改拼音语义 id
+3. 18 组同名异人（劉焉 ×3 等）的 UI 消歧
+4. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")` → DeprecationWarning
+5. **下一个该做的是 P3**（编辑 → 重建 → 快照 diff：新增/消失/改归三类），
+   DEV.md §四 标为「最值钱的一段」
