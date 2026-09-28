@@ -26,7 +26,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "pipeline" / "build_dict.py"
 DST = ROOT / "pipeline" / "persons_data.py"
 PEOPLE = ROOT / "data" / "dict" / "people.json"

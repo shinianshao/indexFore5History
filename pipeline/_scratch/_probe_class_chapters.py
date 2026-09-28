@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 # 类传/群体传的篇名关键词（五书通用；四夷传也算——里面有一堆部族首领）
 CLASS_KEYS = (

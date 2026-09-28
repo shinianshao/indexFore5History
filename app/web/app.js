@@ -62,19 +62,29 @@
       out.innerHTML = "<div class=\"empty\">查不到「" + esc(query) + "」</div>";
       return;
     }
+    var many = items.length > 1;
     var html = "<div class=\"card\"><div class=\"person-head\">" +
       "<span class=\"name\">「" + esc(query) + "」</span>" +
       "<span class=\"dyn\">共 " + items.length + " 人</span></div>";
-    items.forEach(function (p) {
+    /* 同名異人消歧：給序號徽章，並標出各自**主要見於哪幾本書**——
+       同名往往各屬一書（張溫：後漢書一人、三國志一人），
+       光看朝代與頭銜分不出來，分書是最好用的判據。 */
+    items.forEach(function (p, i) {
+      var idx = many ? "<span class=\"dup-idx\">" + (i + 1) + "</span>" : "";
+      var bk = (p.books && p.books.length)
+        ? "見於 " + p.books.map(function (b) { return esc(b.name); }).join(" · ")
+        : "";
       html += "<div class=\"row\" data-pid=\"" + esc(p.id) + "\">" +
-        "<span class=\"name\">" + esc(p.trad_name) +
+        "<span class=\"name\">" + idx + esc(p.trad_name) +
         (p.name && p.name !== p.trad_name ? "（" + esc(p.name) + "）" : "") + "</span>" +
         "<span class=\"meta\">" + esc(p.dynasty || "") +
-        (p.title ? " · " + esc(p.title) : "") + " · " + p.n + " 處</span></div>";
+        (p.title ? " · " + esc(p.title) : "") + " · " + p.n + " 處" +
+        (bk ? "　<span class=\"books\">" + bk + "</span>" : "") + "</span></div>";
     });
     out.innerHTML = html + "</div>";
-    hint.textContent = items.length > 1
-      ? "同名異人：點進去分別看命中，別當成同一個人。" : "";
+    hint.textContent = many
+      ? "同名異人 " + items.length + " 位：先看「見於」哪本書，再點進去分開看命中。"
+      : "";
   }
 
   /* ---------- 渲染：人物詳情 ---------- */
@@ -152,13 +162,33 @@
   }
 
   /* ---------- 原文層 ---------- */
+  /* 跨句對話的續接標記（docs/21 §13 選 A 的改良版）：
+     古籍一句裡常有多處「。！？」，按句讀斷就會把一對引號拆到兩句——
+     這是**原文的本來面目**，不是 bug。所以這裡**只做顯示層**：
+     承接上一句的段落給淡淡的續接標記，一句話沒說完的段落下方不留白。
+     數據層（切分結果）一個字都不動。 */
+  function renderParagraphs(sentences, targetUid) {
+    var open = 0;
+    return (sentences || []).map(function (s) {
+      var t = s.text || "";
+      var o = (t.match(/「/g) || []).length;
+      var c = (t.match(/」/g) || []).length;
+      var cont = open > 0;                 // 承接上一句尚未收口的對話
+      open += o - c;
+      if (open < 0) open = 0;              // 單句裡閉引號多於開引號，不往下傳
+      var cls = [];
+      if (cont) cls.push("q-cont");
+      if (open > 0) cls.push("q-open");
+      if (s.uid === targetUid) cls.push("target");
+      return "<p data-uid=\"" + esc(s.uid) + "\"" +
+        (cls.length ? " class=\"" + cls.join(" ") + "\"" : "") + ">" + esc(t) + "</p>";
+    }).join("");
+  }
+
   function openChapter(cid, uid) {
     return request("/api/chapter/" + encodeURIComponent(cid)).then(function (d) {
       readerTitle.textContent = (d.chapter && d.chapter.full_title) || cid;
-      readerBody.innerHTML = (d.sentences || []).map(function (s) {
-        return "<p data-uid=\"" + esc(s.uid) + "\"" +
-          (s.uid === uid ? " class=\"target\"" : "") + ">" + esc(s.text) + "</p>";
-      }).join("");
+      readerBody.innerHTML = renderParagraphs(d.sentences, uid);
       reader.classList.add("on");
       if (uid) {
         var el = readerBody.querySelector('p[data-uid="' + uid + '"]');

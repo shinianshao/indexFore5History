@@ -55,7 +55,12 @@ def stats() -> Dict[str, Any]:
 
 
 def search_persons(q: str, limit: int = 30) -> List[Dict[str, Any]]:
-    """按正名 / 简体名 / 别名检索人物。同名异人会**都返回**，由前端提示消歧。"""
+    """按正名 / 简体名 / 别名检索人物。同名异人会**都返回**，由前端提示消歧。
+
+    消歧的关键信息是「这人主要出现在哪几本书」——同名异人往往各属一书
+    （張溫：後漢書一人、三國志一人），光看朝代和头衔分不出来。
+    所以顺带把分书命中数查出来（一次查询，不是 N+1）。
+    """
     like = "%{}%".format(q)
     sql = """
         SELECT p.id, p.trad_name, p.name, p.dynasty, p.title, p.summary,
@@ -66,7 +71,26 @@ def search_persons(q: str, limit: int = 30) -> List[Dict[str, Any]]:
         ORDER BY n DESC LIMIT ?
     """
     with connect() as conn:
-        return [dict(r) for r in conn.execute(sql, (like, like, like, limit))]
+        rows = [dict(r) for r in conn.execute(sql, (like, like, like, limit))]
+        if not rows:
+            return rows
+        pids = [r["id"] for r in rows]
+        # books 表的主鍵叫 `code` 不是 `id`（建庫腳本裡就是這麼定的）
+        bname = {r[0]: r[1] for r in conn.execute("SELECT code, name FROM books")}
+        ph = ",".join("?" * len(pids))
+        dist: Dict[str, List] = {}
+        for pid, bid, n in conn.execute(
+                "SELECT m.person_id, c.book_id, COUNT(*) FROM mentions m "
+                "JOIN sentences s ON s.uid = m.sentence_uid "
+                "JOIN chapters c ON c.id = s.chapter_id "
+                "WHERE m.person_id IN ({}) "
+                "GROUP BY m.person_id, c.book_id".format(ph), pids):
+            dist.setdefault(pid, []).append((bid, n))
+        for r in rows:
+            top = sorted(dist.get(r["id"], []), key=lambda x: -x[1])[:3]
+            r["books"] = [{"id": b, "name": bname.get(b, b), "n": n}
+                          for b, n in top]
+        return rows
 
 
 def person_profile(pid: str) -> Optional[Dict[str, Any]]:

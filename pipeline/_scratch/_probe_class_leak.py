@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BOOK_OF_PREFIX = {"sj": "sj", "hs": "hs", "hhs": "hhs", "sgz": "sgz", "js": "js"}
 
 

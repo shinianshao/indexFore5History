@@ -7,7 +7,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 v = json.loads((ROOT / "data/dict/volumes/js.json").read_text(encoding="utf-8"))
 bd = json.loads((ROOT / "data/index/book-data.json").read_text(encoding="utf-8"))
 by_id = {p["id"]: p for p in bd["persons"]}

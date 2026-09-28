@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -57,17 +58,23 @@ def _check(q: str, limit: int) -> int:
     return max(1, min(int(limit), MAX_LIMIT))
 
 
-app = FastAPI(title="BOOKINDEX", version="0.1.0",
-              description="古籍人物/地名索引 · 本地查询服务")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """启动即校验，快速失败——别等用户点搜索才发现库没建。
 
-
-@app.on_event("startup")
-def startup() -> None:
-    """启动即校验，快速失败——别等用户点搜索才发现库没建。"""
+    用 lifespan 而不是已废弃的 `@app.on_event("startup")`：
+    后者在新版 FastAPI/Starlette 上会抛 DeprecationWarning，迟早被移除。
+    """
     p = db.db_path()
     if not os.path.exists(p):
         raise RuntimeError(
             "索引库不存在：{}\n先跑：python app/tools/build_index_db.py".format(p))
+    yield
+
+
+app = FastAPI(title="BOOKINDEX", version="0.1.0",
+              description="古籍人物/地名索引 · 本地查询服务",
+              lifespan=lifespan)
 
 
 @app.exception_handler(Exception)

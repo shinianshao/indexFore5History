@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 D = json.loads((ROOT / "data" / "index" / "book-data.json").read_text(encoding="utf-8"))
 NAMES = {p["id"]: p.get("tradName") or p.get("name") for p in D["persons"]}
 

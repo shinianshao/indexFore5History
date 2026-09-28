@@ -13,7 +13,7 @@ import json
 from collections import Counter, defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 D = json.loads((ROOT / "data" / "index" / "book-data.json").read_text(encoding="utf-8"))
 NAMES = {p["id"]: p.get("tradName") or p.get("name") for p in D["persons"]}
 CH = {c["id"]: c for c in D["chapters"]}

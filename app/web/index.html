@@ -73,6 +73,14 @@
   .row:hover .name { color: var(--accent); }
   .row .name { font-family: var(--serif); font-size: 17px; }
   .row .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  /* 同名異人消歧：序號徽章 + 「見於哪幾本書」（同名往往各屬一書） */
+  .dup-idx {
+    display: inline-block; font-family: var(--sans); font-size: 11px;
+    min-width: 17px; text-align: center; line-height: 17px;
+    background: var(--accent-soft); color: var(--accent);
+    border-radius: 50%; margin-right: 7px; vertical-align: 2px;
+  }
+  .row .books { color: var(--accent); opacity: .75; }
 
   .person-head { display: flex; align-items: baseline; gap: 12px; }
   .person-head .name { font-family: var(--serif); font-size: 22px; }
@@ -131,6 +139,11 @@
     margin: 0 0 10px; color: var(--text);
   }
   .reader-body p.target { background: var(--accent-soft); }
+  /* 跨句對話續接（docs/21 §13）：只做顯示層，切分不動。
+     q-cont＝承接上一句仍未收口的對話（左側點線＋縮進）；
+     q-open＝本句話沒說完，與下一句貼緊（下方不留白）。 */
+  .reader-body p.q-cont { padding-left: 14px; border-left: 2px dotted var(--border); }
+  .reader-body p.q-open { margin-bottom: 0; }
 </style>
 </head>
 <body>

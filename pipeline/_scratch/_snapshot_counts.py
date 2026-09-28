@@ -2,15 +2,15 @@
 """给 book-data.json 的 人物/地名 计数拍快照（id → 计数），用于改动前后逐 id 对账。
 
 用法：
-  python pipeline/_snapshot_counts.py before   # 写到 pipeline/_counts_before.json
-  python pipeline/_snapshot_counts.py after    # 写到 pipeline/_counts_after.json
-  python pipeline/_snapshot_counts.py diff     # 对比两者，只打印有差异的条目
+  python pipeline/_scratch/_snapshot_counts.py before   # 写到 pipeline/_counts_before.json
+  python pipeline/_scratch/_snapshot_counts.py after    # 写到 pipeline/_counts_after.json
+  python pipeline/_scratch/_snapshot_counts.py diff     # 对比两者，只打印有差异的条目
 """
 import json
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 已移入 _scratch/，要多退一層
 import common
 
 BOOK = os.path.join(common.INDEX, "book-data.json")

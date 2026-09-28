@@ -256,6 +256,19 @@ Excel 侧依赖 `openpyxl` + `pypinyin`，已装进系统 Python 3.12.10（与 o
 P3 动工顺序：1 一键重建 → 2 快照库+diff → 3 overrides+应用器 → 5 断言；
 **P3-4（UI 写入口/diff 页）本轮不做**。
 
+## 一次性脚本归档的判据（2026-09-29 补）
+- **留在 pipeline/**：`_ai_*` / `_gen_*` / `_apply_*` / `_class_fill_prep` / `_audit_names`
+  —— 这套是「AI 判定闭环」工具，会用第二次。
+- **迁 `_scratch/`**：`_probe_*` / `_fix_false_persons*` / `_split_persons` / `_snapshot_counts`
+  —— 多数已被 `app/tools/query.py` 取代。
+- 移动后必改两处：`parents[1]` → **`parents[2]`**（多一层）；
+  用 `sys.path.insert(0, os.path.dirname(abspath(__file__)))` 导入 `common` 的，
+  也要**多退一层**到 pipeline。老脚本已是 parents[2]，所以可以对 `_scratch/*.py`
+  整目录做替换，不必逐个挑。
+
+⚠️ **库表主键名字别想当然**：`books` 表主键是 **`code`** 不是 `id`
+（chapters 才是 `id`）。写 `SELECT id, name FROM books` 会直接 OperationalError。
+
 ## P4 数据层（2026-09-29 凌晨完成，UI 未做）
 - **uid 已下沉到语料层**：`pipeline/tag_uids.py` 给 223,164 句补打（幂等），
   `common.stable_uid` 是算法唯一来源；`build.py` 新切分时带 uid、`annotate.py` 透传、
