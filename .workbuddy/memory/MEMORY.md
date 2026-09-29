@@ -269,6 +269,18 @@ P3 动工顺序：1 一键重建 → 2 快照库+diff → 3 overrides+应用器 
 ⚠️ **库表主键名字别想当然**：`books` 表主键是 **`code`** 不是 `id`
 （chapters 才是 `id`）。写 `SELECT id, name FROM books` 会直接 OperationalError。
 
+## P6-2 抽取（2026-09-30，62 条入库）
+- 闭环：`_gen_rel_candidates.py` → `_apply_rel_batch.py` → `relations.py check`
+  → `rebuild` → `_gen_rel_review.py`（待判清单 docs/26）。
+- **只收显式关系词**（之子/之弟/之妻/之孫…），禁止共现出边。
+  边语义：**(a, rel, b) = a 是 b 的 rel**，长辈/年长在前（「X 之弟」存 (X, 兄, self)）。
+- **裸帝号（文帝/明帝/武帝/宣帝/光武…）一律不自动落**：跨朝代指不同人，
+  实测「文帝」被解析成曹丕（应汉文帝刘恒）、「宣帝」被解析成司马懿。→ 进 docs/26 人工判。
+- 从简介抽的关系**没有 evidence_uid**（简介不是语料句）→ conf 统一压到 0.4（推断档）。
+- ⚠️ **去重判据用 (a,b,rel)，不能用 rel_id**：同一条关系带不带 era/book 会导致 rel_id 不同。
+- ⚠️ 断言的期望值要跟着派生规则走：用 `derive_confidence(src, has_evidence)`，别直接用
+  `CONF_BY_SOURCE[src]`（加了"无证据压低"后旧写法会红）。
+
 ## P6-0/P6-1 已修（2026-09-30，见 docs/25 §二与 §六）
 - `pipeline/relations.py`：`REL_TABLE`（规范词表定死）、`REL_INVERSE`（kinship）、
   `CONF_BY_SOURCE`；命令 init/add/list/check/revoke/apply。

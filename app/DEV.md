@@ -62,6 +62,7 @@ app/web           ← 查询与编辑界面（FastAPI）
 | **P4** | 句级拆分/合并/弃用 | ✅ **已完成**（uid 下沉 + 命令行 + 网页 UI） |
 | **P5** | `verify.py` 断言接入新链路 | ✅ **已完成**（5 条一致性断言，基线 113 条） |
 | **P6-0/1** | 关系数据落点 + 契约定型 | ✅ **已完成**（审查出的 P0 六项与 P1 表/代码层全部修掉） |
+| **P6-2** | 关系抽取（简介 → 候选 → 落盘） | ✅ **已完成**（62 条入库；帝号类 38 条留待判） |
 
 ### 界面上的两处小改动（2026-09-29）
 
@@ -119,6 +120,33 @@ python app/tools/overrides.py revoke --uid <uid>    # 反悔（状态改 dead，
 > ⚠️ **pipeline 对 `overrides.xlsx` 只有读权限**。会由脚本填的列（`上下文`/`原pid`/`原tier`）
 > **只在录入那一刻写，重建绝不刷新**——否则就是 P0「导出脚本冲掉权威源」那次事故的重演。
 > 写由 `add` / `revoke`（以及将来的 UI）承担，两者是「人」这一侧的动作。
+
+### P6-2 已交付什么（关系抽取）
+
+走的是项目一贯的「取证 → 判 → 落 → 断言」闭环：
+
+```bash
+python pipeline/_gen_rel_candidates.py        # 取证：从人物简介抽显式关系词
+python pipeline/_apply_rel_batch.py --dry-run # 看会落多少
+python pipeline/_apply_rel_batch.py           # 落盘 workbook/relations.xlsx
+python pipeline/relations.py check            # 校验（含重复 / 反向双写 / 证据失效）
+python app/tools/rebuild.py                   # 灌库 + 自动 diff
+python pipeline/_gen_rel_review.py            # 不敢落的 → docs/26 人工判定清单
+```
+
+**只收显式关系词**（「司馬昭之子」「劉邦之妻」），**绝不从共现推断**——
+同句出现两个人什么都说明不了。
+
+第一批结果：候选 106 条 → 落盘 **62 条**（唯一匹配且非裸帝号），
+**38 条裸帝号**（文帝/明帝/武帝/宣帝…）留人工判定（`docs/26`）。
+
+> 裸帝号为什么不自动落：同一个称号跨朝代指不同的人——
+> 实测「文帝之子」被解析成**曹丕**（应为汉文帝刘恒）、「宣帝之子」被解析成**司马懿**。
+> 生成器按别名解析只能碰运气，这类必须带朝代判。
+
+落下来的这 62 条 **都没有证据句**（简介不是语料句，没有 uid），
+所以按规则统一压到 `confidence=0.4`（推断档），图上画虚线——
+**没出处的关系，不当事实用**。
 
 ### P6-0 / P6-1 已交付什么（设计审查后的问题全修）
 
@@ -375,9 +403,9 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 4. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")` → DeprecationWarning
 **P0–P5 主线全部完成**（2026-09-29）。剩下的按性价比排：
 
-1. **P6-2 关系抽取**（落点与契约已通，可以动工了）：从 `summary` 抽候选
-   （只收**含显式关系词**的，禁止纯共现出边）→ AI 判定 → 落盘 xlsx → 断言。
-   之后 P6-3 才做 ECharts 图（现在前端是列表，能用）。
+1. **判定裸帝号那 38 条**（`docs/26`）：填 `pipeline/_rel_verdicts.json`，
+   再跑 `_apply_rel_batch.py`。判完关系数据才完整。
+2. **P6-3 图渲染**：ECharts + 四个旋钮的界面 + 证据句跳回原文（现在前端是列表，能用）。
 2. **P3-4 网页标错入口**：照 P4-2 同一套做（UI 代写 `overrides.xlsx`），半天。
 3. **合并重复 pid**（如 `p_liuyan_sg` / `p_liuyan_ys` 其实是同一人）。
 4. `p_xNNNNN` → 拼音语义 id：牵动全部外键，**且必须排在 P6 之前**（关系以 pid 为外键）。

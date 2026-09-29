@@ -86,6 +86,13 @@ REL_INVERSE = {
 # 置信度**由 source 派生**，不给人手填
 CONF_BY_SOURCE = {"manual": 1.0, "ai": 0.8, "auto-summary": 0.6,
                   "manual-guess": 0.4}
+# 没有证据句的一律压到推断档：出处都没有的关系，不敢当事实用（docs/24 §12.4.1）
+NO_EVIDENCE_CAP = 0.4
+
+
+def derive_confidence(source: str, has_evidence: bool) -> float:
+    base = CONF_BY_SOURCE.get(source, 0.4)
+    return base if has_evidence else min(base, NO_EVIDENCE_CAP)
 
 HEADERS = [
     "rel_id", "person_a", "原文用字a", "person_b", "原文用字b",
@@ -231,7 +238,8 @@ def cmd_add(args) -> None:
         "证据uid": args.evidence_uid or "",
         "证据原文": _sentence_text(args.evidence_uid) if args.evidence_uid else "",
         "来源(source)": args.source,
-        "置信度(confidence)": CONF_BY_SOURCE[args.source],
+        "置信度(confidence)": derive_confidence(args.source,
+                                                bool(args.evidence_uid)),
         "状态(status)": "active",
         "备注(note)": args.note or "",
         "录入时间(createdAt)": now(),
@@ -315,7 +323,8 @@ def cmd_apply(args) -> int:
              r.get("关系(rel)"), int(r.get("对称") or 0),
              r.get("时代(era)") or "", r.get("书(book)") or "",
              r.get("证据uid") or "", r.get("证据原文") or "",
-             float(r.get("置信度(confidence)") or 0.0),
+             derive_confidence(r.get("来源(source)") or "manual",
+                               bool(r.get("证据uid"))),
              r.get("来源(source)") or "", "active",
              r.get("备注(note)") or "", r.get("录入时间(createdAt)") or ""))
         n += 1

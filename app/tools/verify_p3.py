@@ -356,18 +356,22 @@ def test_relations() -> None:
 
     conn = snapshot.connect(snapshot.DB_PATH)
     r = conn.execute(
-        "SELECT rel, rel_type, confidence, source, status FROM relations "
-        "WHERE status='active' LIMIT 1").fetchone()
+        "SELECT rel, rel_type, confidence, source, status, evidence_uid "
+        "FROM relations WHERE status='active' LIMIT 1").fetchone()
     conn.close()
     if not r:
         check("取到一條關係做規則檢查", False)
         return
-    rel, rt, conf, src, st = r
+    rel, rt, conf, src, st, euid = r
     check("rel 在規範詞表內", rel in R.REL_TABLE, rel)
     check("rel_type 由 rel 派生（不手填）", rt == R.REL_TABLE[rel][0],
           "{} → {}".format(rel, rt))
-    check("confidence 由 source 派生（不手填）", conf == R.CONF_BY_SOURCE.get(src),
-          "{} → {}".format(src, conf))
+    # 注意：無證據的關係會被壓到推斷檔，所以期望值要帶 evidence 一起算
+    check("confidence 由 source + 有無證據派生（不手填）",
+          conf == R.derive_confidence(src, bool(euid)),
+          "{}（證據 {}） → {}".format(src, "有" if euid else "無", conf))
+    check("無證據的關係置信度已壓低", (not euid) and conf <= R.NO_EVIDENCE_CAP,
+          "conf={}".format(conf))
     check("status 為 active", st == "active")
 
     inv = R.REL_INVERSE.get(rel)
