@@ -269,6 +269,14 @@ P3 动工顺序：1 一键重建 → 2 快照库+diff → 3 overrides+应用器 
 ⚠️ **库表主键名字别想当然**：`books` 表主键是 **`code`** 不是 `id`
 （chapters 才是 `id`）。写 `SELECT id, name FROM books` 会直接 OperationalError。
 
+## P5：verify.py 断言接入新链路（2026-09-29 完成，主线 P0–P5 收工）
+- `verify.py` 的 `check()` 里加了 `_newchain_cases()`：句数/命中数/人物数与 index.db
+  一致、**uid 算法四处一致**、**命中逐条对齐**（差集必须为空）。基线 113 条。
+- 一上就抓出真 bug：48,097 句「只有地名命中」的句子没 uid（由 `annotate_places.py`
+  新建 record，而 uid 只在 `annotate.py` 加过）→ 已补。
+  **教训：uid 这种"每处都要带"的字段，得把所有写句子的入口都过一遍，不能只改主路径。**
+- ⚠️ **跑重建前必须先停本地服务**：Windows 上 SQLite 被占着，删不掉旧库 → 退出码 1。
+
 ## P4 网页端（2026-09-29 完成，整段 P4 收工）
 - 原文层每句 hover 出「拆分 / 併下句 / 棄用」。**拆分＝点字选断点**（不弹窗填偏移）。
 - 后端新增 `POST /api/sentence/edit` `/api/sentence/revoke` `/api/rebuild`

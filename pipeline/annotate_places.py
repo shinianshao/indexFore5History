@@ -37,7 +37,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import (CORPUS, DICT, INDEX, PIPELINE, WEB,
                     compile_alias_pattern, corpus_paths, load_json, norm,
-                    write_json)
+                    stable_uid, write_json)
 from trad import tradify
 
 try:
@@ -345,9 +345,13 @@ def main():
                 total_sentences += 1
                 record = existing.get(sent["id"])
                 if record is None:
+                    # uid 必须带上（P4-0）：这批是「只有地名命中」的句子，
+                    # annotate.py 那边没给它们建记录，漏了就整批没有稳定主键。
                     record = {
                         "id": sent["id"], "chapterId": cid,
                         "paraSeq": para["seq"], "seq": sent["seq"],
+                        "uid": sent.get("uid") or stable_uid(
+                            cid, para["seq"], sent["seq"]),
                         "text": sent["text"], "persons": [], "marks": [],
                         "pmarks": [],
                     }

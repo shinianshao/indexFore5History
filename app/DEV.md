@@ -60,7 +60,7 @@ app/web           ← 查询与编辑界面（FastAPI）
 | **P2** | FastAPI + 全文检索 + 原文对照界面 | ✅ **已完成** |
 | **P3** | 编辑 → 重建 → 快照 diff | ✅ **已完成**（`rebuild.py` / `snapshot.py` / `overrides.py` / `verify_p3.py`） |
 | **P4** | 句级拆分/合并/弃用 | ✅ **已完成**（uid 下沉 + 命令行 + 网页 UI） |
-| P5 | `verify.py` 断言接入新链路 | 未开始 |
+| **P5** | `verify.py` 断言接入新链路 | ✅ **已完成**（5 条一致性断言，基线 113 条） |
 
 ### 界面上的两处小改动（2026-09-29）
 
@@ -118,6 +118,24 @@ python app/tools/overrides.py revoke --uid <uid>    # 反悔（状态改 dead，
 > ⚠️ **pipeline 对 `overrides.xlsx` 只有读权限**。会由脚本填的列（`上下文`/`原pid`/`原tier`）
 > **只在录入那一刻写，重建绝不刷新**——否则就是 P0「导出脚本冲掉权威源」那次事故的重演。
 > 写由 `add` / `revoke`（以及将来的 UI）承担，两者是「人」这一侧的动作。
+
+### P5 已交付什么
+
+`verify.py --check` 现在同时断**旧链路**（消歧、别名、表字那 108 条）和
+**新链路一致性**（`book-data.json` ↔ `index.db`，5 条）：
+
+| 断言 | 抓住什么 |
+|---|---|
+| 句数 / 命中数 / 人物数 与库一致 | 漏跑建库、或某一步只跑了一半 |
+| **uid 算法四处一致** | `common` / `build` / `tag_uids` / `build_index_db` 改了没同步 |
+| **命中逐条对齐**（逐条比 uid+pid+串+偏移+tier） | 编辑与重建之间任何一处错位 |
+
+> 这套断言一上就抓到一个真 bug：**48,097 句「只有地名命中」的句子没有 uid**
+> （它们由 `annotate_places.py` 建记录，而 uid 只在 `annotate.py` 那边加过）。
+> 这正是 P5 的意义——以前这种事只能靠肉眼发现。
+
+⚠️ 跑重建前**先停掉本地服务**：Windows 上 SQLite 文件被占着，`build_index_db`
+删不掉旧库会直接失败（退出码 1，已踩过）。
 
 ### P4 已交付什么
 
@@ -330,11 +348,13 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 2. `p_xNNNNN` 随机 id 批量改拼音语义 id
 3. 18 组同名异人（劉焉 ×3 等）的 UI 消歧
 4. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")` → DeprecationWarning
-5. **P4 已完成**（2026-09-29），下一个是 **P5**：`verify.py` 断言接入新链路
-   （`index.db` 与 `book-data.json` 的一致性现在只能手工对齐科目，应变成断言）。
-6. P3-4（前端标错入口 / 网页 diff 页）**未做**（Q1 做到落 SQLite 即止；diff 走
-   `snapshot.py diff --live`）。既然 P4 的网页写入口已经打通，标错入口可以照同一套做。
-7. `p_xNNNNN` → 拼音语义 id：牵动全部外键，改之前先想清迁移与回滚。
+**P0–P5 主线全部完成**（2026-09-29）。剩下的都是可选项，按性价比排：
+
+1. **关系数据（P6）**：`relations` 表已空表预留、端点已通，缺的是抽取与校验。
+   工作量最大，也**最该单独做一次独立审查**（主观判断 + AI 抽取，最容易造出假证据）。
+2. **P3-4 网页标错入口**：照 P4-2 同一套做（UI 代写 `overrides.xlsx`），半天。
+3. **合并重复 pid**（如 `p_liuyan_sg` / `p_liuyan_ys` 其实是同一人）。
+4. `p_xNNNNN` → 拼音语义 id：牵动全部外键，改之前先想清迁移与回滚。
 
 > 三个已拍板的决策（详见 `docs/24` §二）：快照 diff **落 SQLite、可翻历史**（不做网页页）；
 > `overrides` 落 **`workbook/overrides.xlsx`**（人写、管道只读）；**静态版 `web/` 冻结**。

@@ -157,6 +157,64 @@ def show(query):
     print()
 
 
+def _newchain_cases():
+    """P5：新链路一致性（book-data.json ↔ index.db）。
+
+    这两边以前只能**手工对齐科目**——哪一步漏跑（尤其是 annotate 四步没跑全）
+    全靠肉眼发现。现在变成断言，漏一步立刻红。
+    """
+    out = []
+    db_path = os.path.join(ROOT, "data", "index", "index.db")
+    if not os.path.exists(db_path):
+        out.append(("新链路：index.db 存在", False,
+                    "缺 {}，先跑 rebuild.py".format(db_path)))
+        return out
+    import sqlite3
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from common import stable_uid
+
+    conn = sqlite3.connect(db_path)
+    try:
+        n_sent = conn.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]
+        n_men = conn.execute("SELECT COUNT(*) FROM mentions").fetchone()[0]
+        n_per = conn.execute("SELECT COUNT(*) FROM persons").fetchone()[0]
+        db_pairs = set(conn.execute(
+            "SELECT sentence_uid, person_id, surface, s, e, tier FROM mentions"))
+    finally:
+        conn.close()
+
+    json_pairs = set()
+    uid_bad = []
+    for s in DATA["sentences"]:
+        u = s.get("uid")
+        # uid 现在由语料层透传；这里按同一算法重算一遍，
+        # 防的是「四处算法（common/build/tag_uids/build_index_db）改了但没同步」
+        if u != stable_uid(s["chapterId"], s.get("paraSeq"), s.get("seq")):
+            uid_bad.append(str(u))
+        for m in s.get("marks") or []:
+            json_pairs.add((u, m.get("pid"), m.get("alias"),
+                            m.get("s"), m.get("e"), m.get("tier")))
+
+    out.append(("新链路：句数与库一致",
+                n_sent == len(DATA["sentences"]),
+                "库 {:,} / JSON {:,}".format(n_sent, len(DATA["sentences"]))))
+    out.append(("新链路：命中数与库一致",
+                n_men == len(json_pairs),
+                "库 {:,} / JSON {:,}".format(n_men, len(json_pairs))))
+    out.append(("新链路：人物数与库一致",
+                n_per == len(persons),
+                "库 {:,} / JSON {:,}".format(n_per, len(persons))))
+    out.append(("新链路：uid 算法四处一致",
+                not uid_bad,
+                "不一致 {} 句 {}".format(len(uid_bad), uid_bad[:3])))
+    only_db = db_pairs - json_pairs
+    only_json = json_pairs - db_pairs
+    out.append(("新链路：命中逐条对齐",
+                not only_db and not only_json,
+                "仅库有 {:,} / 仅 JSON 有 {:,}".format(len(only_db), len(only_json))))
+    return out
+
+
 def check():
     """回归断言：每条都对应一个曾经真实出错的场景。"""
     cases = []
@@ -1079,6 +1137,8 @@ def check():
                 _bad_rej.append(_nm + "·" + _z)
     cases.append(("AI 判定「不收」的表字未進別名（同字他人/跨詞邊界）",
                   not _bad_rej, "误收={}".format(_bad_rej)))
+
+    cases.extend(_newchain_cases())
 
     print("=" * 72)
     print("回归断言")
