@@ -348,13 +348,17 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 2. `p_xNNNNN` 随机 id 批量改拼音语义 id
 3. 18 组同名异人（劉焉 ×3 等）的 UI 消歧
 4. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")` → DeprecationWarning
-**P0–P5 主线全部完成**（2026-09-29）。剩下的都是可选项，按性价比排：
+**P0–P5 主线全部完成**（2026-09-29）。剩下的按性价比排：
 
-1. **关系数据（P6）**：`relations` 表已空表预留、端点已通，缺的是抽取与校验。
-   工作量最大，也**最该单独做一次独立审查**（主观判断 + AI 抽取，最容易造出假证据）。
+1. **P6-0 关系数据的落点与表头**（半天，**阻塞 P6 其余部分**）——
+   已做过独立审查（`docs/25`），结论是**现在不能直接写抽取代码**：
+   `relations` 表在 `index.db` 里，而它每次重建都被整个删掉重建 → 灌进去的关系会静默归零。
 2. **P3-4 网页标错入口**：照 P4-2 同一套做（UI 代写 `overrides.xlsx`），半天。
 3. **合并重复 pid**（如 `p_liuyan_sg` / `p_liuyan_ys` 其实是同一人）。
-4. `p_xNNNNN` → 拼音语义 id：牵动全部外键，改之前先想清迁移与回滚。
+4. `p_xNNNNN` → 拼音语义 id：牵动全部外键，**且必须排在 P6 之前**（关系以 pid 为外键）。
+
+> ⚠️ 决定：先做 P6-0，再动抽取。审查里另外五条 P0（status/稳定主键、证据一对多、
+> 快照与 uid 谁权威、direction 语义、契约不一致）一并在 P6-0/P6-1 里定掉。
 
 > 三个已拍板的决策（详见 `docs/24` §二）：快照 diff **落 SQLite、可翻历史**（不做网页页）；
 > `overrides` 落 **`workbook/overrides.xlsx`**（人写、管道只读）；**静态版 `web/` 冻结**。

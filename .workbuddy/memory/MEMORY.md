@@ -269,6 +269,17 @@ P3 动工顺序：1 一键重建 → 2 快照库+diff → 3 overrides+应用器 
 ⚠️ **库表主键名字别想当然**：`books` 表主键是 **`code`** 不是 `id`
 （chapters 才是 `id`）。写 `SELECT id, name FROM books` 会直接 OperationalError。
 
+## P6 关系数据：审查结论（2026-09-29，见 docs/25，**未动工**）
+- **致命**：`relations` 表在 `index.db`，而它每次重建都被 `os.remove(DB)` 删掉重建，
+  且无 INSERT 步骤 → **灌进去的关系会静默归零**。权威源必须是 `workbook/relations.xlsx`，
+  建库后由脚本灌回（与 overrides 同构）。
+- 其余 P0：要加 `rel_id`（md5(a|b|rel|book|era)）+ `status`；evidence 一对多与句子
+  生命周期；**快照与 uid 冲突时以 uid 指向的现句为准，快照只是缓存**；
+  `direction` 改成 `symmetric` 布尔 + 代码 `REL_INVERSE` 派生（防 (a,父,b)/(b,子,a) 双写）；
+  **契约要重定**（端点返回 {nodes,edges} + degree/type/book/min_conf 参数，前端占位卡片现在根本不读 d.relations）。
+- **pid 重命名必须排在 P6 之前**（关系以 pid 为外键）。
+- 教训（可推广）：**凡是「不可再生的审定数据」，先问一句「它落在哪个会被删重建的产物里」**。
+
 ## P5：verify.py 断言接入新链路（2026-09-29 完成，主线 P0–P5 收工）
 - `verify.py` 的 `check()` 里加了 `_newchain_cases()`：句数/命中数/人物数与 index.db
   一致、**uid 算法四处一致**、**命中逐条对齐**（差集必须为空）。基线 113 条。
