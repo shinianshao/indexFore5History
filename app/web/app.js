@@ -161,6 +161,113 @@
     hint.textContent = "";
   }
 
+  /* ---------- 句級編輯（P4-2）----------
+     寫進 workbook/sentence-edits.xlsx（那張表歸人寫，這裡是 UI 代筆），
+     重建後才生效——所以每記一條都要說清楚「待重建」。 */
+  var edstat = document.getElementById("edstat");
+  var btnRebuild = document.getElementById("btnRebuild");
+  var pending = {};        // uid → action
+  var readerCid = null;
+
+  function requestPost(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (b) {
+        if (!r.ok) throw new Error(b.message || ("請求失敗（" + r.status + "）"));
+        return b;
+      });
+    });
+  }
+
+  function syncEdstat(msg) {
+    var n = Object.keys(pending).length;
+    if (msg) { edstat.hidden = false; edstat.textContent = msg; return; }
+    edstat.hidden = n === 0;
+    edstat.textContent = n ? "已記錄 " + n + " 條編輯，重建後生效" : "";
+    btnRebuild.hidden = n === 0;
+  }
+
+  /* 拆分不彈窗填數字，而是**點字選斷點**：想在哪裡斷，就點那個字。
+     比輸入偏移直覺得多，也不容易填錯。 */
+  function beginPick(p) {
+    if (p.classList.contains("picking")) {   // 再點一次＝取消
+      p.innerHTML = p.getAttribute("data-html") || p.innerHTML;
+      p.classList.remove("picking");
+      return;
+    }
+    var t = p.getAttribute("data-text") || "";
+    p.setAttribute("data-html", p.innerHTML);
+    p.classList.add("picking");
+    p.innerHTML = t.split("").map(function (c, i) {
+      return "<span class=\"ch\" data-i=\"" + (i + 1) + "\">" + esc(c) + "</span>";
+    }).join("") + "<span class=\"acts\"><button data-act=\"cancel\">取消</button></span>";
+  }
+
+  function submitEdit(uid, action, at, p) {
+    requestPost("/api/sentence/edit", { uid: uid, action: action, at: at || 0 })
+      .then(function () {
+        pending[uid] = action;
+        syncEdstat();
+        if (p) {
+          p.classList.remove("picking");
+          p.classList.add("edited");
+        }
+      })
+      .catch(function (e) {
+        syncEdstat("失敗：" + ((e && e.message) || e));
+      });
+  }
+
+  readerBody.addEventListener("click", function (ev) {
+    var p = ev.target.closest ? ev.target.closest("p[data-uid]") : null;
+    if (!p) return;
+    var uid = p.getAttribute("data-uid");
+    var btn = ev.target.closest ? ev.target.closest(".acts button") : null;
+    if (btn) {
+      var act = btn.getAttribute("data-act");
+      if (act === "cancel") { beginPick(p); return; }
+      if (act === "split") { beginPick(p); return; }
+      submitEdit(uid, act, 0, p);
+      return;
+    }
+    var ch = ev.target.closest ? ev.target.closest(".ch") : null;
+    if (ch && p.classList.contains("picking")) {
+      submitEdit(uid, "split", parseInt(ch.getAttribute("data-i"), 10), p);
+    }
+  });
+
+  /* 重建約 40 秒，後台跑、前端輪詢；跑完自動重開原文層 */
+  function pollRebuild() {
+    return request("/api/rebuild/status").then(function (s) {
+      if (s.running) {
+        var last = (s.log && s.log.length) ? s.log[s.log.length - 1] : "";
+        syncEdstat("重建中…" + String(last).slice(0, 24));
+        return new Promise(function (r) { setTimeout(r, 1500); }).then(pollRebuild);
+      }
+      if (s.ok === false) {
+        syncEdstat("重建失敗，看服務端日誌");
+        btnRebuild.disabled = false;
+        return;
+      }
+      pending = {};
+      btnRebuild.disabled = false;
+      syncEdstat("重建完成");
+      if (readerCid) openChapter(readerCid);
+    });
+  }
+  btnRebuild.addEventListener("click", function () {
+    if (btnRebuild.disabled) return;
+    btnRebuild.disabled = true;
+    syncEdstat("正在啟動重建…");
+    requestPost("/api/rebuild", {}).then(pollRebuild).catch(function (e) {
+      syncEdstat("重建失敗：" + ((e && e.message) || e));
+      btnRebuild.disabled = false;
+    });
+  });
+
   /* ---------- 原文層 ---------- */
   /* 跨句對話的續接標記（docs/21 §13 選 A 的改良版）：
      古籍一句裡常有多處「。！？」，按句讀斷就會把一對引號拆到兩句——
@@ -180,12 +287,22 @@
       if (cont) cls.push("q-cont");
       if (open > 0) cls.push("q-open");
       if (s.uid === targetUid) cls.push("target");
-      return "<p data-uid=\"" + esc(s.uid) + "\"" +
-        (cls.length ? " class=\"" + cls.join(" ") + "\"" : "") + ">" + esc(t) + "</p>";
+      // data-text 存原文：選斷點時要把句子拆成單字，那時 p 裡還混著按鈕文字
+      return "<p data-uid=\"" + esc(s.uid) + "\" data-text=\"" + esc(t) + "\"" +
+        (cls.length ? " class=\"" + cls.join(" ") + "\"" : "") + ">" +
+        esc(t) + ACTS + "</p>";
     }).join("");
   }
 
+  /* 每句 hover 出的三個動作。按鈕文案一律繁體（check_trad F 閘會掃）。 */
+  var ACTS = "<span class=\"acts\">" +
+    "<button data-act=\"split\">拆分</button>" +
+    "<button data-act=\"merge\">併下句</button>" +
+    "<button data-act=\"dead\">棄用</button>" +
+    "</span>";
+
   function openChapter(cid, uid) {
+    readerCid = cid;
     return request("/api/chapter/" + encodeURIComponent(cid)).then(function (d) {
       readerTitle.textContent = (d.chapter && d.chapter.full_title) || cid;
       readerBody.innerHTML = renderParagraphs(d.sentences, uid);

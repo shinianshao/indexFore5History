@@ -22,14 +22,21 @@
     GET /api/person/{pid}            人物档案 + 命中（按篇分组）
     GET /api/chapter/{cid}           一篇的原文
     GET /api/person/{pid}/relations  **关系接口预留**，当前返回空数组
+
+    POST /api/sentence/edit        {uid, action, at?}  记一条句级编辑（split/merge/dead）
+    POST /api/sentence/revoke      {uid}               撤销该句的全部编辑
+    POST /api/rebuild                                  后台重建（约 40 秒）
+    GET  /api/rebuild/status                           查重建状态与日志尾部
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -41,6 +48,7 @@ import db                          # noqa: E402
 
 APP_ROOT = os.path.dirname(HERE)
 WEB_DIR = os.path.join(APP_ROOT, "web")
+PROJECT_ROOT = os.path.dirname(APP_ROOT)
 
 # 配置集中在这里，全部来自环境变量（本地工具没有密钥，故不引入 .env 机制）
 PORT = int(os.environ.get("PORT", "8800"))
@@ -140,6 +148,108 @@ def api_relations(pid: str):
     `evidence_uid` 为空的边，前端应画成虚线（docs/21 §12.4.1）。
     """
     return {"person": pid, "items": db.person_relations(pid)}
+
+
+# ---------------------------------------------------------------- 句级编辑
+#
+# 为什么走子进程而不是 import pipeline：app/ 与 pipeline/ 刻意**不互相 import**
+# （docs/23 §7.1，这是当初做对的一个决定）。两边只在 JSON 上交汇，
+# 这里也就继续用「调脚本」的方式，代价只是一次进程启动。
+EDITS = os.path.join(PROJECT_ROOT, "pipeline", "apply_sentence_edits.py")
+ACTIONS = ("split", "merge", "dead")
+
+
+def _run_edits(*args: str) -> str:
+    """跑 apply_sentence_edits.py 的某个子命令，失败就把输出抛成 500。"""
+    cmd = [sys.executable, EDITS] + list(args)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    p = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env,
+                       capture_output=True, text=True, encoding="utf-8")
+    if p.returncode != 0:
+        raise HTTPException(500, "写入失败：{}".format(
+            (p.stderr or p.stdout or "无输出").strip()[:200]))
+    return (p.stdout or "").strip()
+
+
+@app.post("/api/sentence/edit")
+def api_sentence_edit(body: dict = Body(...)):
+    """记一条句级编辑（split / merge / dead）。
+
+    写的是 `workbook/sentence-edits.xlsx`——**那是人写的权威源**，
+    这里只是「UI 代你写」。pipeline 侧依然只读它（红线 1）。
+    """
+    uid = str(body.get("uid") or "").strip()
+    action = str(body.get("action") or "").strip()
+    if not uid:
+        raise HTTPException(400, "缺 uid")
+    if action not in ACTIONS:
+        raise HTTPException(400, "动作只能是 {} 之一".format(" / ".join(ACTIONS)))
+    args = ["add", "--uid", uid, "--action", action]
+    if action == "split":
+        at = int(body.get("at") or 0)
+        if at <= 0:
+            raise HTTPException(400, "split 需要 at（在第几个字之后断开，1-based）")
+        args += ["--at", str(at)]
+    if body.get("note"):
+        args += ["--note", str(body["note"])[:120]]
+    _run_edits(*args)
+    return {"ok": True, "uid": uid, "action": action,
+            "message": "已记录，重建后生效"}
+
+
+@app.post("/api/sentence/revoke")
+def api_sentence_revoke(body: dict = Body(...)):
+    """撤销某句的全部编辑（状态改 dead，不删行）。"""
+    uid = str(body.get("uid") or "").strip()
+    if not uid:
+        raise HTTPException(400, "缺 uid")
+    _run_edits("revoke", "--uid", uid)
+    return {"ok": True, "uid": uid, "message": "已撤销，重建后还原"}
+
+
+# ---------------------------------------------------------------- 重建
+#
+# 重建要 40 秒左右，不能挂在请求里等（会把交互卡死）。丢到后台线程跑，
+# 前端轮询状态。本地单人工具，一个全局状态就够，不需要任务队列。
+_rebuild = {"running": False, "ok": None, "log": []}
+
+
+def _rebuild_worker() -> None:
+    _rebuild["log"] = []
+    _rebuild["ok"] = None
+    try:
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
+        p = subprocess.Popen(
+            [sys.executable, os.path.join(PROJECT_ROOT, "app", "tools",
+                                          "rebuild.py")],
+            cwd=PROJECT_ROOT, env=env, stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT, text=True, encoding="utf-8")
+        for line in p.stdout:
+            _rebuild["log"].append(line.rstrip())
+            if len(_rebuild["log"]) > 400:
+                _rebuild["log"] = _rebuild["log"][-200:]
+        p.wait()
+        _rebuild["ok"] = (p.returncode == 0)
+    except Exception as e:                       # noqa: BLE001
+        _rebuild["log"].append("重建异常：{}".format(e))
+        _rebuild["ok"] = False
+    finally:
+        _rebuild["running"] = False
+
+
+@app.post("/api/rebuild")
+def api_rebuild():
+    if _rebuild["running"]:
+        return {"started": False, "message": "上一次重建还在跑"}
+    _rebuild["running"] = True
+    threading.Thread(target=_rebuild_worker, daemon=True).start()
+    return {"started": True, "message": "已开始重建（约 40 秒）"}
+
+
+@app.get("/api/rebuild/status")
+def api_rebuild_status():
+    tail = _rebuild["log"][-12:]
+    return {"running": _rebuild["running"], "ok": _rebuild["ok"], "log": tail}
 
 
 # 前端由同一个服务提供，故**同源、不需要 CORS**

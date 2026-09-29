@@ -269,7 +269,15 @@ P3 动工顺序：1 一键重建 → 2 快照库+diff → 3 overrides+应用器 
 ⚠️ **库表主键名字别想当然**：`books` 表主键是 **`code`** 不是 `id`
 （chapters 才是 `id`）。写 `SELECT id, name FROM books` 会直接 OperationalError。
 
-## P4 数据层（2026-09-29 凌晨完成，UI 未做）
+## P4 网页端（2026-09-29 完成，整段 P4 收工）
+- 原文层每句 hover 出「拆分 / 併下句 / 棄用」。**拆分＝点字选断点**（不弹窗填偏移）。
+- 后端新增 `POST /api/sentence/edit` `/api/sentence/revoke` `/api/rebuild`
+  `GET /api/rebuild/status`。
+- ⚠️ **后端一律调 pipeline 脚本子进程，不要 import pipeline**：`app/` 与 `pipeline/`
+  刻意解耦（docs/23 §7.1），两边只在 JSON 上交汇。这是当初做对的决定，别破坏它。
+- 重建约 40 秒，走后台线程 + 前端轮询（1.5s），**不要把请求挂死**。
+
+## P4 数据层（2026-09-29 凌晨完成）
 - **uid 已下沉到语料层**：`pipeline/tag_uids.py` 给 223,164 句补打（幂等），
   `common.stable_uid` 是算法唯一来源；`build.py` 新切分时带 uid、`annotate.py` 透传、
   `build_index_db.py` 采用。⚠️ 算法实际有**四处**（common / build / tag_uids /

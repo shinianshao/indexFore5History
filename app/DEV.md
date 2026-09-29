@@ -59,7 +59,7 @@ app/web           ← 查询与编辑界面（FastAPI）
 | **P1** | 稳定 `uid` 落地、SQLite 索引库、**`relations` 表先建后填** | ✅ **已完成** |
 | **P2** | FastAPI + 全文检索 + 原文对照界面 | ✅ **已完成** |
 | **P3** | 编辑 → 重建 → 快照 diff | ✅ **已完成**（`rebuild.py` / `snapshot.py` / `overrides.py` / `verify_p3.py`） |
-| P4 | 句级拆分/合并/弃用 | **进行中**：数据层已通（uid 下沉 + 命令行编辑），**UI 未做** |
+| **P4** | 句级拆分/合并/弃用 | ✅ **已完成**（uid 下沉 + 命令行 + 网页 UI） |
 | P5 | `verify.py` 断言接入新链路 | 未开始 |
 
 ### 界面上的两处小改动（2026-09-29）
@@ -119,7 +119,28 @@ python app/tools/overrides.py revoke --uid <uid>    # 反悔（状态改 dead，
 > **只在录入那一刻写，重建绝不刷新**——否则就是 P0「导出脚本冲掉权威源」那次事故的重演。
 > 写由 `add` / `revoke`（以及将来的 UI）承担，两者是「人」这一侧的动作。
 
-### P4 进展（数据层已通，UI 未做）
+### P4 已交付什么
+
+**网页端也能编辑了**（P4-2）：打开任意一篇的原文层，句子右侧 hover 出三个动作——
+「拆分 / 併下句 / 棄用」。
+
+- **拆分不弹窗填数字**：点「拆分」后**点字选断点**——想在哪断就点那个字
+  （比输入偏移直觉得多，也不容易填错）。
+- 每记一条，原文层顶部就显示「已記錄 N 條編輯，重建後生效」，
+  点「重建」在后台跑（约 40 秒），跑完自动重开原文层。
+
+新增端点：
+
+```
+POST /api/sentence/edit      {uid, action, at?}   记一条编辑（split/merge/dead）
+POST /api/sentence/revoke    {uid}                撤销该句的全部编辑
+POST /api/rebuild                                 后台重建（约 40 秒）
+GET  /api/rebuild/status                          查状态与日志尾部
+```
+
+> 后端是**调 `apply_sentence_edits.py` 子进程**，不是 import pipeline——
+> `app/` 与 `pipeline/` 刻意不互相 import（docs/23 §7.1），两边只在 JSON 上交汇。
+> 写的是 `workbook/sentence-edits.xlsx`：**UI 是代你写，pipeline 侧依然只读**（红线 1）。
 
 **P4-0 uid 下沉到语料层**（原本在建库时按位置现算，一改切分就漂移）：
 
@@ -309,11 +330,11 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 2. `p_xNNNNN` 随机 id 批量改拼音语义 id
 3. 18 组同名异人（劉焉 ×3 等）的 UI 消歧
 4. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")` → DeprecationWarning
-5. **P4 剩最后一段：网页上的句级编辑 UI**。数据层与命令行都通了（见「P4 进展」），
-   缺的是界面——在原文层上加「拆分/合并/弃用」三个按钮，调
-   `apply_sentence_edits.py add`，然后提示重建。
-6. P3-4（前端标错入口 / 网页 diff 页）**本轮不做**（Q1 做到落 SQLite 即止），
-   现在走命令行闭环（`overrides.py add`）。
+5. **P4 已完成**（2026-09-29），下一个是 **P5**：`verify.py` 断言接入新链路
+   （`index.db` 与 `book-data.json` 的一致性现在只能手工对齐科目，应变成断言）。
+6. P3-4（前端标错入口 / 网页 diff 页）**未做**（Q1 做到落 SQLite 即止；diff 走
+   `snapshot.py diff --live`）。既然 P4 的网页写入口已经打通，标错入口可以照同一套做。
+7. `p_xNNNNN` → 拼音语义 id：牵动全部外键，改之前先想清迁移与回滚。
 
 > 三个已拍板的决策（详见 `docs/24` §二）：快照 diff **落 SQLite、可翻历史**（不做网页页）；
 > `overrides` 落 **`workbook/overrides.xlsx`**（人写、管道只读）；**静态版 `web/` 冻结**。
