@@ -61,6 +61,7 @@ app/web           ← 查询与编辑界面（FastAPI）
 | **P3** | 编辑 → 重建 → 快照 diff | ✅ **已完成**（`rebuild.py` / `snapshot.py` / `overrides.py` / `verify_p3.py`） |
 | **P4** | 句级拆分/合并/弃用 | ✅ **已完成**（uid 下沉 + 命令行 + 网页 UI） |
 | **P5** | `verify.py` 断言接入新链路 | ✅ **已完成**（5 条一致性断言，基线 113 条） |
+| **P6-0/1** | 关系数据落点 + 契约定型 | ✅ **已完成**（审查出的 P0 六项与 P1 表/代码层全部修掉） |
 
 ### 界面上的两处小改动（2026-09-29）
 
@@ -118,6 +119,30 @@ python app/tools/overrides.py revoke --uid <uid>    # 反悔（状态改 dead，
 > ⚠️ **pipeline 对 `overrides.xlsx` 只有读权限**。会由脚本填的列（`上下文`/`原pid`/`原tier`）
 > **只在录入那一刻写，重建绝不刷新**——否则就是 P0「导出脚本冲掉权威源」那次事故的重演。
 > 写由 `add` / `revoke`（以及将来的 UI）承担，两者是「人」这一侧的动作。
+
+### P6-0 / P6-1 已交付什么（设计审查后的问题全修）
+
+审查（`docs/25`）出的六条 P0 与 P1 的表/代码层全部修掉了：
+
+| 审查项 | 修法 |
+|---|---|
+| **P0-1 落点**（关系在会被删库重建的 index.db） | 权威源 `workbook/relations.xlsx`；`rebuild` 最后一步 `apply_relations` **建库后灌回** |
+| **P0-2 稳定主键 + status** | `rel_id`（md5，PRIMARY KEY）+ `status`(active/dead) |
+| **P0-3 证据** | 唯一约束 `(rel_id)` 防重复；`relations.py check` 会报**证据句失效**（句子被拆/弃用后） |
+| **P0-4 快照 vs uid** | 明写：**以 uid 指向的现句为准**，`evidence_text` 只是录入那一刻的展示缓存 |
+| **P0-5 direction** | 换成 `symmetric` 布尔 + 代码 `REL_INVERSE` 派生反向；**只存规范边**，反向双写会被拒绝 |
+| **P0-6 契约对不上** | 端点返回 `{nodes, edges}`（就是 `renderGraph` 的输入）+ 四个密度旋钮；前端那张占位卡片改成真读数据 |
+| P1-7/8/9/10 | 加 `surface_a/b`（同名异人锚点）、`era`、`book`；`rel_type`/`confidence` 由代码派生不手填；`rel` 规范词表定死在 `pipeline/relations.py` |
+
+```bash
+python pipeline/relations.py init
+python pipeline/relations.py add --a p_liubang --b p_hanhuidi --rel 父 --book sj --source manual
+python pipeline/relations.py check          # 含「证据句已失效」
+python pipeline/relations.py apply          # 灌入（rebuild 会自动跑）
+```
+
+> ⚠️ 边上有两个 `source` 会撞车：**边的起点叫 `source`，关系来源改叫 `origin`**。
+> 同名键写进同一个 dict 后者会无声覆盖前者（已经踩过一次，边上突然变成 "manual"）。
 
 ### P5 已交付什么
 
@@ -350,9 +375,9 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 4. `app/server/main.py` 用了已废弃的 `@app.on_event("startup")` → DeprecationWarning
 **P0–P5 主线全部完成**（2026-09-29）。剩下的按性价比排：
 
-1. **P6-0 关系数据的落点与表头**（半天，**阻塞 P6 其余部分**）——
-   已做过独立审查（`docs/25`），结论是**现在不能直接写抽取代码**：
-   `relations` 表在 `index.db` 里，而它每次重建都被整个删掉重建 → 灌进去的关系会静默归零。
+1. **P6-2 关系抽取**（落点与契约已通，可以动工了）：从 `summary` 抽候选
+   （只收**含显式关系词**的，禁止纯共现出边）→ AI 判定 → 落盘 xlsx → 断言。
+   之后 P6-3 才做 ECharts 图（现在前端是列表，能用）。
 2. **P3-4 网页标错入口**：照 P4-2 同一套做（UI 代写 `overrides.xlsx`），半天。
 3. **合并重复 pid**（如 `p_liuyan_sg` / `p_liuyan_ys` 其实是同一人）。
 4. `p_xNNNNN` → 拼音语义 id：牵动全部外键，**且必须排在 P6 之前**（关系以 pid 为外键）。

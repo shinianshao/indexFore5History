@@ -68,6 +68,9 @@ STEPS = [
      "地名標註", ()),
     ("build_index_db", "app/tools/build_index_db.py",
      "→ SQLite（含 FTS5 全文索引）", ()),
+    # 关系必须在建库**之后**灌：库是删掉重建的，先灌会被冲掉（docs/25 P0-1）
+    ("apply_relations", "pipeline/relations.py",
+     "關係資料灌回 SQLite（權威源 workbook/relations.xlsx）", ("apply",)),
 ]
 
 # P3-3：這一步不是獨立腳本，而是直接改 book-data.json 的一層 post 修正，

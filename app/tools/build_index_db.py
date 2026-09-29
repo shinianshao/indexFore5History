@@ -114,21 +114,33 @@ CREATE TABLE IF NOT EXISTS places (
   summary   TEXT
 );
 
--- 人物关系（预留，可先空着）—— 见 docs/21 §12.2
---   rel_type: kinship / political / social / other
---   evidence_uid 允许为空，但此时 confidence 应压低、图上用虚线（§12.4.1）
+-- 人物关系 —— 见 docs/25（P6 设计审查后的定稿）
+--   ⚠️ 本表是**派生的**：权威源是 workbook/relations.xlsx，
+--      每次重建后必须由 `pipeline/relations.py apply` 重新灌入，否则数据全丢
+--      （index.db 整个删掉重建，这里不会幸免）。
+--   rel_id   = md5(a|b|rel|book|era)，稳定业务主键（id 会随重建重排号）
+--   rel_type / confidence **由代码派生**（rel → rel_type，source → confidence）
+--   symmetric = 1 对称（兄弟/友/政敵）；0 有向（父→子）。只存**规范边**，
+--               反向边由 REL_INVERSE 在代码里派生，禁止双写（P0-5）
+--   evidence_text 只是录入那一刻的展示缓存，**以 uid 指向的现句为准**（P0-4）
 CREATE TABLE IF NOT EXISTS relations (
-  id           INTEGER PRIMARY KEY,
-  person_a     TEXT,
-  person_b     TEXT,
-  rel_type     TEXT,
-  rel          TEXT,
-  direction    TEXT,
-  evidence_uid TEXT,
+  rel_id        TEXT PRIMARY KEY,
+  person_a      TEXT,
+  surface_a     TEXT,
+  person_b      TEXT,
+  surface_b     TEXT,
+  rel_type      TEXT,
+  rel           TEXT,
+  symmetric     INTEGER,
+  era           TEXT,
+  book          TEXT,
+  evidence_uid  TEXT,
   evidence_text TEXT,
-  confidence   REAL,
-  source       TEXT,
-  note         TEXT
+  confidence    REAL,
+  source        TEXT,
+  status        TEXT,
+  note          TEXT,
+  created_at    TEXT
 );
 
 CREATE INDEX IF NOT EXISTS ix_sent_chapter ON sentences(chapter_id);
@@ -141,6 +153,9 @@ CREATE INDEX IF NOT EXISTS ix_alias_surface  ON aliases(alias);
 CREATE INDEX IF NOT EXISTS ix_rel_a          ON relations(person_a);
 CREATE INDEX IF NOT EXISTS ix_rel_b          ON relations(person_b);
 CREATE INDEX IF NOT EXISTS ix_rel_type       ON relations(rel_type);
+CREATE INDEX IF NOT EXISTS ix_rel_pair       ON relations(person_a, person_b);
+-- 改句子（拆分/弃用）时要反查"哪些关系的证据失效了"
+CREATE INDEX IF NOT EXISTS ix_rel_evidence   ON relations(evidence_uid);
 """
 
 

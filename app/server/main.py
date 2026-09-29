@@ -127,7 +127,8 @@ def api_person(pid: str, limit: int = Query(200)):
     return {
         "profile": profile,
         "mentions": db.person_mentions(pid, None, limit),
-        "relations": db.person_relations(pid),
+        # 直接给图（{nodes, edges}），与前端 renderGraph 的契约一致
+        "relations": db.relations_graph(pid, 1, limit=MAX_LIMIT),
     }
 
 
@@ -141,13 +142,21 @@ def api_chapter(cid: str, limit: int = Query(500)):
 
 
 @app.get("/api/person/{pid}/relations")
-def api_relations(pid: str):
-    """关系图 / family tree 的接口。
+def api_relations(pid: str,
+                  degree: int = Query(1, ge=1, le=3, description="邻居度数"),
+                  rel_type: str = Query("", description="kinship/political/social"),
+                  book: str = Query("", description="按书过滤，如 hhs"),
+                  min_conf: float = Query(0.0, ge=0.0, le=1.0,
+                                          description="置信度下限"),
+                  limit: int = Query(200)):
+    """关系图 / family tree 的接口：返回 `{nodes, edges}`，前端直接喂给 renderGraph。
 
-    现在数据为空，但**字段已定型**，将来灌数据不必改前后端契约。
-    `evidence_uid` 为空的边，前端应画成虚线（docs/21 §12.4.1）。
+    四个密度旋钮（docs/21 §12.4.1）都在这里：度数 / 关系大类 / 按书 / 置信度下限。
+    `evidence_uid` 为空或 `confidence` 低的边，前端画成虚线（docs/25 §四）。
     """
-    return {"person": pid, "items": db.person_relations(pid)}
+    return {"person": pid,
+            **db.relations_graph(pid, degree, rel_type, book, min_conf,
+                                 min(int(limit), MAX_LIMIT))}
 
 
 # ---------------------------------------------------------------- 句级编辑

@@ -317,6 +317,74 @@ def test_sentence_edits() -> None:
               "「{}」".format(row[0] if row else "—"))
 
 
+def test_relations() -> None:
+    """P6-0 關係資料：落點、派生規則、規範邊。
+
+    最重要的一條是「重建後關係仍在」——`index.db` 每次重建都刪庫重建，
+    關係若沒有「建庫後灌回」這一步會**靜默歸零**（docs/25 P0-1）。
+    """
+    print("\n[7] 關係資料（P6-0）")
+    sys.path.insert(0, os.path.join(ROOT, "pipeline"))
+    import relations as R
+
+    def db_count() -> int:
+        conn = snapshot.connect(snapshot.DB_PATH)
+        n = conn.execute(
+            "SELECT COUNT(*) FROM relations WHERE status='active'").fetchone()[0]
+        conn.close()
+        return n
+
+    rows = R._read_rows()
+    if not rows:                      # 沒有種子就補一條，斷言才有意義（0==0 是假綠）
+        subprocess.run([PY, os.path.join(ROOT, "pipeline", "relations.py"),
+                        "add", "--a", "p_liubang", "--b", "p_hanhuidi",
+                        "--rel", "父", "--era", "西漢", "--book", "sj",
+                        "--source", "manual", "--note", "P6 自檢"], cwd=ROOT)
+        rows = R._read_rows()
+    n_xlsx = len(rows)
+
+    run("pipeline/relations.py", "apply")
+    check("灌入：庫內條數 = 權威源生效條數", db_count() == n_xlsx,
+          "庫 {} / 表 {}".format(db_count(), n_xlsx))
+
+    # 必須先確認重建**真的成功了**再比對：庫被別的進程佔著時 rebuild 會失敗，
+    # 那時舊庫還在、關係也還在，直接比對就是一條**假綠**（踩過一次）。
+    rc = run("app/tools/rebuild.py", "--no-snapshot")
+    check("重建成功（庫沒被佔用）", rc == 0, "退出碼 {}".format(rc))
+    check("重建後關係仍在（P0-1 回歸）", rc == 0 and db_count() == n_xlsx,
+          "重建後 {} 條".format(db_count()))
+
+    conn = snapshot.connect(snapshot.DB_PATH)
+    r = conn.execute(
+        "SELECT rel, rel_type, confidence, source, status FROM relations "
+        "WHERE status='active' LIMIT 1").fetchone()
+    conn.close()
+    if not r:
+        check("取到一條關係做規則檢查", False)
+        return
+    rel, rt, conf, src, st = r
+    check("rel 在規範詞表內", rel in R.REL_TABLE, rel)
+    check("rel_type 由 rel 派生（不手填）", rt == R.REL_TABLE[rel][0],
+          "{} → {}".format(rel, rt))
+    check("confidence 由 source 派生（不手填）", conf == R.CONF_BY_SOURCE.get(src),
+          "{} → {}".format(src, conf))
+    check("status 為 active", st == "active")
+
+    inv = R.REL_INVERSE.get(rel)
+    if inv:
+        p = subprocess.run([PY, os.path.join(ROOT, "pipeline", "relations.py"),
+                            "add", "--a", "p_hanhuidi", "--b", "p_liubang",
+                            "--rel", inv], cwd=ROOT, capture_output=True, text=True)
+        check("反向雙寫被拒（只存規範邊）", p.returncode != 0,
+              (p.stdout or p.stderr or "").strip()[:40])
+
+    p = subprocess.run([PY, os.path.join(ROOT, "pipeline", "relations.py"),
+                        "check"], cwd=ROOT, capture_output=True, text=True)
+    check("關係校驗無問題（含證據失效）",
+          "問題 0 處" in (p.stdout or "") or "问题 0 处" in (p.stdout or ""),
+          (p.stdout or "").strip().splitlines()[-1][:40] if p.stdout else "")
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -328,6 +396,7 @@ def main() -> int:
         test_snapshots(tmpdb)
         test_overrides()
         test_sentence_edits()
+        test_relations()
     finally:
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
         for suffix in ("", "-wal", "-shm"):

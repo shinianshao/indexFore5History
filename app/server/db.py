@@ -161,20 +161,86 @@ def chapter_sentences(cid: str, limit: int = 500) -> List[Dict[str, Any]]:
     return {"chapter": dict(meta) if meta else None, "sentences": rows}
 
 
-def person_relations(pid: str) -> List[Dict[str, Any]]:
-    """关系**接口预留**：现在返回空列表，但端点与字段已经定型。
+def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
+                    book: str = "", min_conf: float = 0.0,
+                    limit: int = 200) -> Dict[str, Any]:
+    """以某人中心的**邻接表**，直接就是前端 `renderGraph` 要的 `{nodes, edges}`。
 
-    relations 表在 P1 就建好了（docs/21 §12.2），数据等确认关系范围后再灌。
-    字段里 `confidence` 与 `evidence_uid` 是关键——图上会把没证据的边画成虚线。
+    为什么返回图而不是扁平行：前端契约 `renderGraph(adjacency, options)` 的输入
+    固定为 `{nodes, edges}`——返回列表就等于把转换工作推给前端，而且每种调用
+    各写一遍（docs/25 P0-6）。
+
+    四个密度旋钮（docs/21 §12.4.1）：degree 度数、rel_type 关系大类、
+    book 按书、min_conf 置信度下限。
     """
-    sql = """
-        SELECT r.id, r.person_a, r.person_b, r.rel_type, r.rel, r.direction,
-               r.evidence_uid, r.evidence_text, r.confidence, r.source, r.note,
-               pa.trad_name AS name_a, pb.trad_name AS name_b
-        FROM relations r
-        LEFT JOIN persons pa ON pa.id = r.person_a
-        LEFT JOIN persons pb ON pb.id = r.person_b
-        WHERE r.person_a = ? OR r.person_b = ?
-    """
+    empty = {"nodes": [], "edges": []}
     with connect() as conn:
-        return [dict(r) for r in conn.execute(sql, (pid, pid))]
+        if not conn.execute("SELECT 1 FROM persons WHERE id=?", (pid,)).fetchone():
+            return empty
+
+        seen_nodes = {pid: 0}
+        edges: List[Dict[str, Any]] = []
+        frontier = {pid}
+        for d in range(1, max(1, min(int(degree), 3)) + 1):
+            if not frontier:
+                break
+            ph = ",".join("?" * len(frontier))
+            sql = ("SELECT rel_id, person_a, surface_a, person_b, surface_b, "
+                   "       rel_type, rel, symmetric, era, book, evidence_uid, "
+                   "       evidence_text, confidence, source "
+                   "FROM relations WHERE status='active' "
+                   "AND (person_a IN ({}) OR person_b IN ({}))".format(ph, ph))
+            args: List[Any] = list(frontier) * 2
+            if rel_type:
+                sql += " AND rel_type=?"
+                args.append(rel_type)
+            if book:
+                sql += " AND (book=? OR book='')"      # 空 book = 不限书
+                args.append(book)
+            if min_conf:
+                sql += " AND confidence>=?"
+                args.append(min_conf)
+
+            nxt = set()
+            for r in conn.execute(sql, args):
+                (rid, a, sa, b, sb, rt, rel, sym, era, bk,
+                 euid, etext, conf, src) = r
+                other = b if a in frontier else a
+                if a not in frontier and b not in frontier:
+                    continue
+                # ⚠️ 起点叫 `source`、关系来源**不能也叫 source**——
+                # 两个同名键写进同一个 dict，后者会把前者无声覆盖（踩过）。
+                # 关系来源改叫 `origin`。
+                edges.append({
+                    "rel_id": rid, "source": a, "target": b, "rel": rel,
+                    "rel_type": rt, "symmetric": sym, "era": era, "book": bk,
+                    "evidence_uid": euid, "evidence_text": etext,
+                    "confidence": conf, "origin": src,
+                    "name_a": sa, "name_b": sb,
+                })
+                if other not in seen_nodes:
+                    seen_nodes[other] = d
+                    nxt.add(other)
+            frontier = nxt
+            if len(edges) >= limit:
+                break
+
+        if not edges:
+            return {"nodes": [{"id": pid, "degree": 0}], "edges": []}
+
+        ids = list(seen_nodes)[:limit]
+        q = ",".join("?" * len(ids))
+        prof = {r[0]: r for r in conn.execute(
+            "SELECT id, trad_name, name, dynasty FROM persons "
+            "WHERE id IN ({})".format(q), ids)}
+        nodes = []
+        for i in ids:
+            p = prof.get(i)
+            nodes.append({
+                "id": i,
+                "name": (p[1] if p else i),
+                "name_simp": (p[2] if p else i),
+                "dynasty": (p[3] if p else ""),
+                "degree": seen_nodes[i],
+            })
+        return {"nodes": nodes, "edges": edges[:limit]}

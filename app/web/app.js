@@ -123,11 +123,33 @@
         });
       });
 
+      /* 關係：資料來自 workbook/relations.xlsx，後端已轉成 {nodes, edges}。
+         圖（ECharts）留到 P6-3，這裡先用列表把邊列出來——
+         無證據 / 低置信度的邊要標出來，別讓推斷看起來像事實。 */
+      var rel = d.relations || { nodes: [], edges: [] };
+      var nEdge = (rel.edges || []).length;
       html += "<div class=\"card\" style=\"margin-top:14px\">" +
-        "<div class=\"person-head\"><span class=\"name\" style=\"font-size:16px\">關係圖</span>" +
-        "<span class=\"dyn\">預留</span></div>" +
-        "<p class=\"summary\">關係資料尚未灌入（relations 表已建好）。" +
-        "確認關係範圍後即可顯示。</p></div>";
+        "<div class=\"person-head\"><span class=\"name\" style=\"font-size:16px\">關係</span>" +
+        "<span class=\"dyn\">" + nEdge + " 條</span></div>";
+      if (nEdge) {
+        var nameOf = {};
+        (rel.nodes || []).forEach(function (n) { nameOf[n.id] = n; });
+        html += "<div class=\"rel-list\">" + rel.edges.map(function (e) {
+          var other = (e.source === pid) ? e.target : e.source;
+          var n = nameOf[other] || {};
+          var conf = (e.confidence == null) ? "" : "　" + e.confidence.toFixed(1);
+          var ev = e.evidence_uid
+            ? "<span class=\"rel-ev\" data-uid=\"" + esc(e.evidence_uid) + "\">有證據</span>"
+            : "<span class=\"rel-noev\">無證據</span>";
+          return "<div class=\"rel-row\" data-pid=\"" + esc(other) + "\">" +
+            "<span class=\"rel\">" + esc(e.rel || "") + "</span>" +
+            "<span class=\"name\">" + esc(n.name || other) + "</span>" +
+            "<span class=\"meta\">" + esc(n.dynasty || "") + conf + "</span>" + ev + "</div>";
+        }).join("") + "</div>";
+      } else {
+        html += "<p class=\"summary\">尚無關係資料（權威源 workbook/relations.xlsx）。</p>";
+      }
+      html += "</div>";
 
       out.innerHTML = html;
       hint.textContent = "實線＝正名或別名直接命中；虛線＋？＝泛稱推斷，待確認。";
@@ -417,6 +439,9 @@
   out.addEventListener("click", function (ev) {
     var row = ev.target.closest ? ev.target.closest(".row[data-pid]") : null;
     if (row) { renderPerson(row.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
+    // 關係行：點進去看那個人
+    var relRow = ev.target.closest ? ev.target.closest(".rel-row[data-pid]") : null;
+    if (relRow) { renderPerson(relRow.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
     var s = ev.target.closest ? ev.target.closest(".sent[data-chapter]") : null;
     if (s) {
       openChapter(s.getAttribute("data-chapter"), s.getAttribute("data-uid")).catch(showErr);

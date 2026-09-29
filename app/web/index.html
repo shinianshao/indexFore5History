@@ -111,6 +111,24 @@
   .sent mark.guess { border-bottom: 1.5px dashed var(--accent); color: var(--accent); }
   .tier-note { font-family: var(--sans); font-size: 11px; color: var(--muted); margin-left: 6px; }
 
+  /* 關係列表（圖留到 P6-3，先能用即可） */
+  .rel-list { margin-top: 6px; }
+  .rel-row {
+    display: flex; align-items: baseline; gap: 10px;
+    padding: 7px 0; border-bottom: 1px dashed var(--border); cursor: pointer;
+  }
+  .rel-row:last-child { border-bottom: none; }
+  .rel-row:hover .name { color: var(--accent); }
+  .rel-row .rel {
+    font-family: var(--serif); font-size: 13px; color: var(--accent);
+    background: var(--accent-soft); border-radius: 6px; padding: 1px 8px;
+  }
+  .rel-row .name { font-family: var(--serif); font-size: 15px; }
+  .rel-row .meta { color: var(--muted); font-size: 12px; }
+  .rel-ev, .rel-noev { font-family: var(--sans); font-size: 11px; margin-left: auto; }
+  .rel-ev { color: var(--accent); }
+  .rel-noev { color: var(--muted); opacity: .7; }        /* 無證據＝推斷，要看得出來 */
+
   .empty { color: var(--muted); font-size: 14px; padding: 22px 0; text-align: center; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .err { color: var(--accent); font-size: 13px; padding: 10px 0; }

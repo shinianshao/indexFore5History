@@ -269,7 +269,20 @@ P3 动工顺序：1 一键重建 → 2 快照库+diff → 3 overrides+应用器 
 ⚠️ **库表主键名字别想当然**：`books` 表主键是 **`code`** 不是 `id`
 （chapters 才是 `id`）。写 `SELECT id, name FROM books` 会直接 OperationalError。
 
-## P6 关系数据：审查结论（2026-09-29，见 docs/25，**未动工**）
+## P6-0/P6-1 已修（2026-09-30，见 docs/25 §二与 §六）
+- `pipeline/relations.py`：`REL_TABLE`（规范词表定死）、`REL_INVERSE`（kinship）、
+  `CONF_BY_SOURCE`；命令 init/add/list/check/revoke/apply。
+- 权威源 `workbook/relations.xlsx`（人写/AI 落盘，管线只读），
+  `rebuild` 最后一步 `apply_relations` **建库之后灌回**（库是删掉重建的，先灌必丢）。
+- relations 表：`rel_id` PRIMARY KEY（md5）、`symmetric`、`surface_a/b`、`era`、`book`、
+  `status`、`created_at`；`rel_type`/`confidence` **由代码派生，不手填**。
+- 端点返回 `{nodes, edges}` + degree/rel_type/book/min_conf 四个旋钮。
+- ⚠️ **边的起点 `source` 与关系来源撞键** → 关系来源改叫 **`origin`**（同名键进同一 dict
+  会无声覆盖，踩过：端点一度返回 source="manual"）。
+- ⚠️ **断言防假绿**：`rebuild` 失败（库被占用）时旧库还在，直接比数据是假绿
+  → 先断言退出码 0 再比数据。
+
+## P6 关系数据：审查结论（2026-09-29，见 docs/25）
 - **致命**：`relations` 表在 `index.db`，而它每次重建都被 `os.remove(DB)` 删掉重建，
   且无 INSERT 步骤 → **灌进去的关系会静默归零**。权威源必须是 `workbook/relations.xlsx`，
   建库后由脚本灌回（与 overrides 同构）。
