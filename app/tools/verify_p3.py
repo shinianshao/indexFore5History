@@ -447,6 +447,57 @@ def test_relations() -> None:
     check("無證據的推論邊置信度被壓到上限（docs/25 P1-9 的可執行替代）",
           not noev_high, "越線 {} 條".format(len(noev_high)))
 
+    # 世系自洽（挑刺時補的兩條不變量）：關係是**主觀判斷**，錯了斷言查不出內容，
+    # 但「自己跟自己撞車」這種必須能自動發現——
+    #   ① 同一對兩人多種辈分（父 與 祖父 同時存在）→ 必有一條錯
+    #   ② 世系成環（A 是 B 的長輩、B 又是 A 的長輩）→ 必錯
+    # 袁湯那條（簡介寫「之子」實為「之孫」）就是靠「跟別的邊撞起來」才露的馬腳。
+    gen = {"父", "母", "祖父", "祖母", "養父", "繼母"}
+    pair_seen = {}
+    pair_dup = []
+    for r in rows:
+        k = (r["person_a"], r["person_b"])
+        if k in pair_seen and pair_seen[k] != r["rel"]:
+            pair_dup.append("{}/{}：{} 與 {}".format(
+                k[0], k[1], pair_seen[k], r["rel"]))
+        pair_seen[k] = r["rel"]
+    check("同一對兩人只有一種辈分（父與祖父同時存在必有一錯）", not pair_dup,
+          "；".join(pair_dup[:2]))
+
+    down = {}
+    for r in rows:
+        if r["rel"] in gen:
+            down.setdefault(r["person_a"], []).append(r["person_b"])
+    bad_cycle = []
+    for start in list(down):
+        stack = [(start, [start])]
+        while stack:
+            cur, path = stack.pop()
+            for nxt in down.get(cur, []):
+                if nxt == start:
+                    bad_cycle.append(" → ".join(path + [nxt]))
+                elif nxt not in path:
+                    stack.append((nxt, path + [nxt]))
+    check("世系不成環（A 是 B 長輩、B 又是 A 長輩）", not bad_cycle,
+          "；".join(bad_cycle[:2]))
+
+    # 裸帝號守衛（docs/28 P1-4）：以前是精確匹配，「孝武帝」「漢高祖」這種
+    # **帶修飾字**的稱號直接漏網。這裏用 importlib 載（不能 import，那個腳本
+    # 在 __main__ 下才跑 main()，直接 import 會執行到底）。
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_arb", os.path.join(ROOT, "pipeline", "_apply_rel_batch.py"))
+    arb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(arb)
+    blocked = ["孝武帝", "漢高祖", "魏文帝", "晉武帝"]      # 帶朝代/修飾字的帝號
+    passed = ["王莽", "劉邦", "曹丕", "周公旦"]             # 普通人稱，不該被擋
+    check("帶修飾字的帝號一律被擋下（不再只精確匹配）",
+          all(arb.ambiguous_hit(n) for n in blocked),
+          "漏網：" + "、".join(n for n in blocked if not arb.ambiguous_hit(n)))
+    check("普通人稱不被誤擋（守衛別擋成篩子）",
+          not any(arb.ambiguous_hit(n) for n in passed),
+          "誤擋：" + "、".join(n for n in passed if arb.ambiguous_hit(n)))
+
     # 反向雙寫要拿一條**確定存在**的有向邊來測（p_liubang —父→ p_hanhuidi），
     # 不能跟着 rows[0] 走：rows[0] 若是對稱邊（夫 / 兄）REL_INVERSE 裡沒有它，
     # 這條斷言會被靜默跳過——之前就是這樣空了好幾輪。

@@ -190,6 +190,12 @@ if [ "$RUN_UI" -eq 1 ]; then
   fi
 fi
 
+# ---------- 4：收尾清理 ----------
+# 断言自造的测试行（revoke 只改状态不删行）**两套断言都会写**，跑了十几轮积了几十行
+# dead 行，权威源永远脏着。统一在最后清一次：只删 dead + 命中测试标记的行。
+run_step "清理斷言測試殘留（overrides / sentence-edits）" "$PY" -c \
+  "import sys; sys.path.insert(0, 'app/tools'); import verify_p3; verify_p3.purge_test_rows()"
+
 # ---------- 汇总 ----------
 echo ""
 echo "════════════════ 回归汇总 ════════════════"
