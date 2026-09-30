@@ -126,8 +126,24 @@
   .rel-row .name { font-family: var(--serif); font-size: 15px; }
   .rel-row .meta { color: var(--muted); font-size: 12px; }
   .rel-ev, .rel-noev { font-family: var(--sans); font-size: 11px; margin-left: auto; }
-  .rel-ev { color: var(--accent); }
+  .rel-ev { color: var(--accent); cursor: pointer; }
   .rel-noev { color: var(--muted); opacity: .7; }        /* 無證據＝推斷，要看得出來 */
+
+  /* 關係圖（P6-3）：自繪 SVG，不引外部圖庫。
+     實線＝語料裡有證據句可跳；虛線＝取自簡介的推斷；朱砂＝當前人物。 */
+  .rel-svg { display: block; margin: 4px auto 2px; }
+  .rel-svg .rel-node { cursor: pointer; }
+  .rel-svg .rel-node rect { fill: var(--panel); stroke: var(--border); }
+  .rel-svg .rel-node text { font-family: var(--serif); font-size: 14px; fill: var(--text); }
+  .rel-svg .rel-node:hover rect { stroke: var(--accent); }
+  .rel-svg .rel-node.is-center rect { fill: var(--accent-soft); stroke: var(--accent); }
+  .rel-svg .rel-node.is-center text { fill: var(--accent); }
+  .rel-svg .rel-edge { cursor: pointer; }
+  .rel-svg .rel-edge line { stroke: var(--accent); stroke-width: 1.2; opacity: .7; }
+  .rel-svg .rel-edge.weak line { stroke: var(--muted); stroke-dasharray: 4 3; opacity: .85; }
+  .rel-svg .rel-edge:hover line { stroke-width: 2.4; opacity: 1; }
+  .rel-svg .rel-label { font-family: var(--serif); font-size: 12px; fill: var(--muted); }
+  .rel-svg .rel-edge:hover .rel-label { fill: var(--accent); }
 
   .empty { color: var(--muted); font-size: 14px; padding: 22px 0; text-align: center; }
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }

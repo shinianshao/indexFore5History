@@ -124,23 +124,22 @@
       });
 
       /* 關係：資料來自 workbook/relations.xlsx，後端已轉成 {nodes, edges}。
-         圖（ECharts）留到 P6-3，這裡先用列表把邊列出來——
-         無證據 / 低置信度的邊要標出來，別讓推斷看起來像事實。 */
+         圖 + 列表並存：**虛線＝無證據的推斷**，實線＝語料裡有原句可跳，
+         別讓推斷看起來像事實（docs/25 §四）。 */
       var rel = d.relations || { nodes: [], edges: [] };
       var nEdge = (rel.edges || []).length;
       html += "<div class=\"card\" style=\"margin-top:14px\">" +
         "<div class=\"person-head\"><span class=\"name\" style=\"font-size:16px\">關係</span>" +
         "<span class=\"dyn\">" + nEdge + " 條</span></div>";
       if (nEdge) {
+        html += renderGraph(rel, { center: pid, width: 660 });
         var nameOf = {};
         (rel.nodes || []).forEach(function (n) { nameOf[n.id] = n; });
         html += "<div class=\"rel-list\">" + rel.edges.map(function (e) {
           var other = (e.source === pid) ? e.target : e.source;
           var n = nameOf[other] || {};
           var conf = (e.confidence == null) ? "" : "　" + e.confidence.toFixed(1);
-          var ev = e.evidence_uid
-            ? "<span class=\"rel-ev\" data-uid=\"" + esc(e.evidence_uid) + "\">有證據</span>"
-            : "<span class=\"rel-noev\">無證據</span>";
+          var ev = evTag(e);
           return "<div class=\"rel-row\" data-pid=\"" + esc(other) + "\">" +
             "<span class=\"rel\">" + esc(e.rel || "") + "</span>" +
             "<span class=\"name\">" + esc(n.name || other) + "</span>" +
@@ -392,12 +391,153 @@
     else { location.hash = "#/"; }
   });
 
-  /* ---------- 關係圖預留：接口先定死，將來換 ECharts 不影響上層 ---------- */
+  /* ---------- 關係圖（P6-3）----------
+     刻意**不引 ECharts**：本機離線工具不該有 CDN 依賴；單人局部圖多半不到十個節點，
+     同心圓放射佈局就夠讀；自繪 SVG 也才能跟這套宣紙／朱砂的配色完全一致。
+     輸入仍是 `{nodes, edges}`（docs/25 §五的契約），將來換引擎不影響上層。
+
+     線的形狀帶資訊：**虛線＝無證據或低置信（推斷）**，實線＋箭頭＝規範邊有方向。
+     點節點看那個人，點線上的關係詞跳證據原句。 */
+  var NODE_H = 30;
+
+  function evTag(e) {
+    if (e.evidence_valid === 1) {
+      return "<span class=\"rel-ev\" data-uid=\"" + esc(e.evidence_uid) +
+        "\" data-chapter=\"" + esc(e.evidence_chapter || "") + "\">看證據</span>";
+    }
+    if (e.evidence_state === "dead" || e.evidence_state === "merged") {
+      return "<span class=\"rel-noev\">證據句已改</span>";
+    }
+    if (e.evidence_state === "missing") {
+      return "<span class=\"rel-noev\">證據句已失</span>";
+    }
+    return "<span class=\"rel-noev\">無證據</span>";
+  }
+
+  function nodeBox(n, id) {
+    var full = (n && n.name) || id;
+    var t = full.length > 6 ? full.slice(0, 6) + "…" : full;
+    return { t: t, full: full, w: t.length * 15 + 18, h: NODE_H };
+  }
+
+  /* 軸對齊矩形與射線的交點：線要接在框邊上，不能插進框裡 */
+  function edgePoint(p, b, ux, uy) {
+    var hw = b.w / 2 + 4, hh = b.h / 2 + 4;
+    var tx = Math.abs(ux) > 1e-6 ? hw / Math.abs(ux) : 1e9;
+    var ty = Math.abs(uy) > 1e-6 ? hh / Math.abs(uy) : 1e9;
+    var t = Math.min(tx, ty);
+    return { x: p.x + ux * t, y: p.y + uy * t };
+  }
+
   function renderGraph(adjacency, options) {
-    // 目前無資料。將來這裡接 ECharts，輸入固定為 { nodes, edges }。
-    return adjacency;
+    options = options || {};
+    var nodes = (adjacency && adjacency.nodes) || [];
+    var edges = (adjacency && adjacency.edges) || [];
+    if (!edges.length) return "";
+
+    var byId = {}, center = null;
+    nodes.forEach(function (n) {
+      byId[n.id] = n;
+      if (n.degree === 0 || n.id === options.center) center = n;
+    });
+    if (!center) center = nodes[0];
+    if (!center) return "";
+
+    /* 佈局：一跳均分內環，二跳掛在父節點外側（±0.42 弧度錯開）。
+       deterministic，不做力導向——節點少，穩定比「好看」重要，
+       且每次渲染位置一樣，才敢指著圖跟人講。 */
+    var seen = {}; seen[center.id] = 1;
+    var lvl1 = [];
+    edges.forEach(function (e) {
+      var o = (e.source === center.id) ? e.target
+        : ((e.target === center.id) ? e.source : null);
+      if (o && !seen[o]) { seen[o] = 1; lvl1.push(o); }
+    });
+    var R1 = 118, R2 = 214;
+    var W = options.width || 660;
+    var H = 2 * (lvl1.length > 8 ? R1 + 46 : R1) + 76;
+    var cx = W / 2, cy = H / 2;
+    var pos = {};
+    pos[center.id] = { x: cx, y: cy };
+    lvl1.forEach(function (id, i) {
+      var ang = (-90 + (lvl1.length === 1 ? 0 : i * 360 / lvl1.length)) * Math.PI / 180;
+      pos[id] = { x: cx + R1 * Math.cos(ang), y: cy + R1 * Math.sin(ang), ang: ang };
+    });
+    var nChild = {};
+    edges.forEach(function (e) {
+      if (e.source === center.id || e.target === center.id) return;
+      var par = pos[e.source] ? e.source : (pos[e.target] ? e.target : null);
+      if (!par || !pos[par].ang) return;
+      var child = (par === e.source) ? e.target : e.source;
+      if (seen[child]) return;
+      seen[child] = 1;
+      nChild[par] = (nChild[par] || 0) + 1;
+      var k = nChild[par];
+      var ang = pos[par].ang + (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 0.42;
+      pos[child] = { x: cx + R2 * Math.cos(ang), y: cy + R2 * Math.sin(ang), ang: ang };
+      H = Math.max(H, 2 * R2 + 60);
+    });
+
+    var svg = "<svg class=\"rel-svg\" viewBox=\"0 0 " + W + " " + H +
+      "\" width=\"100%\" height=\"" + H + "\">" +
+      "<defs><marker id=\"relarrow\" markerWidth=\"9\" markerHeight=\"7\" " +
+      "refX=\"8\" refY=\"3.5\" orient=\"auto\">" +
+      "<path d=\"M0,0 L8,3.5 L0,7 z\" fill=\"#7A756B\"/></marker></defs>";
+
+    edges.forEach(function (e) {
+      var pa = pos[e.source], pb = pos[e.target];
+      if (!pa || !pb) return;
+      var ba = nodeBox(byId[e.source], e.source), bb = nodeBox(byId[e.target], e.target);
+      var dx = pb.x - pa.x, dy = pb.y - pa.y;
+      var len = Math.sqrt(dx * dx + dy * dy) || 1;
+      var ux = dx / len, uy = dy / len;
+      var s = edgePoint(pa, ba, ux, uy), t = edgePoint(pb, bb, -ux, -uy);
+      var weak = (e.evidence_valid !== 1) ||
+        (e.confidence != null && e.confidence < 0.5);
+      var mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
+      var tip = (byId[e.source] ? byId[e.source].name : e.source) + " 之「" +
+        (e.rel || "") + "」 " + (byId[e.target] ? byId[e.target].name : e.target) +
+        (e.evidence_valid === 1 ? "　（點一下看證據原句）" : "　（無證據，推斷）");
+      svg += "<g class=\"rel-edge" + (weak ? " weak" : "") + "\" data-uid=\"" +
+        esc(e.evidence_uid || "") + "\" data-chapter=\"" +
+        esc(e.evidence_chapter || "") + "\">" +
+        "<title>" + esc(tip) + "</title>" +
+        "<line x1=\"" + s.x.toFixed(1) + "\" y1=\"" + s.y.toFixed(1) +
+        "\" x2=\"" + t.x.toFixed(1) + "\" y2=\"" + t.y.toFixed(1) + "\"" +
+        (e.symmetric ? "" : " marker-end=\"url(#relarrow)\"") + "/>" +
+        /* 關係詞壓在線上，描邊同面板色「鏤空」，不然線會穿字 */
+        "<text class=\"rel-label\" x=\"" + mx.toFixed(1) + "\" y=\"" +
+        (my + 4).toFixed(1) + "\" text-anchor=\"middle\" " +
+        "stroke=\"#FFFDF7\" stroke-width=\"3.5\" paint-order=\"stroke\">" +
+        esc(e.rel || "") + "</text></g>";
+    });
+
+    Object.keys(pos).forEach(function (id) {
+      var p = pos[id], b = nodeBox(byId[id], id);
+      var n = byId[id] || {};
+      var isC = (id === center.id);
+      svg += "<g class=\"rel-node" + (isC ? " is-center" : "") +
+        "\" data-pid=\"" + esc(id) + "\">" +
+        "<title>" + esc(b.full + (n.dynasty ? "（" + n.dynasty + "）" : "")) + "</title>" +
+        "<rect x=\"" + (p.x - b.w / 2).toFixed(1) + "\" y=\"" +
+        (p.y - b.h / 2).toFixed(1) + "\" width=\"" + b.w + "\" height=\"" + b.h +
+        "\" rx=\"7\"/>" +
+        "<text x=\"" + p.x.toFixed(1) + "\" y=\"" + (p.y + 5).toFixed(1) +
+        "\" text-anchor=\"middle\">" + esc(b.t) + "</text></g>";
+    });
+    return svg + "</svg>";
   }
   window.renderGraph = renderGraph;
+
+  /* 點關係線＝跳證據原句。沒有證據就**說清楚是推斷**，別默默不反應 */
+  function openEvidence(g) {
+    var uid = g.getAttribute("data-uid"), cid = g.getAttribute("data-chapter");
+    if (!uid || !cid) {
+      hint.textContent = "這條關係沒有證據句（取自人物簡介的推斷），圖上畫成虛線。";
+      return;
+    }
+    openChapter(cid, uid).catch(showErr);
+  }
 
   /* ---------- 互動 ---------- */
   function showErr(e) {
@@ -439,6 +579,16 @@
   out.addEventListener("click", function (ev) {
     var row = ev.target.closest ? ev.target.closest(".row[data-pid]") : null;
     if (row) { renderPerson(row.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
+    // 關係圖：點節點看人、點線看證據句（證據徽章同理，它在關係行裡）
+    var evBtn = ev.target.closest ? ev.target.closest(".rel-ev[data-uid]") : null;
+    if (evBtn) { openEvidence(evBtn); return; }
+    var gNode = ev.target.closest ? ev.target.closest(".rel-node[data-pid]") : null;
+    if (gNode) {
+      renderPerson(gNode.getAttribute("data-pid")).then(writeHash).catch(showErr);
+      return;
+    }
+    var gEdge = ev.target.closest ? ev.target.closest(".rel-edge") : null;
+    if (gEdge) { openEvidence(gEdge); return; }
     // 關係行：點進去看那個人
     var relRow = ev.target.closest ? ev.target.closest(".rel-row[data-pid]") : null;
     if (relRow) { renderPerson(relRow.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }

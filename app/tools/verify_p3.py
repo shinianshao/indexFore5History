@@ -389,6 +389,98 @@ def test_relations() -> None:
           (p.stdout or "").strip().splitlines()[-1][:40] if p.stdout else "")
 
 
+def test_relation_evidence() -> None:
+    """P6-3 证据解析：句子可编辑之后，「写了 uid」不等于「证据还站得住」。
+
+    测在**临时库副本**上做（直接改正式库会把自造的边留在里面，也会污染权威源）。
+    覆盖四种状态：none（推断）/ active / dead（句子被弃用）/ missing（uid 查无）。
+    """
+    print("\n[8] 關係證據解析（P6-3）")
+    import shutil
+    tmp = os.path.join(tempfile.gettempdir(), "bookindex-verify-rel.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(tmp + suffix):
+            os.remove(tmp + suffix)
+    shutil.copyfile(snapshot.DB_PATH, tmp)
+    os.environ["BOOKINDEX_DB"] = tmp
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                     # 每次 connect() 都读环境变量
+    try:
+        conn = snapshot.connect(tmp)
+        uids = [r[0] for r in conn.execute(
+            "SELECT uid FROM sentences WHERE status='active' AND length(text)>12 "
+            "LIMIT 3")]
+        if len(uids) < 3:
+            check("临时库取到三条测试句", False)
+            return
+        u_ok, u_dead, u_stale = uids
+        real = conn.execute(
+            "SELECT text FROM sentences WHERE uid=?", (u_ok,)).fetchone()[0]
+        conn.execute("UPDATE sentences SET status='dead' WHERE uid=?", (u_dead,))
+        rows = [
+            ("ev-ok", u_ok, real),               # 快照与现句一致
+            ("ev-stale", u_stale, "過期快照"),     # 快照与现句不一致
+            ("ev-dead", u_dead, "句子已棄用"),     # 句子被弃用
+            ("ev-missing", "nosuchuid0000", "找不到"),  # uid 查无
+        ]
+        for rid, uid, snap in rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO relations(rel_id, person_a, surface_a, "
+                "person_b, surface_b, rel_type, rel, symmetric, era, book, "
+                "evidence_uid, evidence_text, confidence, source, status, note, "
+                "created_at) VALUES(?,'p_liubang','劉邦','p_hanhuidi','劉盈',"
+                "'kinship','父',0,'西漢','sj',?,?,0.9,'manual','active','P6 自檢',"
+                "'2026-09-30')", (rid, uid, snap))
+        conn.commit()
+        conn.close()
+
+        g = db.relations_graph("p_liubang", 1)
+        by = {e["rel_id"]: e for e in g["edges"]}
+
+        e = by.get("ev-ok")
+        check("证据有效：state=active 且 valid=1",
+              e is not None and e["evidence_state"] == "active"
+              and e["evidence_valid"] == 1, e.get("evidence_state") if e else "缺")
+        check("证据文本以现句为准（不是快照）",
+              e is not None and e["evidence_text"] == real)
+        check("证据带出篇 id（前端跳原文要用）",
+              e is not None and bool(e["evidence_chapter"]),
+              e.get("evidence_chapter", "") if e else "")
+        check("快照与现句一致 → stale=0", e is not None and e["evidence_stale"] == 0)
+
+        e = by.get("ev-stale")
+        check("快照过期 → stale=1 且仍以现句为准",
+              e is not None and e["evidence_stale"] == 1
+              and e["evidence_text"] != "過期快照")
+
+        e = by.get("ev-dead")
+        check("句子被弃用 → 证据失效（valid=0）",
+              e is not None and e["evidence_state"] == "dead"
+              and e["evidence_valid"] == 0, e.get("evidence_state") if e else "缺")
+
+        e = by.get("ev-missing")
+        check("uid 查无 → state=missing（不是假绿的有效）",
+              e is not None and e["evidence_state"] == "missing"
+              and e["evidence_valid"] == 0, e.get("evidence_state") if e else "缺")
+
+        none_edges = [x for x in g["edges"]
+                      if not x["evidence_uid"] and not str(x["rel_id"]).startswith("ev-")]
+        check("无证据的边一律 state=none（推断档看得出来）",
+              bool(none_edges) and all(x["evidence_state"] == "none"
+                                       for x in none_edges),
+              "{} 条".format(len(none_edges)))
+    finally:
+        os.environ.pop("BOOKINDEX_DB", None)
+        # db.py 用 `with connect()` 只提交不关闭，Windows 上文件会**被本进程锁住**；
+        # 删不掉就算了（临时目录，下次启动会覆盖），别让清理把断言结果翻成失败。
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                if os.path.exists(tmp + suffix):
+                    os.remove(tmp + suffix)
+            except OSError:
+                pass
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -401,6 +493,7 @@ def main() -> int:
         test_overrides()
         test_sentence_edits()
         test_relations()
+        test_relation_evidence()
     finally:
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
         for suffix in ("", "-wal", "-shm"):

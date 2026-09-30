@@ -172,6 +172,13 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
 
     四个密度旋钮（docs/21 §12.4.1）：degree 度数、rel_type 关系大类、
     book 按书、min_conf 置信度下限。
+
+    证据解析（docs/25 P0-3 / P0-4）：句子从 P4 起可编辑（拆/并/弃用），
+    所以「写了 evidence_uid」**不等于「证据还站得住」**。每条边都带
+    `evidence_state`：`none`（推断，本就没证据）/ `active`（有效）/
+    `dead` `merged`（句子被弃用或并走，证据**已失效**）/ `missing`（uid 找不到）。
+    文本**以 uid 指向的现句为准**，表里的 `evidence_text` 只是缓存——
+    两者不一致时给 `evidence_stale=1`（docs/25 §四：uid 权威、快照次之）。
     """
     empty = {"nodes": [], "edges": []}
     with connect() as conn:
@@ -243,4 +250,29 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
                 "dynasty": (p[3] if p else ""),
                 "degree": seen_nodes[i],
             })
+
+        # 证据：一次批量查，避免每条边一次查询（N+1）
+        euids = [e["evidence_uid"] for e in edges if e["evidence_uid"]]
+        found = {}
+        if euids:
+            ph = ",".join("?" * len(euids))
+            for r in conn.execute(
+                    "SELECT uid, chapter_id, text, status FROM sentences "
+                    "WHERE uid IN ({})".format(ph), euids):
+                found[r[0]] = (r[1] or "", r[2] or "", r[3] or "active")
+        for e in edges:
+            uid = e.get("evidence_uid") or ""
+            snap = e.get("evidence_text") or ""
+            if not uid:
+                state, chapter, text = "none", "", snap
+            elif uid not in found:
+                state, chapter, text = "missing", "", snap
+            else:
+                chapter, text, state = found[uid]
+            e["evidence_state"] = state
+            e["evidence_valid"] = 1 if state == "active" else 0
+            e["evidence_chapter"] = chapter
+            e["evidence_text"] = text
+            e["evidence_stale"] = 1 if (snap and text and snap != text) else 0
+
         return {"nodes": nodes, "edges": edges[:limit]}
