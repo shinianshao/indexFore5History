@@ -110,10 +110,15 @@ run_step "字面层守卫 check_trad.py（A–G 七道闸）" "$PY" pipeline/che
 
 # ---------- 3：无头 UI ----------
 SERVER_PID=""
+API_PID=""
 stop_server() {
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" 2>/dev/null
     wait "$SERVER_PID" 2>/dev/null
+  fi
+  if [ -n "$API_PID" ]; then
+    kill "$API_PID" 2>/dev/null
+    wait "$API_PID" 2>/dev/null
   fi
 }
 trap stop_server EXIT INT TERM
@@ -152,6 +157,31 @@ if [ "$RUN_UI" -eq 1 ]; then
         run_step "UI 多书检索 _ui_test_books.js" "$NODE_BIN" pipeline/_ui_test_books.js
         run_step "UI 地名层 _ui_test_places.js"  "$NODE_BIN" pipeline/_ui_test_places.js
         run_step "UI 样式表 _ui_csscheck.js"     "$NODE_BIN" pipeline/_ui_csscheck.js
+        # 关系卡/关系图（P6-3）打的是 **FastAPI 版**（app/web），不是 web/ 静态页。
+        # 静态页没有 /api，拿 BASE=静态页 去跑会得到「全红但其实打错靶」的假失败。
+        # 所以这里单起一个 API 服务（独立端口，不与日常用的 8800 抢）。
+        APIPORT="${APIPORT:-8811}"
+        if "$PY" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
+          PORT="$APIPORT" "$PY" app/server/main.py >/dev/null 2>&1 &
+          API_PID=$!
+          api_ready=0
+          for i in $(seq 1 40); do
+            if curl -sf -o /dev/null "http://127.0.0.1:${APIPORT}/health"; then
+              api_ready=1; break
+            fi
+            sleep 0.3
+          done
+          if [ "$api_ready" -ne 1 ]; then
+            echo "API 服务未能在 12 秒内就绪（端口 $APIPORT）" >&2
+            NAMES+=("UI 关系图（未运行：API 未就绪）"); RESULTS+=("1")
+          else
+            run_step "UI 关系图 _ui_test_rel.js" \
+              env BASE="http://127.0.0.1:${APIPORT}/" "$NODE_BIN" pipeline/_ui_test_rel.js
+          fi
+        else
+          echo "跳过关系图测试：$PY 里没有 fastapi/uvicorn" >&2
+          NAMES+=("UI 关系图（未运行：缺 fastapi）"); RESULTS+=("1")
+        fi
         if [ "$RUN_FULL" -eq 1 ]; then
           run_step "UI 全量扫描 _ui_sweep.js（慢）" "$NODE_BIN" pipeline/_ui_sweep.js
         fi

@@ -126,29 +126,9 @@
       /* 關係：資料來自 workbook/relations.xlsx，後端已轉成 {nodes, edges}。
          圖 + 列表並存：**虛線＝無證據的推斷**，實線＝語料裡有原句可跳，
          別讓推斷看起來像事實（docs/25 §四）。 */
-      var rel = d.relations || { nodes: [], edges: [] };
-      var nEdge = (rel.edges || []).length;
-      html += "<div class=\"card\" style=\"margin-top:14px\">" +
-        "<div class=\"person-head\"><span class=\"name\" style=\"font-size:16px\">關係</span>" +
-        "<span class=\"dyn\">" + nEdge + " 條</span></div>";
-      if (nEdge) {
-        html += renderGraph(rel, { center: pid, width: 660 });
-        var nameOf = {};
-        (rel.nodes || []).forEach(function (n) { nameOf[n.id] = n; });
-        html += "<div class=\"rel-list\">" + rel.edges.map(function (e) {
-          var other = (e.source === pid) ? e.target : e.source;
-          var n = nameOf[other] || {};
-          var conf = (e.confidence == null) ? "" : "　" + e.confidence.toFixed(1);
-          var ev = evTag(e);
-          return "<div class=\"rel-row\" data-pid=\"" + esc(other) + "\">" +
-            "<span class=\"rel\">" + esc(e.rel || "") + "</span>" +
-            "<span class=\"name\">" + esc(n.name || other) + "</span>" +
-            "<span class=\"meta\">" + esc(n.dynasty || "") + conf + "</span>" + ev + "</div>";
-        }).join("") + "</div>";
-      } else {
-        html += "<p class=\"summary\">尚無關係資料（權威源 workbook/relations.xlsx）。</p>";
-      }
-      html += "</div>";
+      relState = { degree: 1, minConf: 0 };
+      html += "<div class=\"card\" id=\"relcard\" style=\"margin-top:14px\">" +
+        relCardInner(pid, d.relations || { nodes: [], edges: [] }, relState) + "</div>";
 
       out.innerHTML = html;
       hint.textContent = "實線＝正名或別名直接命中；虛線＋？＝泛稱推斷，待確認。";
@@ -391,6 +371,64 @@
     else { location.hash = "#/"; }
   });
 
+  /* ---------- 關係卡片：圖 + 列表 + 三個旋鈕 ----------
+     有向邊在這裡最容易讀反：規範是 (a, rel, b) = 「a 是 b 的 rel」，
+     所以**站在 a 的頁面上**，對方要叫「女 / 弟」，不能还写「父 / 兄」
+     （「劉邦 之父 魯元公主」是拿父親的頭銜去稱呼女兒，docs/28 P0-1）。
+     這個視角用詞由後端算好（`rel_view`），前端不自己維護第二份詞表。 */
+  var relState = { degree: 1, minConf: 0 };
+
+  function knob(label, on, k, v) {
+    return "<span class=\"knob" + (on ? " on" : "") + "\" data-k=\"" + k +
+      "\" data-v=\"" + v + "\">" + label + "</span>";
+  }
+
+  function relCardInner(pid, rel, st) {
+    var nEdge = (rel.edges || []).length;
+    var h = "<div class=\"person-head\">" +
+      "<span class=\"name\" style=\"font-size:16px\">關係</span>" +
+      "<span class=\"dyn\">" + nEdge + " 條</span>" +
+      "<span class=\"rel-knobs\">" +
+      knob("一跳", st.degree === 1, "degree", 1) +
+      knob("二跳", st.degree === 2, "degree", 2) +
+      knob("只看有證據", st.minConf >= 0.5, "minconf", 0.5) +
+      "</span></div>";
+    if (!nEdge) {
+      return h + "<p class=\"summary\">尚無關係資料" +
+        "（權威源 workbook/relations.xlsx）。</p>";
+    }
+    h += renderGraph(rel, { center: pid, width: 660 });
+    var nameOf = {};
+    (rel.nodes || []).forEach(function (n) { nameOf[n.id] = n; });
+    h += "<div class=\"rel-list\">" + rel.edges.map(function (e) {
+      var other = (e.source === pid) ? e.target : e.source;
+      var n = nameOf[other] || {};
+      var conf = (e.confidence == null) ? "" : "　" + e.confidence.toFixed(1);
+      // 來源要看得見：手訂的與「從簡介自動抽的」不是一回事（docs/28 P2-3）
+      var org = (e.origin === "auto-summary") ? "　簡介" :
+        ((e.origin === "manual") ? "　手訂" : "");
+      return "<div class=\"rel-row\" data-pid=\"" + esc(other) + "\">" +
+        "<span class=\"rel\">" + esc(e.rel_view || e.rel || "") + "</span>" +
+        "<span class=\"name\">" + esc(n.name || other) + "</span>" +
+        "<span class=\"meta\">" + esc(n.dynasty || "") + conf + org + "</span>" +
+        evTag(e) + "</div>";
+    }).join("") + "</div>";
+    return h;
+  }
+
+  /* 旋鈕是真的在用的：`/api/person/{pid}/relations` 的四個密度參數
+     （docs/21 §12.4.1）以前一個都點不到，等於死參數（docs/28 P1-5）。 */
+  function loadRelations(pid) {
+    var st = relState;
+    var url = "/api/person/" + encodeURIComponent(pid) +
+      "/relations?degree=" + st.degree +
+      (st.minConf ? "&min_conf=" + st.minConf : "");
+    return request(url).then(function (d) {
+      var box = document.getElementById("relcard");
+      if (box) box.innerHTML = relCardInner(pid, d, st);
+    });
+  }
+
   /* ---------- 關係圖（P6-3）----------
      刻意**不引 ECharts**：本機離線工具不該有 CDN 依賴；單人局部圖多半不到十個節點，
      同心圓放射佈局就夠讀；自繪 SVG 也才能跟這套宣紙／朱砂的配色完全一致。
@@ -401,6 +439,19 @@
   var NODE_H = 30;
 
   function evTag(e) {
+    /* 一條關係可以有多條出處（docs/28 P1-6）：實測 12/62 條邊有 ≥2 句可用候選，
+       只留主證據那一句等於丟證據。多條時逐條列出，每一條都點得開原文。 */
+    var evs = e.evidences || [];
+    if (evs.length > 1) {
+      return evs.map(function (x, i) {
+        var tag = "證據" + (i + 1);
+        if (x.valid === 1) {
+          return "<span class=\"rel-ev\" data-uid=\"" + esc(x.uid) +
+            "\" data-chapter=\"" + esc(x.chapter || "") + "\">" + tag + "</span>";
+        }
+        return "<span class=\"rel-noev\">" + tag + "·句已改</span>";
+      }).join("");
+    }
     if (e.evidence_valid === 1) {
       return "<span class=\"rel-ev\" data-uid=\"" + esc(e.evidence_uid) +
         "\" data-chapter=\"" + esc(e.evidence_chapter || "") + "\">看證據</span>";
@@ -495,8 +546,8 @@
       var weak = (e.evidence_valid !== 1) ||
         (e.confidence != null && e.confidence < 0.5);
       var mx = (s.x + t.x) / 2, my = (s.y + t.y) / 2;
-      var tip = (byId[e.source] ? byId[e.source].name : e.source) + " 之「" +
-        (e.rel || "") + "」 " + (byId[e.target] ? byId[e.target].name : e.target) +
+      // rel_desc 是後端算好的完整句「A 是 B 之X」，不自己拼——拼就會讀反
+      var tip = (e.rel_desc || "") +
         (e.evidence_valid === 1 ? "　（點一下看證據原句）" : "　（無證據，推斷）");
       svg += "<g class=\"rel-edge" + (weak ? " weak" : "") + "\" data-uid=\"" +
         esc(e.evidence_uid || "") + "\" data-chapter=\"" +
@@ -509,7 +560,7 @@
         "<text class=\"rel-label\" x=\"" + mx.toFixed(1) + "\" y=\"" +
         (my + 4).toFixed(1) + "\" text-anchor=\"middle\" " +
         "stroke=\"#FFFDF7\" stroke-width=\"3.5\" paint-order=\"stroke\">" +
-        esc(e.rel || "") + "</text></g>";
+        esc(e.rel_view || e.rel || "") + "</text></g>";
     });
 
     Object.keys(pos).forEach(function (id) {
@@ -579,6 +630,15 @@
   out.addEventListener("click", function (ev) {
     var row = ev.target.closest ? ev.target.closest(".row[data-pid]") : null;
     if (row) { renderPerson(row.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
+    // 關係卡片的三個旋鈕（一跳 / 二跳 / 只看有證據）
+    var kb = ev.target.closest ? ev.target.closest(".knob[data-k]") : null;
+    if (kb) {
+      var k = kb.getAttribute("data-k"), v = Number(kb.getAttribute("data-v"));
+      if (k === "degree") relState.degree = (relState.degree === v) ? 1 : v;
+      else relState.minConf = relState.minConf >= 0.5 ? 0 : (v || 0.5);
+      loadRelations(currentPid).catch(showErr);
+      return;
+    }
     // 關係圖：點節點看人、點線看證據句（證據徽章同理，它在關係行裡）
     var evBtn = ev.target.closest ? ev.target.closest(".rel-ev[data-uid]") : null;
     if (evBtn) { openEvidence(evBtn); return; }

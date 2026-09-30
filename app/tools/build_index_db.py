@@ -45,7 +45,9 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BOOK = os.path.join(ROOT, "data", "index", "book-data.json")
-DB = os.path.join(ROOT, "data", "index", "index.db")
+# 认环境变量（同 db.py / snapshot.py）：断言要在临时库副本上跑
+DB = (os.environ.get("BOOKINDEX_DB")
+      or os.path.join(ROOT, "data", "index", "index.db"))
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -141,6 +143,21 @@ CREATE TABLE IF NOT EXISTS relations (
   status        TEXT,
   note          TEXT,
   created_at    TEXT
+);
+
+-- 关系证据**子表**（docs/28 P1-6）：一条关系可以有多条出处。
+-- 之前只有 relations.evidence_uid 一个字段，于是「12/62 条边有 ≥2 条可用候选句」
+-- 这个已经出现的需求装不下——要么丢证据，要么一条边挂错一句。
+--   verdict = accept（采用）/ reject（候选被否，留着免得下次又抽出来）
+--   relations.evidence_uid 仍保留，指向**主证据**（第一条 accept），
+--   这样只用到一条的场景不用改代码。
+CREATE TABLE IF NOT EXISTS relation_evidence (
+  rel_id        TEXT,
+  evidence_uid  TEXT,
+  verdict       TEXT,
+  note          TEXT,
+  created_at    TEXT,
+  PRIMARY KEY (rel_id, evidence_uid)
 );
 
 CREATE INDEX IF NOT EXISTS ix_sent_chapter ON sentences(chapter_id);

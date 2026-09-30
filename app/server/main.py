@@ -153,10 +153,16 @@ def api_relations(pid: str,
 
     四个密度旋钮（docs/21 §12.4.1）都在这里：度数 / 关系大类 / 按书 / 置信度下限。
     `evidence_uid` 为空或 `confidence` 低的边，前端画成虚线（docs/25 §四）。
+
+    书号不在五书之内 → 400（docs/28 P1-3：以前 `book=zzz` 也被静默放行，
+    返回的是「全都没过滤」的结果，看着像生效其实没有）。
     """
-    return {"person": pid,
-            **db.relations_graph(pid, degree, rel_type, book, min_conf,
-                                 min(int(limit), MAX_LIMIT))}
+    try:
+        g = db.relations_graph(pid, degree, rel_type, book, min_conf,
+                               min(int(limit), MAX_LIMIT))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"person": pid, **g}
 
 
 # ---------------------------------------------------------------- 句级编辑

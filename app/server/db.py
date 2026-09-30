@@ -33,6 +33,47 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+# ---------------------------------------------------------------- 称呼反向
+#
+# ⚠️ 这两张表与 `pipeline/relations.py` 里的同名表**必须逐字一致**——
+# app/ 与 pipeline/ 刻意不互相 import（docs/23 §7.1），代价就是这里要抄一份，
+# 由 `app/tools/verify_p3.py` 的断言守着（不一致就红）。
+#
+# CALL_INVERSE 是「称呼反向」：站在 a 的视角，对方该被称作什么。
+# 它跟 REL_INVERSE（反向边表，用于禁止双写）不是一回事——对称边也需要它。
+# 值是 (男, 女) 候选：`父 → (子, 女)`，选哪个看对方性别。
+CALL_INVERSE = {
+    "父": ("子", "女"), "母": ("子", "女"),
+    "子": ("父", "母"), "女": ("父", "母"),
+    "祖父": ("孫", "孫女"), "祖母": ("孫", "孫女"),
+    "孫": ("祖父", "祖母"), "孫女": ("祖父", "祖母"),
+    "兄": ("弟", "妹"), "弟": ("兄", "姊"),
+    "姊": ("妹", "弟"), "妹": ("兄", "姊"),
+    "夫": ("妻",), "妻": ("夫",),
+    "伯叔": ("姪",), "姑": ("姪",), "姪": ("伯叔", "姑"),
+    "舅": ("甥",), "姨": ("甥",), "甥": ("舅", "姨"),
+    "養父": ("子", "女"), "繼母": ("子", "女"),
+}
+FEMALE_HINT = ("太后", "皇后", "公主", "王后", "夫人", "姬", "妃",
+               "后", "女", "母", "婦", "妻", "娣", "娥")
+NO_EVIDENCE_CAP = 0.4      # 与 relations.NO_EVIDENCE_CAP 一致（断言守着）
+
+
+def looks_female(*texts) -> bool:
+    s = "".join(str(t or "") for t in texts)
+    return any(w in s for w in FEMALE_HINT)
+
+
+def rel_view(rel: str, other_female: bool) -> str:
+    """站在 a 的视角，把对方称作什么。展示与取证共用同一套词表。"""
+    cands = CALL_INVERSE.get(rel)
+    if not cands:
+        return rel
+    if len(cands) > 1:
+        return cands[1] if other_female else cands[0]
+    return cands[0]
+
+
 def fts_phrase(q: str) -> str:
     """与 build_index_db 的入库方式对齐：按字切分 + 短语查询。
 
@@ -185,8 +226,32 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
         if not conn.execute("SELECT 1 FROM persons WHERE id=?", (pid,)).fetchone():
             return empty
 
+        # 书号校验（docs/28 P1-3）：以前 `AND (book=? OR book='')` 让**任何**书号
+        # 都能通过——`book=zzz` 照样返回全部边，旋钮是摆设还骗人。不存在的书号
+        # 直接报错，由端点翻成 400。
+        if book:
+            known = {r[0] for r in conn.execute(
+                "SELECT DISTINCT book_id FROM chapters")}
+            if book not in known:
+                raise ValueError("未知書號：{}（有效：{}）".format(
+                    book, "/".join(sorted(known))))
+
+        # 「按书看」的正确语义不是 `book` 列（61/62 条是空的——关系天然跨书，
+        # 跟人物一样，见 docs/21），而是**这条关系在该书里有出处**：
+        # 有证据句且证据句属于该书的边，也算命中。
+        ev_rel: set = set()
+        if book:
+            for rid, in conn.execute(
+                    "SELECT r.rel_id FROM relations r "
+                    "JOIN sentences s ON s.uid=r.evidence_uid "
+                    "JOIN chapters c ON c.id=s.chapter_id "
+                    "WHERE r.status='active' AND r.evidence_uid<>'' "
+                    "  AND c.book_id=?", (book,)):
+                ev_rel.add(rid)
+
         seen_nodes = {pid: 0}
         edges: List[Dict[str, Any]] = []
+        seen_rel = set()          # 按 rel_id 去重：第 2 轮 BFS 会把「中心↔一跳」再捞一遍
         frontier = {pid}
         for d in range(1, max(1, min(int(degree), 3)) + 1):
             if not frontier:
@@ -202,8 +267,12 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
                 sql += " AND rel_type=?"
                 args.append(rel_type)
             if book:
-                sql += " AND (book=? OR book='')"      # 空 book = 不限书
+                # 空 book = 未标注（跨书），不因此被滤掉；但要么 `book` 列命中，
+                # 要么证据句落在这本书里（ev_rel），二者都不是才排除。
+                sql += " AND (book=? OR (book='' AND rel_id IN ({})))".format(
+                    ",".join("?" * len(ev_rel)) or "''")
                 args.append(book)
+                args.extend(ev_rel)
             if min_conf:
                 sql += " AND confidence>=?"
                 args.append(min_conf)
@@ -215,6 +284,9 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
                 other = b if a in frontier else a
                 if a not in frontier and b not in frontier:
                     continue
+                if rid in seen_rel:
+                    continue          # 同一条边不进第二次（degree≥2 时否则会翻倍）
+                seen_rel.add(rid)
                 # ⚠️ 起点叫 `source`、关系来源**不能也叫 source**——
                 # 两个同名键写进同一个 dict，后者会把前者无声覆盖（踩过）。
                 # 关系来源改叫 `origin`。
@@ -238,7 +310,7 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
         ids = list(seen_nodes)[:limit]
         q = ",".join("?" * len(ids))
         prof = {r[0]: r for r in conn.execute(
-            "SELECT id, trad_name, name, dynasty FROM persons "
+            "SELECT id, trad_name, name, dynasty, title FROM persons "
             "WHERE id IN ({})".format(q), ids)}
         nodes = []
         for i in ids:
@@ -251,8 +323,23 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
                 "degree": seen_nodes[i],
             })
 
+        # 证据**子表**（docs/28 P1-6）：一条关系可以挂多条出处。
+        # 只取 verdict<>'reject' 的——被人工否掉的候选留着是为了下轮不再抽出来，
+        # 不是拿来当证据用的。
+        ev_by_rel: Dict[str, list] = {}
+        rids = [e["rel_id"] for e in edges]
+        if rids:
+            ph = ",".join("?" * len(rids))
+            for r in conn.execute(
+                    "SELECT rel_id, evidence_uid, verdict FROM relation_evidence "
+                    "WHERE rel_id IN ({}) AND verdict<>'reject'".format(ph), rids):
+                ev_by_rel.setdefault(r[0], []).append((r[1], r[2] or "accept"))
+
         # 证据：一次批量查，避免每条边一次查询（N+1）
-        euids = [e["evidence_uid"] for e in edges if e["evidence_uid"]]
+        euids = {e["evidence_uid"] for e in edges if e["evidence_uid"]}
+        for lst in ev_by_rel.values():
+            euids.update(u for u, _ in lst)
+        euids = sorted(euids)
         found = {}
         if euids:
             ph = ",".join("?" * len(euids))
@@ -269,10 +356,50 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
                 state, chapter, text = "missing", "", snap
             else:
                 chapter, text, state = found[uid]
+
+            # 该边的全部证据（子表优先；子表没写就退化成主表那一条）
+            lst = ev_by_rel.get(e["rel_id"]) or ([(uid, "accept")] if uid else [])
+            evs = []
+            for u, vd in lst:
+                if u not in found:
+                    st, ch, tx = "missing", "", ""
+                else:
+                    ch, tx, st = found[u]
+                evs.append({"uid": u, "chapter": ch, "text": tx, "state": st,
+                            "valid": 1 if st == "active" else 0,
+                            "verdict": vd,
+                            "stale": 1 if (u == uid and snap and tx
+                                           and snap != tx) else 0})
+            e["evidences"] = evs
+            e["evidence_count"] = len(evs)
+            # 「证据站不站得住」看的是**有没有任何一条还活着**，不是只看主证据：
+            # 主证据那句被弃用、但另有出处时，这条关系仍是有据的。
+            if evs:
+                if any(x["state"] == "active" for x in evs):
+                    state = "active"
+                elif state == "none":
+                    state = evs[0]["state"]
             e["evidence_state"] = state
             e["evidence_valid"] = 1 if state == "active" else 0
             e["evidence_chapter"] = chapter
             e["evidence_text"] = text
             e["evidence_stale"] = 1 if (snap and text and snap != text) else 0
+            # 证据失效了，置信度就得跟着掉回去（docs/28 P1-7）：
+            # 原来因为「有证据」拿到的 0.6，证据句被弃用后不该还顶着。
+            if uid and not e["evidence_valid"]:
+                e["confidence"] = min(float(e["confidence"] or 0), NO_EVIDENCE_CAP)
+                e["confidence_fallen"] = 1
+
+            # 展示用词：站在**中心**的视角，对方该被称作什么。
+            # 有向边在这里最容易读反——(a,父,b) 在 a 的页面上是「女 b」，不是「父 b」。
+            a, b = e["source"], e["target"]
+            other = b if a == pid else a
+            po = prof.get(other)
+            e["rel_view"] = e["rel"] if a != pid else rel_view(
+                e["rel"], looks_female(po[1] if po else other,
+                                       po[4] if po else ""))
+            na = prof.get(a)[1] if prof.get(a) else e["name_a"]
+            nb = prof.get(b)[1] if prof.get(b) else e["name_b"]
+            e["rel_desc"] = "{} 是 {} 之{}".format(na, nb, e["rel"])
 
         return {"nodes": nodes, "edges": edges[:limit]}

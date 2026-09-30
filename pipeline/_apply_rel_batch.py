@@ -42,6 +42,22 @@ AMBIGUOUS = {
 }
 
 
+def ambiguous_hit(name: str) -> str:
+    """裸帝号/庙号守卫（docs/28 P1-4）。
+
+    以前是 `name in AMBIGUOUS` 精确匹配，于是「孝武帝」「漢高祖」这种**带修饰字**
+    的称号直接漏网——那两条结果碰巧对，但守卫等于没生效，下一个同形状的称号
+    就会挂错人。判据放宽为：原名等于该称号，或**以该称号结尾**
+    （前缀是朝代/修饰字：漢/魏/晉/宋/孝/昭/武…）。
+
+    宁可多挡一条去人工判（错挡只是慢），也别放错一条进库（错一条就是误导）。
+    """
+    for t in AMBIGUOUS:
+        if name == t or name.endswith(t):
+            return t
+    return ""
+
+
 def load_verdicts() -> dict:
     if not os.path.exists(VERDICTS):
         return {}
@@ -84,8 +100,11 @@ def main() -> int:
         if len(pids) > 1 and not v.get("accept"):
             skipped["multi"] += 1
             continue
-        if name in AMBIGUOUS and not v.get("accept"):
+        hit = ambiguous_hit(name)
+        if hit and not v.get("accept"):
             skipped["ambiguous"] += 1
+            if not dry:
+                print("  挡下待判：{}（命中裸称号「{}」）".format(name, hit))
             continue
 
         other_pid = pids[0]

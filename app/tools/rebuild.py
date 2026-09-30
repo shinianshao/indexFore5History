@@ -50,7 +50,9 @@ import overrides   # noqa: E402  單條糾錯（P3-3）
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))          # app/tools → app → 根
-DB_PATH = os.path.join(ROOT, "data", "index", "index.db")
+# 认环境变量（同 snapshot.py）：好在临时库副本上跑，别拿正式库做实验
+DB_PATH = (os.environ.get("BOOKINDEX_DB")
+           or os.path.join(ROOT, "data", "index", "index.db"))
 
 # （步驟名, 相對於 ROOT 的腳本路徑, 一句話說明, 額外參數）
 STEPS = [

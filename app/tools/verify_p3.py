@@ -354,27 +354,103 @@ def test_relations() -> None:
     check("重建後關係仍在（P0-1 回歸）", rc == 0 and db_count() == n_xlsx,
           "重建後 {} 條".format(db_count()))
 
+    # 規則檢查**全表掃描**，不再取一行：上一版用 `LIMIT 1` 只看第一行，
+    # 注入到第 3 行的錯誤（rel 出詞表 / confidence 手填）斷言**全綠**（docs/28 P0-5）。
     conn = snapshot.connect(snapshot.DB_PATH)
-    r = conn.execute(
-        "SELECT rel, rel_type, confidence, source, status, evidence_uid "
-        "FROM relations WHERE status='active' LIMIT 1").fetchone()
+    rows = [dict(x) for x in conn.execute(
+        "SELECT rel_id, person_a, person_b, rel, rel_type, symmetric, "
+        "confidence, source, status, evidence_uid FROM relations "
+        "WHERE status='active'")]
+    pids = {x[0] for x in conn.execute("SELECT id FROM persons")}
     conn.close()
-    if not r:
-        check("取到一條關係做規則檢查", False)
+    if not rows:
+        check("取到關係做規則檢查", False)
         return
-    rel, rt, conf, src, st, euid = r
-    check("rel 在規範詞表內", rel in R.REL_TABLE, rel)
-    check("rel_type 由 rel 派生（不手填）", rt == R.REL_TABLE[rel][0],
-          "{} → {}".format(rel, rt))
-    # 注意：無證據的關係會被壓到推斷檔，所以期望值要帶 evidence 一起算
-    check("confidence 由 source + 有無證據派生（不手填）",
-          conf == R.derive_confidence(src, bool(euid)),
-          "{}（證據 {}） → {}".format(src, "有" if euid else "無", conf))
-    check("無證據的關係置信度已壓低", (not euid) and conf <= R.NO_EVIDENCE_CAP,
-          "conf={}".format(conf))
-    check("status 為 active", st == "active")
+    bad, seen = [], {}
+    for r in rows:
+        tag, a, b, rel = r["rel_id"], r["person_a"], r["person_b"], r["rel"]
+        if a not in pids or b not in pids:
+            bad.append("{} pid 不存在".format(tag))
+        if a == b:
+            bad.append("{} 自環".format(tag))
+        if rel not in R.REL_TABLE:
+            bad.append("{} rel「{}」不在詞表".format(tag, rel))
+            continue
+        if r["rel_type"] != R.REL_TABLE[rel][0]:
+            bad.append("{} rel_type 手填".format(tag))
+        if int(r["symmetric"] or 0) != R.REL_TABLE[rel][1]:
+            bad.append("{} symmetric 手填".format(tag))
+        if abs(float(r["confidence"] or 0)
+               - R.derive_confidence(r["source"], bool(r["evidence_uid"]))) > 1e-6:
+            bad.append("{} confidence 手填（{}）".format(tag, r["confidence"]))
+        if not r["evidence_uid"] and float(r["confidence"] or 0) > R.NO_EVIDENCE_CAP:
+            bad.append("{} 無證據卻高置信".format(tag))
+        inv = R.REL_INVERSE.get(rel)
+        if inv and (b, a, inv) in seen:
+            bad.append("{} 反向雙寫".format(tag))
+        seen[(a, b, rel)] = tag
+    check("全表掃描：rel/rel_type/symmetric/confidence 全由規則派生", not bad,
+          ("；".join(bad[:3])) if bad else "{} 條全部合規".format(len(rows)))
+    check("規則檢查覆蓋所有 active 邊（不是只抽一行）", len(rows) > 1,
+          "{} 條".format(len(rows)))
 
-    inv = R.REL_INVERSE.get(rel)
+    # degree≥2 時每條邊只出現一次（BFS 沒去重會翻倍，docs/28 P0-4）
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db
+    g1 = db.relations_graph("p_liubang", 1)
+    g2 = db.relations_graph("p_liubang", 2)
+    ids1 = {e["rel_id"] for e in g1["edges"]}
+    ids2 = [e["rel_id"] for e in g2["edges"]]
+    check("degree=2 不重複邊（BFS 有去重）", len(ids2) == len(set(ids2)),
+          "{} 條 / 去重後 {}".format(len(ids2), len(set(ids2))))
+    check("degree=2 包含 degree=1 的全部邊", ids1 <= set(ids2),
+          "一跳 {} / 二跳 {}".format(len(ids1), len(set(ids2))))
+
+    # 按書旋鈕（docs/28 P1-3）：以前 `AND (book=? OR book='')` 讓 `book=zzz`
+    # 也靜默放行——看著像過濾了，其實一條沒少。現在兩件事都必須成立：
+    # ① 書號不在五書內 → 直接報錯；② 「按書」看的是**證據句落不落在這本書**，
+    #    不是 `book` 列（61/62 條是空的，關係天然跨書）。
+    try:
+        db.relations_graph("p_liubang", 1, book="zzz")
+        check("未知書號不再靜默放行（要報錯）", False, "沒報錯，仍返回全部邊")
+    except ValueError as e:
+        check("未知書號不再靜默放行（要報錯）", True, str(e)[:30])
+
+    conn = snapshot.connect(snapshot.DB_PATH)
+    ev = conn.execute(
+        "SELECT r.rel_id, r.person_a, c.book_id FROM relations r "
+        "JOIN sentences s ON s.uid=r.evidence_uid "
+        "JOIN chapters c ON c.id=s.chapter_id "
+        "WHERE r.status='active' AND r.evidence_uid<>'' LIMIT 1").fetchone()
+    books = [x[0] for x in conn.execute("SELECT DISTINCT book_id FROM chapters")]
+    conn.close()
+    if ev:
+        rid, pa, bk = ev[0], ev[1], ev[2]
+        hit = {e["rel_id"] for e in
+               db.relations_graph(pa, 1, book=bk)["edges"]}
+        other_bk = next((b for b in books if b != bk), "")
+        miss = {e["rel_id"] for e in
+                db.relations_graph(pa, 1, book=other_bk)["edges"]}
+        check("按書過濾：證據句在本書 → 邊在（book 列空也算）", rid in hit,
+              "{} @ {}".format(rid[:8], bk))
+        check("按書過濾：換一本沒有出處的書 → 邊不在（不是一律放行）",
+              rid not in miss, "{} @ {}".format(rid[:8], other_bk))
+    else:
+        check("取到帶證據的真實邊（按書過濾要用）", False)
+
+    # docs/25 P1-9 留下的賬（docs/28 P2-2）：它建議的「auto-summary ⇒ 證據非空」
+    # 與現行模型衝突（證據可空、58 條無證據）。可執行的替代版本在這裡：
+    # **沒有證據的推論邊，置信度必須被壓到上限以下**——不許頂著 0.6 裝有據。
+    noev_high = [r["rel_id"] for r in rows
+                 if not r["evidence_uid"]
+                 and float(r["confidence"] or 0) > R.NO_EVIDENCE_CAP + 1e-6]
+    check("無證據的推論邊置信度被壓到上限（docs/25 P1-9 的可執行替代）",
+          not noev_high, "越線 {} 條".format(len(noev_high)))
+
+    # 反向雙寫要拿一條**確定存在**的有向邊來測（p_liubang —父→ p_hanhuidi），
+    # 不能跟着 rows[0] 走：rows[0] 若是對稱邊（夫 / 兄）REL_INVERSE 裡沒有它，
+    # 這條斷言會被靜默跳過——之前就是這樣空了好幾輪。
+    inv = R.REL_INVERSE.get("父")
     if inv:
         p = subprocess.run([PY, os.path.join(ROOT, "pipeline", "relations.py"),
                             "add", "--a", "p_hanhuidi", "--b", "p_liubang",
@@ -481,6 +557,185 @@ def test_relation_evidence() -> None:
                 pass
 
 
+def test_rel_view() -> None:
+    """关系展示读法（docs/28 P0-1）：**有向边最容易读反**。
+
+    规范是 (a, rel, b) = 「a 是 b 的 rel」。站在 a 的页面上，对方要叫「女 / 弟」，
+    照抄 rel 就会变成「劉邦 之父 魯元公主」——拿父亲的头衔去称呼女儿。
+    62 条里 52 条是有向边，这一条错就是批量误导。
+    """
+    print("\n[9] 關係展示讀法（P6-3 修 P0-1）")
+    sys.path.insert(0, os.path.join(ROOT, "pipeline"))
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import relations as R                              # noqa: E402
+    import db                                          # noqa: E402
+
+    check("db 與 relations 的 CALL_INVERSE 逐字一致（兩處抄表靠這條守）",
+          db.CALL_INVERSE == R.CALL_INVERSE)
+    check("NO_EVIDENCE_CAP 兩處一致", db.NO_EVIDENCE_CAP == R.NO_EVIDENCE_CAP)
+
+    # 女兒那條：p_liubang —父→ p_luyuangongzhu（魯元公主）
+    g = db.relations_graph("p_liubang", 1)
+    e = next((x for x in g["edges"]
+              if x["source"] == "p_liubang" and x["rel"] == "父"), None)
+    check("站在 a 側：有向邊讀成稱呼反向（不是照抄 rel）",
+          e is not None and e["rel_view"] in ("子", "女"),
+          "{} → {}".format(e["rel"] if e else "缺", e["rel_view"] if e else "缺"))
+    check("性別變體：對方是女性時讀「女」而不是「子」",
+          e is not None and e["rel_view"] == "女", e["rel_view"] if e else "缺")
+
+    g2 = db.relations_graph("p_luyuangongzhu", 1)
+    e2 = next((x for x in g2["edges"]
+               if x["target"] == "p_luyuangongzhu" and x["rel"] == "父"), None)
+    check("站在 b 側：讀 rel 本身（父）", e2 is not None and e2["rel_view"] == "父",
+          e2["rel_view"] if e2 else "缺")
+    check("rel_desc 是完整句（A 是 B 之X）",
+          e2 is not None and e2["rel_desc"].endswith("之父")
+          and e2["rel_desc"].startswith("劉邦"), e2["rel_desc"] if e2 else "缺")
+
+    # 有證據的真實邊：必須 active（別只測自建的 ev-* 行——自建行永遠綠）
+    # ⚠️ 必須連 db 正在用的那個庫（環境變量可能被上一組換成臨時副本），
+    #    連錯庫就會出現「邊查得到但狀態對不上」的假紅。
+    conn = snapshot.connect(db.db_path())
+    real = [dict(x) for x in conn.execute(
+        "SELECT rel_id, person_a, evidence_uid FROM relations "
+        "WHERE status='active' AND evidence_uid<>''")]
+    conn.close()
+    if not real:
+        check("取到真實的有證據邊", False)
+        return
+    g3 = db.relations_graph(real[0]["person_a"], 1)
+    e3 = next((x for x in g3["edges"] if x["rel_id"] == real[0]["rel_id"]), None)
+    check("真實邊：有證據就該 state=active（不是只測自建的 ev-* 行）",
+          e3 is not None and e3["evidence_state"] == "active"
+          and e3["evidence_valid"] == 1,
+          e3["evidence_state"] if e3 else "缺")
+
+
+# 断言自带的测试行标记。注意「自檢」既有繁体也有简体（早期脚本留下的）。
+TEST_MARKERS = ("自檢", "測試，驗完撤銷", "测试，验完撤销", "UI 冒煙")
+
+
+def purge_test_rows() -> None:
+    """清掉断言自己留在权威源里的测试行。
+
+    `overrides.py revoke` / `apply_sentence_edits.py revoke` 都是**改状态不删行**
+    （要留审计痕迹），于是每跑一次回归就多两行 dead 行——跑了十几轮已经积了 40 行。
+    它们不参与任何计算（dead），但会让权威源的 diff 永远脏着，也会让人误以为
+    「这里曾经改过东西」。只删 **dead + 命中测试标记** 的行，活行一概不碰。
+    """
+    try:
+        import openpyxl
+    except ImportError:
+        return
+    total = 0
+    for path in (os.path.join(ROOT, "workbook", "overrides.xlsx"),
+                 os.path.join(ROOT, "workbook", "sentence-edits.xlsx")):
+        if not os.path.exists(path):
+            continue
+        wb = openpyxl.load_workbook(path)
+        ws = wb.active
+        head = {c.value: c.column for c in ws[1]}
+        nc = head.get("备注(note)")
+        sc = head.get("状态(status)")
+        if not nc:
+            wb.close()
+            continue
+        doomed = []
+        for r in ws.iter_rows(min_row=2):
+            stat = str(r[sc - 1].value or "active") if sc else "active"
+            if stat != "dead":
+                continue
+            if any(m in str(r[nc - 1].value or "") for m in TEST_MARKERS):
+                doomed.append(r[0].row)
+        for i in sorted(doomed, reverse=True):
+            ws.delete_rows(i)
+        if doomed:
+            try:
+                wb.save(path)
+                total += len(doomed)
+            except PermissionError:
+                print("  ⚠ {} 被占用，测试残留没清掉".format(os.path.basename(path)))
+        wb.close()
+    if total:
+        print("\n  清理断言测试残留 {} 行".format(total))
+
+
+def test_relation_evidence_multi() -> None:
+    """证据一对多（docs/28 P1-6）。
+
+    一条关系常有不止一句出处（实测 12/62 条边有 ≥2 条候选），而 `relations` 表
+    只有 `evidence_uid` 一个字段——要么丢证据，要么一条边挂错一句。所以搬出
+    `relation_evidence` 子表；现在只有 2 行要搬，扩量之后再搬就贵了。
+    """
+    print("\n[10] 關係證據一對多（P6-3 修 P1-6）")
+    import shutil
+    tmp = os.path.join(tempfile.gettempdir(), "bookindex-verify-ev.db")
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(tmp + suffix):
+            os.remove(tmp + suffix)
+    shutil.copyfile(snapshot.DB_PATH, tmp)
+    os.environ["BOOKINDEX_DB"] = tmp
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                     # 每次 connect() 都读环境变量
+    try:
+        conn = snapshot.connect(tmp)
+        rows = [dict(x) for x in conn.execute(
+            "SELECT rel_id, person_a, evidence_uid FROM relations "
+            "WHERE status='active' AND evidence_uid<>''")]
+        if not rows:
+            check("取到带证据的真实边", False)
+            return
+        backfilled = all(conn.execute(
+            "SELECT COUNT(*) FROM relation_evidence WHERE rel_id=? "
+            "AND evidence_uid=?", (r["rel_id"], r["evidence_uid"])
+        ).fetchone()[0] == 1 for r in rows)
+        check("主表的证据已回填进证据子表（老数据不用手工搬）", backfilled,
+              "{} 条".format(len(rows)))
+
+        r0 = rows[0]
+        extra = [r[0] for r in conn.execute(
+            "SELECT uid FROM sentences WHERE status='active' AND length(text)>12 "
+            "LIMIT 4")]
+        conn.execute(
+            "INSERT OR REPLACE INTO relation_evidence "
+            "(rel_id, evidence_uid, verdict, note, created_at) VALUES(?,?,'accept','','')",
+            (r0["rel_id"], extra[1]))
+        conn.execute(  # 被人工否掉的候选：留着免得下轮再抽，但**不能当证据**
+            "INSERT OR REPLACE INTO relation_evidence "
+            "(rel_id, evidence_uid, verdict, note, created_at) VALUES(?,?,'reject','','')",
+            (r0["rel_id"], extra[2]))
+        conn.commit()
+        conn.close()
+
+        g = db.relations_graph(r0["person_a"], 1)
+        e = next((x for x in g["edges"] if x["rel_id"] == r0["rel_id"]), None)
+        check("一条边能挂多条证据（evidences 全带回）",
+              e is not None and e["evidence_count"] == 2,
+              "{} 条".format(e["evidence_count"] if e else "缺"))
+        check("verdict=reject 的候选不算证据（只是留档）",
+              e is not None and all(x["uid"] != extra[2] for x in e["evidences"]))
+
+        # 主证据那句被弃用、但另一条出处还活着 → 这条关系**仍算有据**
+        conn = snapshot.connect(tmp)
+        conn.execute("UPDATE sentences SET status='dead' WHERE uid=?",
+                     (r0["evidence_uid"],))
+        conn.commit()
+        conn.close()
+        g = db.relations_graph(r0["person_a"], 1)
+        e2 = next((x for x in g["edges"] if x["rel_id"] == r0["rel_id"]), None)
+        check("主证据句被弃用、但另有出处 → 仍算有据（不是一刀切失效）",
+              e2 is not None and e2["evidence_valid"] == 1,
+              e2["evidence_state"] if e2 else "缺")
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                if os.path.exists(tmp + suffix):
+                    os.remove(tmp + suffix)
+            except OSError:
+                pass
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -494,7 +749,10 @@ def main() -> int:
         test_sentence_edits()
         test_relations()
         test_relation_evidence()
+        test_rel_view()
+        test_relation_evidence_multi()
     finally:
+        purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
         for suffix in ("", "-wal", "-shm"):
             if os.path.exists(tmpdb + suffix):

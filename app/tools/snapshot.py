@@ -41,8 +41,12 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-DB_PATH = os.path.join(ROOT, "data", "index", "index.db")
-SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
+# DB 路径认环境变量：断言要在**临时库副本**上做注入测试（docs/28 P0-5）。
+# 不认环境变量的话，「故意注入错误看断言变不变红」只能拿正式库冒险。
+DB_PATH = (os.environ.get("BOOKINDEX_DB")
+           or os.path.join(ROOT, "data", "index", "index.db"))
+SNAP_DB = (os.environ.get("BOOKINDEX_SNAP_DB")
+           or os.path.join(ROOT, "data", "index", "snapshots.db"))
 
 KEEP_DEFAULT = 5        # 保留最近幾份快照（每份約與命中數等行，別貪多）
 ITEMS_LIMIT = 20000     # diff_items 單次上限，超出只存彙總

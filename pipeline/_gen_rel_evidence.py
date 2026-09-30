@@ -86,27 +86,17 @@ def _pair_sentences(conn, pid_a: str, pid_b: str, limit: int = 6):
             for r in conn.execute(sql, (pid_a, pid_b, pid_a, pid_b, limit))]
 
 
-# ⚠️ 与 relations.REL_INVERSE **不是一回事**，别互相替代：
-#   REL_INVERSE 是「反向边」表（只覆盖有向边，用来禁止 (a,父,b)/(b,子,a) 双写）；
-#   CALL_INVERSE 是「称呼反向」表——句里写的是「a 之 X」，X 是 b 对 a 的称呼，
-#   对称边也需要它（边 (a,兄,b) 在句里写作「a 之弟」，兄→弟 不在 REL_INVERSE 里）。
-CALL_INVERSE = {
-    "父": "子", "子": "父", "母": "女", "女": "母",
-    "祖父": "孫", "孫": "祖父", "祖母": "孫女", "孫女": "祖母",
-    "伯叔": "姪", "姪": "伯叔", "姑": "姪", "舅": "甥", "姨": "甥",
-    "甥": "舅", "兄": "弟", "弟": "兄", "姊": "妹", "妹": "姊",
-    "夫": "妻", "妻": "夫", "養父": "子", "繼母": "子",
-}
-
-
 def score_sentence(text: str, names_a, names_b, rel: str):
     """给一句打分。返回 (score, signals)。
 
-    判据是「a 名之后紧跟着『之 X』」，X 必须是 **b 对 a 的称呼**（CALL_INVERSE）。
+    判据是「a 名之后紧跟着『之 X』」，X 必须是 **b 对 a 的称呼**（`relations.CALL_INVERSE`，
+    ⚠️ 不是 REL_INVERSE——那是反向边表，用来禁止双写）。
+    称呼带**性别变体**（父 → 子 / 女），两个都算命中：只认「子」会漏掉
+    「陳留董祀妻者，同郡蔡邕之女也」这种完美证据（docs/28 P1-2）。
     同句里若写的是「a 之父」而边是 (a,父,b)，那是 a 自己的父亲，**方向反了，不算**。
     句中谁先出现无所谓——古籍常写「b 者，a 之子也」。
     """
-    target = CALL_INVERSE.get(rel, "")
+    targets = R.CALL_INVERSE.get(rel, ())
     pa = pb = -1
     sa = sb = ""
     for na in names_a:
@@ -123,12 +113,14 @@ def score_sentence(text: str, names_a, names_b, rel: str):
         return 0, []
     signals = []
     tail = text[pa + len(sa): pa + len(sa) + 8]
-    i = text.find("之" + target) if target else -1
-    if i >= 0 and 0 <= i - (pa + len(sa)) <= 4:
-        return 5, ["「{a} 之{t}」＝{b} 对 {a} 的称呼，与边一致".format(
-            a=sa, t=target, b=sb)]
-    if target and target in tail:
-        return 3, ["{a} 名后紧接「{t}」（未带「之」）".format(a=sa, t=target)]
+    for target in targets:
+        i = text.find("之" + target)
+        if i >= 0 and 0 <= i - (pa + len(sa)) <= 4:
+            return 5, ["「{a} 之{t}」＝{b} 对 {a} 的称呼，与边一致".format(
+                a=sa, t=target, b=sb)]
+    for target in targets:
+        if target in tail:
+            return 3, ["{a} 名后紧接「{t}」（未带「之」）".format(a=sa, t=target)]
     gap = abs(pb - (pa + len(sa)))
     if rel in tail:
         signals.append("注意：附近有「{}」，方向可能是反的".format(rel))
