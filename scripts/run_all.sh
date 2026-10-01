@@ -104,9 +104,26 @@ run_step() {
   return 0
 }
 
-# ---------- 1-2：Python 侧 ----------
+# ---------- 0：前置检查 ----------
+# verify_p3 里跑 rebuild.py 会**删库重建**；Windows 上 SQLite 被本地服务占着就删不掉，
+# 退出码 1 但报错是 safe-delete 的，看不出真实原因。与其跑三分钟才红，不如开头说清楚。
+# ⚠️ --noproxy 必须有：本机配了代理，curl 走代理会得到「upstream connect failed」假失败。
+if curl -sf -o /dev/null --max-time 2 --noproxy '*' "http://127.0.0.1:8800/health" 2>/dev/null; then
+  echo "" >&2
+  echo "× 本地服务仍占着 index.db（127.0.0.1:8800 在跑）。" >&2
+  echo "  一键回归会删库重建，Windows 上必然失败。请先停掉它：" >&2
+  echo "    netstat -ano | findstr :8800   然后停掉对应 PID" >&2
+  exit 2
+fi
+
+# ---------- 1-3：Python 侧 ----------
 run_step "数据断言 verify.py --check" "$PY" pipeline/verify.py --check
 run_step "字面层守卫 check_trad.py（A–G 七道闸）" "$PY" pipeline/check_trad.py
+# ⚠️ verify_p3 是 P3–P6 新链路的 56 条断言（快照 / overrides / 句级编辑 / 关系 / 证据），
+# 它跟 verify.py 是**两套**，不接进来就等于这 56 条从来没自动跑过（约 2 分钟）。
+run_step "新链路断言 app/tools/verify_p3.py" "$PY" app/tools/verify_p3.py
+# 权威源体检放在 verify_p3 之后：它要拿重建后的库判「证据句是否已失效」。
+run_step "关系权威源体检 relations.py check" "$PY" pipeline/relations.py check
 
 # ---------- 3：无头 UI ----------
 SERVER_PID=""

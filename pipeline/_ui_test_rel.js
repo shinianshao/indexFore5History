@@ -60,8 +60,19 @@ async function waitFor(dom, fn, ms = 8000) {
       svg.querySelectorAll(".rel-node").length + " 个");
     ok("图里有边", edges.length >= 1, edges.length + " 条");
     ok("中心节点标了 is-center", !!svg.querySelector(".rel-node.is-center"));
+    // ⚠️ 别写成「所有边都是 weak」：那等于假设刘邦**一条证据都没有**，
+    // 补证据之后他有三条实线边，断言就红了（2026-10-01 踩到）。
+    // 真正要断的是**没有证据的边必须画虚线**——有没有 uid 就是有没有证据。
     ok("无证据的边一律画成 weak（虚线）",
-      edges.length > 0 && [...edges].every((e) => e.classList.contains("weak")));
+      edges.length > 0 &&
+      [...edges].every((e) => e.classList.contains("weak") ||
+        !!e.getAttribute("data-uid")));
+    const weakN = [...edges].filter((e) => e.classList.contains("weak")).length;
+    if (weakN && weakN < edges.length) {
+      ok("虚实线并存时，实线都带证据 uid（不会指到空句）",
+        [...edges].filter((e) => !e.classList.contains("weak"))
+          .every((e) => !!e.getAttribute("data-uid")));
+    }
     const vb = svg.getAttribute("viewBox");
     ok("viewBox 有尺寸（不会塌成 0 高）", /^0 0 \d+ \d+$/.test(vb || ""), vb);
   }

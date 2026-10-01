@@ -47,6 +47,7 @@ import relations as R                        # noqa: E402
 
 DB_PATH = os.path.join(ROOT, "data", "index", "index.db")
 OUT_JSON = os.path.join(HERE, "_rel_evidence.json")
+VERDICTS = os.path.join(HERE, "_rel_evidence_verdicts.json")
 OUT_MD = os.path.join(ROOT, "docs", "27-关系证据待判.md")
 AUTO_MIN = 5          # 自动落盘的分数门槛
 
@@ -135,6 +136,20 @@ def build() -> dict:
     todo = [r for r in rows
             if (r.get("状态(status)") or "active") == "active"
             and not (r.get("证据uid") or "")]
+    # ⚠️ **判过的不再进清单**（含判「否」的）。不这么做就会出这种事：
+    # 判定完 27 条，重跑生成器清单还是 59 行——人第二次打开以为一条都没判，
+    # 于是重判一遍。判定只认 verdicts 文件里有没有这个 rel_id（`_` 开头的是说明键）。
+    done = set()
+    if os.path.exists(VERDICTS):
+        try:
+            with open(VERDICTS, encoding="utf-8") as f:
+                done = {k for k in json.load(f) if not k.startswith("_")}
+        except ValueError:
+            done = set()
+    skipped = sum(1 for r in todo if r["rel_id"] in done)
+    if skipped:
+        print("已判定（不再列）：{} 条".format(skipped))
+    todo = [r for r in todo if r["rel_id"] not in done]
     items = []
     for r in todo:
         a, b, rel = r["person_a"], r["person_b"], r["关系(rel)"]

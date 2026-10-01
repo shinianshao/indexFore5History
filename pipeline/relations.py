@@ -565,7 +565,11 @@ def main() -> int:
     sub.add_parser("apply", help="灌入 index.db").set_defaults(func=cmd_apply)
 
     args = ap.parse_args()
-    args.func(args)
+    rc = args.func(args)
+    # ⚠️ 只有 check 的返回值是「问题条数」，必须变成退出码，否则一键回归恒绿。
+    # 其它子命令返回的是「灌入条数」之类的计数，不能当退出码用（apply 返回 62 会被当成失败）。
+    if getattr(args, "cmd", "") == "check" and rc:
+        return 1
     return 0
 
 

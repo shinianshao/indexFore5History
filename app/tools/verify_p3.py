@@ -745,25 +745,33 @@ def test_relation_evidence_multi() -> None:
               "{} 条".format(len(rows)))
 
         r0 = rows[0]
+        # ⚠️ 别假设这条真实边**只有一条**证据：补证据之后 `rows[0]` 可能已经挂了
+        # 2 条（2026-10-01 就是这样，于是期望值写死 2 就红了）。
+        # 期望 = 原有条数 + 本次新增 1 条；候选句也要先排除已挂的，
+        # 否则 INSERT OR REPLACE 会把已有行覆盖掉，条数不增。
+        have = {r[0] for r in conn.execute(
+            "SELECT evidence_uid FROM relation_evidence WHERE rel_id=?",
+            (r0["rel_id"],))}
         extra = [r[0] for r in conn.execute(
             "SELECT uid FROM sentences WHERE status='active' AND length(text)>12 "
-            "LIMIT 4")]
+            "LIMIT 12") if r[0] not in have]
         conn.execute(
             "INSERT OR REPLACE INTO relation_evidence "
             "(rel_id, evidence_uid, verdict, note, created_at) VALUES(?,?,'accept','','')",
-            (r0["rel_id"], extra[1]))
+            (r0["rel_id"], extra[0]))
         conn.execute(  # 被人工否掉的候选：留着免得下轮再抽，但**不能当证据**
             "INSERT OR REPLACE INTO relation_evidence "
             "(rel_id, evidence_uid, verdict, note, created_at) VALUES(?,?,'reject','','')",
-            (r0["rel_id"], extra[2]))
+            (r0["rel_id"], extra[1]))
         conn.commit()
         conn.close()
 
         g = db.relations_graph(r0["person_a"], 1)
         e = next((x for x in g["edges"] if x["rel_id"] == r0["rel_id"]), None)
         check("一条边能挂多条证据（evidences 全带回）",
-              e is not None and e["evidence_count"] == 2,
-              "{} 条".format(e["evidence_count"] if e else "缺"))
+              e is not None and e["evidence_count"] == len(have) + 1,
+              "{} 条（原 {} + 新 1）".format(
+                  e["evidence_count"] if e else "缺", len(have)))
         check("verdict=reject 的候选不算证据（只是留档）",
               e is not None and all(x["uid"] != extra[2] for x in e["evidences"]))
 
@@ -787,6 +795,57 @@ def test_relation_evidence_multi() -> None:
                 pass
 
 
+def test_relation_evidence_quality() -> None:
+    """证据落盘之后的两条不变量（2026-10-01 补证据那批之后立）。
+
+    补证据是**加数据**，不是修 bug，所以断言不能写死「有据边 N 条」——
+    人撤一条就红了，那是假失败。要断的是**性质**：
+
+    1. 置信度是**派生的**（source + 有无证据）。`workbook/relations.xlsx` 里
+       那列人能改，万一有人把它写死，派生规则就被绕过，图上的实线/虚线
+       会跟证据脱钩。断：同来源下，有据边的置信度必须**严格高于**无据边。
+    2. 落库的证据句必须是**活跃句**。指向 dead/merged 句的证据等于假证据，
+       `relations.py check` 也查，但那是权威源侧的；这里断的是**库里**的最终态。
+    """
+    print("\n[11] 關係證據的兩條不變量（補證據之後）")
+    conn = snapshot.connect(snapshot.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT rel_id, source, confidence, evidence_uid "
+            "FROM relations WHERE status='active'")]
+        ev = {r[0] for r in conn.execute(
+            "SELECT rel_id FROM relation_evidence WHERE verdict<>'reject'")}
+        by_src = {}
+        for r in rows:
+            has = bool(r["evidence_uid"]) or r["rel_id"] in ev
+            by_src.setdefault(r["source"], {}).setdefault(has, []).append(
+                r["confidence"] or 0)
+        bad = []
+        for src, d in by_src.items():
+            if True in d and False in d:
+                if max(d[False]) >= min(d[True]):
+                    bad.append("{}：无据 {} ≥ 有据 {}".format(
+                        src, max(d[False]), min(d[True])))
+        check("有据边的置信度严格高于无据边（派生规则没被手改绕过）",
+              not bad, "；".join(bad))
+
+        uids = [r["evidence_uid"] for r in rows if r["evidence_uid"]]
+        uids += [r[0] for r in conn.execute(
+            "SELECT evidence_uid FROM relation_evidence WHERE verdict<>'reject'")]
+        if not uids:
+            check("落库的证据句都是活跃句", False, "一条证据都没有")
+            return
+        ph = ",".join("?" * len(uids))
+        dead = [r[0] for r in conn.execute(
+            "SELECT uid FROM sentences WHERE uid IN ({}) AND status<>'active'"
+            .format(ph), uids)]
+        check("落库的证据句都是活跃句（没有假证据）", not dead,
+              "失效：{}".format("、".join(dead[:4])))
+    finally:
+        conn.close()
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -802,6 +861,7 @@ def main() -> int:
         test_relation_evidence()
         test_rel_view()
         test_relation_evidence_multi()
+        test_relation_evidence_quality()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")

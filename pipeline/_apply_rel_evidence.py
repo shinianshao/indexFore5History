@@ -43,9 +43,12 @@ EVI_JSON = os.path.join(HERE, "_rel_evidence.json")
 VERDICTS = os.path.join(HERE, "_rel_evidence_verdicts.json")
 DB_PATH = os.path.join(ROOT, "data", "index", "index.db")
 AUTO_MIN = 5
-# 置信度是**派生的**（source + 有无证据），写进表也没人读（docs/28 P2-1），
-# 写了还会在 `relations.py check` 里报「派生列分歧」，所以这里不碰它。
-WRITABLE = ("证据uid", "证据原文", "备注(note)")
+# 置信度是**派生的**（source + 有无证据）。这里照写不误，但值取自 `derive_confidence`，
+# 不是人拍的——不写反而更糟：证据一落，表里那列就停在旧值，`relations.py check`
+# 会报几十条「派生列分歧」，把真正的**手改**淹没在噪声里（2026-10-01 补证据时
+# 一次性冒出 27 条，全是自己造的）。写派生值不违反红线：权威源仍以代码为准，
+# 人若手改，check 照样报出来。
+WRITABLE = ("证据uid", "证据原文", "备注(note)", "置信度(confidence)")
 
 
 def _sentence_text(uid: str) -> str:
@@ -149,7 +152,8 @@ def plan():
     return out, skipped
 
 
-MAIN_MAP = {"证据uid": "uid", "证据原文": "text", "备注(note)": "note"}
+MAIN_MAP = {"证据uid": "uid", "证据原文": "text", "备注(note)": "note",
+            "置信度(confidence)": "conf"}
 
 
 def apply(plans) -> None:
