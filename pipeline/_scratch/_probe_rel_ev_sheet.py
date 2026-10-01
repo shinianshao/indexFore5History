@@ -24,12 +24,18 @@ EVI_JSON = os.path.join(ROOT, "pipeline", "_rel_evidence.json")
 DB = os.path.join(ROOT, "data", "index", "index.db")
 
 
+CASES: list = []          # 给判定用例留的钩子，见 main() 末尾
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only-cands", action="store_true", help="只列取证器找到候选句的")
     ap.add_argument("--max-cands", type=int, default=3)
     ap.add_argument("--out", default="")
+    ap.add_argument("--cases", action="store_true", help="只列『每个本人名下的所有待判边』")
     a = ap.parse_args()
+    if a.cases:
+        return _cases()
 
     with open(EVI_JSON, encoding="utf-8") as f:
         items = json.load(f)["items"]
@@ -72,6 +78,40 @@ def main() -> int:
         print("已写 {}（{} 条）".format(a.out, n))
     else:
         print(out)
+    return 0
+
+
+def _cases() -> int:
+    """按「本人」归并，列出该人**所有**待判的边。
+
+    为什么要这么列：一个人常同时缺好几条边（驪姬 缺 母→奚齊 与 夫→晉獻公），
+    而 `docs/27` 是按边排的、有候选句的才列。要一眼看出谁还没齐，只能按人归。
+    """
+    evj = os.path.join(ROOT, "pipeline", "_rel_evidence.json")
+    with open(evj, encoding="utf-8") as f:
+        items = json.load(f)["items"]
+    conn = sqlite3.connect(DB)
+    conn.row_factory = sqlite3.Row
+    nm = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM persons")}
+    ev = {r[0] for r in conn.execute(
+        "SELECT rel_id FROM relations WHERE status='active' AND evidence_uid<>''")}
+    ev |= {r[0] for r in conn.execute(
+        "SELECT rel_id FROM relation_evidence WHERE verdict<>'reject'")}
+    by: dict = {}
+    import re as _re
+    for it in items:
+        raw = it.get("_raw") or ""
+        cands = it.get("cands") or []
+        hit = "有候选句" if cands else "语料无共现"
+        rec = "{} —{}→ {}（{}）".format(
+            it["name_a"], it["rel"], it["name_b"], hit)
+        if it["rel_id"] not in ev:
+            by.setdefault(it["name_a"], []).append(rec)
+    for who in sorted(by, key=lambda k: -len(by[k])):
+        print("【{}】缺 {} 条".format(who, len(by[who])))
+        for x in by[who]:
+            print("    ", x)
+    print("\n共 {} 人 / {} 条边".format(len(by), sum(len(v) for v in by.values())))
     return 0
 
 

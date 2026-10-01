@@ -25,6 +25,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+from relations import looks_female as LOOKS_FEMALE   # noqa: E402
 BOOK = os.path.join(ROOT, "data", "index", "book-data.json")
 OUT = os.path.join(HERE, "_rel_batch.json")
 
@@ -88,16 +90,39 @@ def main() -> int:
         for m in PAT_ZHI.finditer(s):
             raw_name, word = m.group(1), m.group(2)
             rel, direction = REL_WORDS[word]
-            # 「劉邦與呂后之子」→ 拆成两个人，分别出候选
+            # 「劉邦與呂后之子」→ 拆成两个人，分别出候选。
+            # ⚠️ 但**并列的两个名字不能都套同一个 rel**（docs/28 §2.2 P0-2）：
+            # 「子」在 REL_WORDS 里是 ("父", +1)，不区分性别，于是母亲也拿到「父」——
+            # 页面上出现过「呂后 父 劉盈」「驪姬 父 奚齊」，等于**给女性标了父亲的头衔**。
+            # 拆出多个名字时，用**各人自己的性别**决定 父/母；判不出来就只落
+            # 「与本人（self）同姓**或**无争议」的那一端，另一端直接丢弃（不猜）。
             parts = [x for x in re.split(r"[與及、]", raw_name) if len(x) >= 2]
-            for part in parts or [raw_name]:
+            if len(parts) > 1 and word in ("子", "女"):
+                fixed = []
+                for part in parts:
+                    pids_ = resolve(idx, part)
+                    if not pids_:
+                        fixed.append((part, rel))        # 解析不出，交给后面的名单逻辑
+                        continue
+                    # 该候选人的性别：用库里那个人的 name/trad_name/title 判。
+                    # 同名异人取「至少有一个像女性」——这里只影响称谓，
+                    # 判错也只是「父」写成「母」，比原来「女性落父」后果小。
+                    p_obj = by_id.get(pids_[0], {})
+                    fem = any(LOOKS_FEMALE(by_id.get(q, {}).get("name", ""),
+                                           by_id.get(q, {}).get("tradName", ""),
+                                           by_id.get(q, {}).get("title") or "")
+                              for q in pids_)
+                    fixed.append((part, "母" if fem else rel))
+            else:
+                fixed = [(p, rel) for p in (parts or [raw_name])]
+            for part, rel_use in fixed:
                 if len(part) > 8:            # 太长多半不是人名
                     continue
                 pids = resolve(idx, part)
                 cands.append({
                     "self_pid": self_pid, "self_name": self_name,
                     "other_name": part, "other_pids": pids,
-                    "rel": rel, "direction": direction,
+                    "rel": rel_use, "direction": direction,
                     "pattern": "之",
                     "raw": m.group(0), "summary": s,
                     "ai": None,
