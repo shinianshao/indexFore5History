@@ -61,6 +61,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const doc = window.document;
   const click = (el) => el.dispatchEvent(new window.MouseEvent("click", { bubbles: true }));
   const out = doc.getElementById("out");
+  const rbody = doc.getElementById("readerBody");   // 原文層，不在 #out 裡
   const q = doc.getElementById("q");
   const bookbar = doc.getElementById("books");
   const quick = doc.getElementById("quick");
@@ -197,6 +198,127 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     doc.querySelectorAll("#readerBody .acts button").length === 0,
     "实得 " + doc.querySelectorAll("#readerBody .acts button").length + " 个");
   ok("重建按钮隐藏", doc.getElementById("btnRebuild").hidden === true);
+
+  /* ---- 跳段 + 只看相关段落（docs/30 §五 第 3 项）----
+     两者都是纯前端，数据来自 /api/chapter 已有的 para_seq。 */
+  const jumpBox = doc.getElementById("jumpBox");
+  const jumpInput = doc.getElementById("jumpInput");
+  const jumpTotal = doc.getElementById("jumpTotal");
+  ok("原文层有跳段控件（段号输入 + 總段數）",
+    !!jumpBox && !!jumpInput && !!jumpTotal,
+    "jumpBox=" + !!jumpBox);
+  // 短篇（<40 段）应当隐藏跳段控件：加了是噪声
+  const paraCount = (() => {
+    const seen = new Set();
+    rbody.querySelectorAll("p[data-para]").forEach(p => {
+      if (p.getAttribute("data-para")) seen.add(p.getAttribute("data-para"));
+    });
+    return seen.size;
+  })();
+  ok("每段带 data-para（跳段的定位依据）", paraCount > 0, "段数 " + paraCount);
+  ok("短篇不显示跳段控件（<40 段不加噪声）",
+    paraCount >= 40 ? jumpBox.hidden === false : jumpBox.hidden === true,
+    "段数 " + paraCount + " hidden=" + jumpBox.hidden);
+  ok("總段數與實際段數一致",
+    (jumpTotal.textContent || "").indexOf("/ " + paraCount + " 段") >= 0,
+    "显示「" + jumpTotal.textContent + "」，实际 " + paraCount + " 段");
+
+  // 跳段必須在**長篇**上測：短篇（<40 段）控件本來就隱藏，測它等於沒測。
+  // 找段數最多的那一篇（hs-020 五行志下 929 段）—— 從篇目索引裡找。
+  const chaps = [...out.querySelectorAll(".chap-row[data-chapter]")];
+  ok("篇目索引有可點的篇目行（準備測長篇跳段）", chaps.length > 0,
+    "實得 " + chaps.length + " 篇");
+  let longChap = null;
+  for (const cr of chaps) {
+    const cid = cr.getAttribute("data-chapter");
+    // 直接讀離線數據算段數：app.js 裡的 offChapter 是私有函數，拿不到。
+    // 這也順帶驗了 dist 裡 sents 的第 4 位（段號）真的在。
+    const c = window.BOOKINDEX_DATA.chaps[cid];
+    if (!c) continue;
+    const n = new Set();
+    for (let i = c[2]; i < c[3]; i++) {
+      const para = window.BOOKINDEX_DATA.sents[i][3];
+      if (para != null) n.add(para);
+    }
+    if (n.size >= 40) { longChap = { node: cr, cid, n: n.size }; break; }
+  }
+  ok("能找���一段 ≥40 段的長篇（跳段控件的前提）", !!longChap,
+    longChap ? longChap.cid + " 有 " + longChap.n + " 段" : "沒有");
+  if (longChap) {
+    click(longChap.node);
+    await waitFor(() => doc.getElementById("reader").classList.contains("on"), 60000);
+    await waitFor(() => rbody.querySelectorAll("p[data-para]").length > 0, 30000);
+    ok("長篇裡跳段控件可見", jumpBox.hidden === false);
+    const longN = new Set([...rbody.querySelectorAll("p[data-para]")]
+      .map(x => x.getAttribute("data-para"))).size;
+    ok("長篇的實際段數與控件顯示的一致",
+      (jumpTotal.textContent || "").indexOf("/ " + longN + " 段") >= 0,
+      "顯示「" + jumpTotal.textContent + "」/ 實際 " + longN);
+    const beforeT = rbody.querySelectorAll("p.target").length;
+    jumpInput.value = "3";
+    doc.querySelector('.reader-head button[data-act="jump"]').click();
+    const gotT = await waitFor(
+      () => rbody.querySelectorAll("p.target").length > beforeT, 5000);
+    ok("填段号能跳到该段并标记 target", gotT,
+      "target 数 " + rbody.querySelectorAll("p.target").length);
+    // 越界段號要有反饋（靜默無反應是最難查的一類壞）
+    jumpInput.value = "99999";
+    doc.querySelector('.reader-head button[data-act="jump"]').click();
+    ok("段号越界会提示（不静默无反应）",
+      (jumpInput.placeholder || "").indexOf("超出") >= 0,
+      "placeholder=" + jumpInput.placeholder);
+    jumpInput.placeholder = "段號";
+  }
+
+  /* 「只看相關段落」：要 currentPid，所以路徑是
+     人物索引（.item[data-name]）→ 點人名填檢索框 → 搜索結果（.row[data-pid]）
+     → 點進人物頁 → 點命中句 → 開原文層。
+     ⚠️ 人物索引的條目**不是** .row[data-pid]（那是搜索結果行）——
+     一開始寫錯了這裡，症狀是「等不到行」而不是報錯。 */
+  click(tab("persons"));
+  const gotItems = await waitFor(
+    () => out.querySelectorAll(".item[data-name]").length > 0, 60000);
+  ok("人物索引有人名可點（準備驗證段落篩選）", gotItems,
+    "實得 " + out.querySelectorAll(".item[data-name]").length + " 人");
+  const pitem = out.querySelector(".item[data-name]");
+  if (pitem) {
+    click(pitem);
+    const gotRow = await waitFor(
+      () => out.querySelectorAll(".row[data-pid]").length > 0, 60000);
+    ok("點人名後出搜索結果行", gotRow,
+      "實得 " + out.querySelectorAll(".row[data-pid]").length + " 行");
+    click(out.querySelector(".row[data-pid]"));
+    const onPerson = await waitFor(
+      () => out.querySelectorAll(".sent[data-chapter]").length > 0, 60000);
+    ok("人物頁有命中可點", onPerson,
+      "命中行 " + out.querySelectorAll(".sent[data-chapter]").length);
+    const sent = out.querySelector(".sent[data-chapter]");
+    if (sent) {
+      click(sent);
+      await waitFor(
+        () => doc.getElementById("reader").classList.contains("on"), 60000);
+      const allPs = rbody.querySelectorAll("p[data-uid]").length;
+      const btnHits = doc.getElementById("btnHits");
+      ok("從人物頁進原文層時有「只看相關段落」按鈕",
+        btnHits && btnHits.hidden === false);
+      if (btnHits && btnHits.hidden === false) {
+        click(btnHits);
+        const hitPs = rbody.querySelectorAll("p[data-uid]").length;
+        ok("開啟「只看相關段落」後句子變少（篩選生效）",
+          hitPs > 0 && hitPs < allPs,
+          "全部 " + allPs + " → 篩選 " + hitPs);
+        ok("篩選後的句子都帶 hitpara 標記",
+          hitPs > 0 &&
+          rbody.querySelectorAll("p.hitpara").length === hitPs,
+          "hitpara " + rbody.querySelectorAll("p.hitpara").length +
+          " / 篩選後 " + hitPs);
+        click(btnHits);
+        const backAll = rbody.querySelectorAll("p[data-uid]").length;
+        ok("再點一次恢復全部段落", backAll === allPs,
+          "全部 " + allPs + " → 恢復 " + backAll);
+      }
+    }
+  }
 
   console.log("\n【8】无 JS 报错");
   ok("全程无 JS 报错（误用 fetch 会在这里红）", errs.length === 0,

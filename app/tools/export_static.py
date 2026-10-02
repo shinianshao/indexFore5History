@@ -65,20 +65,26 @@ REL_CONFS = (0.0, 0.5)
 # ---------------------------------------------------------------- 取數
 
 def _sentences() -> list:
-    """全庫句子，按（篇, 段, 句）排好序，只存 [uid, 篇號, 正文]。"""
+    """全庫句子，按（篇, 段, 句）排好序，存 [uid, 篇號, 正文, 段號]。
+
+    ⚠️ 段號（para_seq）是 2026-10-02 為「原文層跳段」加的第 4 位。
+    為什麼要存而不是讓前端推：段界不等於句界（一句可跨段、一段可多句），
+    前端拿不到段信息就只能靠猜——而**離線版沒有 db 可查**，猜不出來。
+    體積代價：96,336 個小整數，JSON 裡約 0.3MB，可忽略。
+    """
     rows = []
     with db.connect() as c:
-        for uid, cid, text in c.execute(
-                "SELECT uid, chapter_id, text FROM sentences "
+        for uid, cid, text, para in c.execute(
+                "SELECT uid, chapter_id, text, para_seq FROM sentences "
                 "ORDER BY chapter_id, para_seq, seq"):
-            rows.append([uid, cid, text or ""])
+            rows.append([uid, cid, text or "", para])
     return rows
 
 
 def _chapters(sents: list) -> dict:
     """篇 → [全名, 書號, 起始下標, 結束下標)（sents 裡同一篇是連續區間）。"""
     spans = {}
-    for i, (_uid, cid, _t) in enumerate(sents):
+    for i, (_uid, cid, _t, _para) in enumerate(sents):
         a, b = spans.get(cid, (i, i + 1))
         spans[cid] = (a if a < i else i, b if b > i + 1 else i + 1)
     out = {}
@@ -198,7 +204,7 @@ def build() -> dict:
             "索引庫不存在：{}\n先跑：python app/tools/rebuild.py".format(db.db_path()))
 
     sents = step("句子", _sentences)
-    uid2i = {u: i for i, (u, _c, _t) in enumerate(sents)}
+    uid2i = {u: i for i, (u, _c, _t, _para) in enumerate(sents)}
     chaps = step("篇目", _chapters, sents)
     pers = step("人物", _persons)
     pm = step("命中", _mentions, uid2i)
@@ -282,7 +288,7 @@ def dump_js(data: dict) -> str:
             " * 句子 %s / 篇 %s / 人 %s / 地 %s / 命中 %s / 關係 %s\n"
             " *\n"
             " * 緊湊格式（省體積，由 app/web/app.js 的離線層還原成前端要的形狀）：\n"
-            " *   sents[i] = [uid, 篇號, 正文]      —— 全庫句子只存一份，按下標引用\n"
+            " *   sents[i] = [uid, 篇號, 正文, 段號]  —— 全庫句子只存一份，按下標引用\n"
             " *   chaps[cid] = [全名, 書號, 起始, 結束)\n"
             " *   pers[pid]  = [繁名, 簡名, 朝代, 頭銜, 簡介, [別名…]]\n"
             " *   pm[pid]    = [[句下標, 表面詞, s, e, tier], …]\n"
@@ -375,6 +381,37 @@ def verify() -> int:
         print("× 收窄不等價：db._narrow 的假設破了，導出不能再走快路徑")
         return 1
     print("✓ 六個書作用域 × 人物/地名：收窄與重查完全等價")
+
+    # ---- sents 的數據形狀契約 ----
+    # 2026-10-02 加段號（[uid, 篇號, 正文, para_seq]）時踩過：改了形狀，
+    # export 裡有**三處** enumerate(sents) 要跟著改，漏了兩處 →
+    # ValueError 在導出中途炸，dist/ 留著上一次的舊檔（還能打開，更難發現）。
+    # 這條斷言專盯「形狀」：只要有人再往 sents 裡加/減位，前端就會拿到
+    # undefined 的段號，跳段功能**靜默失效**（不報錯，只是跳不動）。
+    sents = _sentences()
+    widths = {len(r) for r in sents}
+    if widths != {4}:
+        print("× sents 的形狀不對：應為 4 位 [uid, 篇號, 正文, 段號]，"
+              "實得寬度 {}".format(sorted(widths)))
+        return 1
+    with db.connect() as c:
+        db_max = c.execute(
+            "SELECT MAX(para_seq), COUNT(*) FROM sentences").fetchone()
+    n_para = sum(1 for r in sents if r[3] is not None)
+    if db_max[0] and n_para != db_max[1]:
+        print("× 有句缺段號：{} / {}（前端跳段會對不上位置）".format(
+            n_para, db_max[1]))
+        return 1
+    # 段號必須**在每篇內單調遞增**（前端按 sents 順序渲染，靠它算段界）
+    last: dict = {}
+    for _u, cid, _t, para in sents:
+        if para is None:
+            continue
+        if cid in last and para < last[cid]:
+            print("× 段號在篇 {} 內倒退：{} < {}".format(cid, para, last[cid]))
+            return 1
+        last[cid] = para
+    print("✓ sents 形狀 4 位、段號齊全、篇內單調遞增（{} 句）".format(len(sents)))
     return 0
 
 

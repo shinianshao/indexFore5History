@@ -289,8 +289,18 @@
     color: var(--accent); margin-left: 8px;
   }
   .reader-head .edstat { font-size: 12px; color: var(--accent); margin-right: auto; }
-  .reader-head .head-acts { display: flex; gap: 6px; }
+  .reader-head .head-acts { display: flex; gap: 6px; align-items: center; }
   .reader-head button[hidden] { display: none; }
+  /* 跳段：段號輸入 + 總段數。只在長篇（> 40 段）出現，短篇加了是噪聲 */
+  .reader-head .jumpbox { display: flex; gap: 4px; align-items: center; }
+  .reader-head .jumpbox[hidden] { display: none; }
+  .reader-head .jumpbox input {
+    width: 64px; font-size: 13px; padding: 5px 8px; text-align: right;
+    font-family: var(--mono);
+  }
+  .reader-head .jump-total { font-size: 12px; color: var(--muted); }
+  /* 「只看相關段落」開啟時的正文底色，與 target（定位命中）區分開 */
+  .reader-body p.hitpara { background: var(--accent-soft); }
 
   .reader-body { flex: 1; overflow-y: auto; padding: 16px 20px 40px; }
   .reader-body p {
@@ -342,6 +352,12 @@
       <span class="t" id="readerTitle"></span>
       <span class="edstat" id="edstat" hidden></span>
       <span class="head-acts">
+        <span class="jumpbox" id="jumpBox" hidden>
+          <input type="number" id="jumpInput" min="1" step="1" placeholder="段號">
+          <span class="jump-total" id="jumpTotal"></span>
+          <button data-act="jump">跳段</button>
+        </span>
+        <button data-act="hits" id="btnHits" hidden>只看相關段落</button>
         <button id="btnRebuild" hidden>重建</button>
         <button data-act="close">關閉</button>
       </span>

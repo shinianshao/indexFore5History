@@ -17,6 +17,11 @@
   var mode = "person";                    // person | fts
   var currentPid = null;
   var lastQuery = "";
+  // 原文層狀態。聲明放在這裡（而不是用它的函數附近），
+  // 因為 renderPerson 在上面就會寫 hitUids —— 分散聲明只靠 var 提升才不出錯，
+  // 順序一變就變成 undefined。
+  var readerState = { sents: [], pid: null, hitsOnly: false, hitUids: null,
+                      targetUid: null };
 
   /* ---------- 離線快照（dist/）----------
      同一份 app.js 同時服務「聯機 FastAPI 版」與「離線靜態版 dist/」：
@@ -41,7 +46,10 @@
     var rows = [];
     for (var i = c[2]; i < c[3]; i++) {
       var s = D.sents[i];
-      rows.push({ uid: s[0], chapter_id: cid, text: s[2] });
+      // s[3] 是段號（para_seq）——原文層的「跳段」靠它。
+      // ⚠️ 與聯機版 /api/chapter 保持**同一個字段名**（para_seq）：
+      // 離線與聯機的響應體必須同構，否則同一段渲染代碼要寫兩套。
+      rows.push({ uid: s[0], chapter_id: cid, text: s[2], para_seq: s[3] });
     }
     return { chapter: { id: cid, full_title: c[0], book_id: c[1] }, sentences: rows };
   }
@@ -206,6 +214,13 @@
   function renderPerson(pid) {
     return request("/api/person/" + encodeURIComponent(pid)).then(function (d) {
       var p = d.profile;
+      // 記住這個人的命中 uid —— 原文層的「只看相關段落」靠它。
+      // ⚠️ mentions 有 limit（默認 200），**只覆蓋前 N 條**。所以篩選是
+      // 「本頁已加載的命中」，不是全集；命中太多時人物頁本身也只顯示前 N，
+      // 兩者口徑一致，不會出現「原文層說沒有、人物頁說有」的自相矛盾。
+      var uids = {};
+      (d.mentions || []).forEach(function (m) { if (m.uid) uids[m.uid] = 1; });
+      readerState.hitUids = uids;
       var html = "<div class=\"card\">" +
         "<div class=\"person-head\"><span class=\"name\">" + esc(p.trad_name) + "</span>" +
         "<span class=\"dyn\">" + esc(p.dynasty || "") +
@@ -221,8 +236,7 @@
       // 命中按篇分組
       var groups = [], byId = {};
       (d.mentions || []).forEach(function (m) {
-        var key = m.chapter_id;
-        if (!byId[key]) { byId[key] = { title: m.chapter, rows: [] }; groups.push(byId[key]); }
+        var key = m.chapter_id;        if (!byId[key]) { byId[key] = { title: m.chapter, rows: [] }; groups.push(byId[key]); }
         byId[key].rows.push(m);
       });
       if (!groups.length) {
@@ -284,6 +298,69 @@
   var btnRebuild = document.getElementById("btnRebuild");
   var pending = {};        // uid → action
   var readerCid = null;
+
+  /* ---------- 原文層的跳段與段落篩選（對齊靜態版）----------
+     兩件事，都是純前端：
+       跳段        —— 長篇（如《十二諸侯年表》幾千段）能直接定位到第 N 段
+       只看相關段落 —— 只留下與當前這個人有關的段落，讀長篇時的救命功能
+     數據都已經在 /api/chapter 回來裡（sentences 帶 para_seq），不需要後端改。 */
+  var jumpBox = document.getElementById("jumpBox");
+  var jumpInput = document.getElementById("jumpInput");
+  var jumpTotal = document.getElementById("jumpTotal");
+  var btnHits = document.getElementById("btnHits");
+  var JUMP_MIN = 40;        // 少於這麼段就不顯示跳段控件（加了是噪聲）
+
+  function paraCount() {
+    var seen = {}, n = 0;
+    (readerState.sents || []).forEach(function (s) {
+      if (s.para_seq != null && !seen[s.para_seq]) { seen[s.para_seq] = 1; n++; }
+    });
+    return n;
+  }
+
+  /* 與當前 pid 有命中的段落號集合。
+     ⚠️ 命中資訊**不從 /api/chapter 拿**（那会让 564 篇每篇都带上全部 marks，
+     payload 翻十几倍）。人物頁渲染時已經拿到這個人的 mentions（帶 uid），
+     在這裡把 uid 記進 readerState.hitUids，開篩選時才反查段落——
+     數據來源是同一份，沒有第二個真相。 */
+  function hitParas() {
+    var out = {};
+    if (!readerState.pid) return out;
+    var uids = readerState.hitUids;
+    (readerState.sents || []).forEach(function (s) {
+      if (!uids) return;                    // 沒數據 → 不篩（寧可全顯示）
+      if (uids[s.uid]) out[s.para_seq] = 1;
+    });
+    return out;
+  }
+
+  function renderReader() {
+    var hp = readerState.hitsOnly ? hitParas() : null;
+    readerBody.innerHTML = renderParagraphs(readerState.sents, readerState.targetUid, hp);
+    var total = paraCount();
+    jumpBox.hidden = total < JUMP_MIN;
+    jumpTotal.textContent = total ? " / " + total + " 段" : "";
+    btnHits.hidden = !readerState.pid;
+    btnHits.classList.toggle("on", !!readerState.hitsOnly);
+    btnHits.textContent = readerState.hitsOnly ? "顯示全部段落" : "只看相關段落";
+  }
+
+  function jumpToPara(pno) {
+    // 段號不在「只看相關」的範圍內時，先切回全文——否則定位不到
+    if (readerState.hitsOnly) {
+      var hp = hitParas();
+      if (!(pno in hp)) { readerState.hitsOnly = false; renderReader(); }
+    }
+    var node = readerBody.querySelector('p[data-para="' + pno + '"]');
+    if (!node) return false;
+    readerBody.scrollTop += node.getBoundingClientRect().top -
+                            readerBody.getBoundingClientRect().top -
+                            readerBody.clientHeight * 0.3;
+    var old = readerBody.querySelector("p.target");
+    if (old) old.classList.remove("target");
+    node.classList.add("target");
+    return true;
+  }
   // 離線快照是只讀的：沒有服務端可寫，重建按鈕留著只會讓人點了空轉
   if (OFF) { btnRebuild.hidden = true; btnRebuild.disabled = true; }
 
@@ -393,21 +470,29 @@
      這是**原文的本來面目**，不是 bug。所以這裡**只做顯示層**：
      承接上一句的段落給淡淡的續接標記，一句話沒說完的段落下方不留白。
      數據層（切分結果）一個字都不動。 */
-  function renderParagraphs(sentences, targetUid) {
+  function renderParagraphs(sentences, targetUid, hitMap) {
     var open = 0;
     return (sentences || []).map(function (s) {
       var t = s.text || "";
+      // 段落過濾（只看相關段落）：不在命中段裡的句子直接不渲染。
+      // ⚠️ 續接標記的 open 計數**不能**被跳過的句子打斷——那會讓對話的
+      // 引號計數錯位（後面全是「未收口」）。所以先掃全量算 open，
+      // 再決定渲染哪些。
       var o = (t.match(/「/g) || []).length;
       var c = (t.match(/」/g) || []).length;
       var cont = open > 0;                 // 承接上一句尚未收口的對話
       open += o - c;
       if (open < 0) open = 0;              // 單句裡閉引號多於開引號，不往下傳
+      if (hitMap && !(s.para_seq in hitMap)) return "";
       var cls = [];
       if (cont) cls.push("q-cont");
       if (open > 0) cls.push("q-open");
       if (s.uid === targetUid) cls.push("target");
+      if (hitMap) cls.push("hitpara");
       // data-text 存原文：選斷點時要把句子拆成單字，那時 p 裡還混著按鈕文字
-      return "<p data-uid=\"" + esc(s.uid) + "\" data-text=\"" + esc(t) + "\"" +
+      return "<p data-uid=\"" + esc(s.uid) + "\" data-para=\"" +
+        esc(String(s.para_seq == null ? "" : s.para_seq)) +
+        "\" data-text=\"" + esc(t) + "\"" +
         (cls.length ? " class=\"" + cls.join(" ") + "\"" : "") + ">" +
         esc(t) + ACTS + "</p>";
     }).join("");
@@ -421,11 +506,15 @@
     "<button data-act=\"dead\">棄用</button>" +
     "</span>";
 
-  function openChapter(cid, uid) {
+  function openChapter(cid, uid, pid) {
     readerCid = cid;
     return request("/api/chapter/" + encodeURIComponent(cid)).then(function (d) {
       readerTitle.textContent = (d.chapter && d.chapter.full_title) || cid;
-      readerBody.innerHTML = renderParagraphs(d.sentences, uid);
+      readerState.sents = d.sentences || [];
+      readerState.targetUid = uid || null;
+      readerState.pid = pid || null;
+      readerState.hitsOnly = false;
+      renderReader();
       reader.classList.add("on");
       if (uid) {
         var el = readerBody.querySelector('p[data-uid="' + uid + '"]');
@@ -444,6 +533,26 @@
   });
   reader.querySelector('.reader-head button[data-act="close"]')
     .addEventListener("click", closeReader);
+  reader.querySelector('.reader-head button[data-act="jump"]')
+    .addEventListener("click", function () {
+      var n = parseInt(jumpInput.value, 10);
+      if (!(n > 0)) { jumpInput.focus(); return; }
+      if (!jumpToPara(n)) {
+        // 段號超出範圍：提示實際段數，别靜默無反應
+        jumpInput.value = "";
+        jumpInput.placeholder = "超出範圍";
+      }
+    });
+  jumpInput.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      reader.querySelector('.reader-head button[data-act="jump"]').click();
+    }
+  });
+  btnHits.addEventListener("click", function () {
+    readerState.hitsOnly = !readerState.hitsOnly;
+    renderReader();
+  });
   document.addEventListener("keydown", function (ev) {
     if (ev.key === "Escape") closeReader();
   });
@@ -1043,7 +1152,9 @@
     if (relRow) { renderPerson(relRow.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
     var s = ev.target.closest ? ev.target.closest(".sent[data-chapter]") : null;
     if (s) {
-      openChapter(s.getAttribute("data-chapter"), s.getAttribute("data-uid")).catch(showErr);
+      // 傳 currentPid：原文層才知道「只看相關段落」該留哪些段
+      openChapter(s.getAttribute("data-chapter"), s.getAttribute("data-uid"),
+                  currentPid).catch(showErr);
     }
   });
 
