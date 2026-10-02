@@ -1127,6 +1127,71 @@ def test_alias_ledger() -> None:
           "app.js {} / db {}".format(js_kinds, db.ALIAS_KINDS))
 
 
+def test_era_marker() -> None:
+    """「前朝」小标记 · 数据契约（docs/29 §三-3.4 的降级版）。
+
+    完整版（把索引拆成「本书记载时代 / 相对古人」两组）被否掉了——索引页会翻一倍长，
+    而且史记是通史、169 人缺 eraRank，分组是错的但不显眼。降级成条目上加「前朝」二字。
+
+    要断的三件事：
+      1. 数据到了库里（人的 era_rank / 书的 era_from-to），
+      2. 接口带得出去（list_persons 的 items 有 eraRank），
+      3. 前端那份 eraRange 与库里一致（⚠️ 对不上不报错，只会标错人）。
+    """
+    print("\n[15] 「前朝」標記 · 數據契約")
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                          # noqa: E402
+
+    con = sqlite3.connect(os.path.join(ROOT, "data", "index", "index.db"))
+    try:
+        bks = {r[0]: (r[1], r[2], r[3]) for r in con.execute(
+            "SELECT code, name, era_from, era_to FROM books")}
+        n_era = con.execute(
+            "SELECT COUNT(*) FROM persons WHERE era_rank IS NOT NULL").fetchone()[0]
+        n_all = con.execute("SELECT COUNT(*) FROM persons").fetchone()[0]
+        bad_range = [c for c, v in bks.items()
+                     if v[1] is not None and v[2] is not None and v[1] > v[2]]
+    finally:
+        con.close()
+
+    check("五书都在 books 表里且有名字", len(bks) == 5 and all(v[0] for v in bks.values()),
+          "实得 {}".format(sorted(bks)))
+    # 史记是通史，没有记载区间——这是「史记不标前朝」的依据，不能悄悄变成有值
+    check("史記是通史（eraRange 为 NULL，不标前朝）",
+          bks.get("sj", (None, 1, 1))[1] is None,
+          "史記 era_from = {}".format(bks.get("sj", (None, None, None))[1]))
+    check("四部断代史都有记载区间",
+          all(bks.get(c, (None, None, None))[1] is not None
+              for c in ("hs", "hhs", "sgz", "js")),
+          "实得 {}".format({c: bks.get(c, (None, None, None))[1:]
+                            for c in ("hs", "hhs", "sgz", "js")}))
+    check("区间不自相矛盾（from <= to）", not bad_range, "坏区间 {}".format(bad_range))
+    check("人物 eraRank 覆盖了绝大多数人",
+          n_era > 0 and n_era / max(n_all, 1) > 0.8,
+          "{} / {}（缺 {} 人，缺的不标，不猜）".format(n_era, n_all, n_all - n_era))
+
+    items = db.list_persons()["items"]
+    check("list_persons 的 items 带 eraRank（前端判前朝的依据）",
+          bool(items) and "eraRank" in items[0],
+          "样例键 {}".format(sorted(items[0].keys()) if items else "-"))
+    check("items 里存在「对某部断代史来说是前朝」的人",
+          any((it.get("eraRank") or 99) < 8 for it in items),
+          "eraRank < 8 的共 {} 人".format(
+              sum(1 for it in items if (it.get("eraRank") or 99) < 8)))
+
+    # ⚠️ 前端那份常量与库里必须一致：错一位不会报错，只是把一堆人标成前朝（或漏标）
+    src = open(os.path.join(ROOT, "app", "web", "app.js"), encoding="utf-8").read()
+    got = {}
+    for m in re.finditer(
+            r'\{\s*code:\s*"(\w+)",\s*name:\s*"[^"]+",\s*era:\s*'
+            r'(?:null|\[\s*(\d+)\s*,\s*(\d+)\s*\])', src):
+        code, lo, hi = m.group(1), m.group(2), m.group(3)
+        got[code] = (int(lo), int(hi)) if lo else None
+    want = {c: (v[1], v[2]) if v[1] is not None else None for c, v in bks.items()}
+    check("app.js 的 BOOKS.era 与库里 era_from/era_to 一致（前端判前朝的依据）",
+          got == want, "app.js {} / 库 {}".format(got, want))
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -1147,6 +1212,7 @@ def main() -> int:
         test_pid_semantic()
         test_notes_ledger()
         test_alias_ledger()
+        test_era_marker()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")

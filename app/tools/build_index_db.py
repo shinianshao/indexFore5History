@@ -55,7 +55,9 @@ PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS books (
   code     TEXT PRIMARY KEY,
   name     TEXT,
-  volumes  INTEGER
+  volumes  INTEGER,
+  era_from INTEGER,   -- 本書記載的時代區間（era index）；通史（史記）為 NULL
+  era_to   INTEGER
 );
 
 -- main_persons / top_places：篇主與高頻地名，id 以逗號分隔存文本。
@@ -93,6 +95,7 @@ CREATE TABLE IF NOT EXISTS persons (
   dynasty   TEXT,
   title     TEXT,
   summary   TEXT,
+  era_rank  INTEGER,  -- 時代序號（pipeline 的 era_index）；NULL = 沒斷出時代
   status    TEXT DEFAULT 'active'
 );
 
@@ -278,8 +281,12 @@ def main():
     books = {}
     for c in d["chapters"]:
         books.setdefault(c["bookId"], c.get("book") or c["bookId"])
-    conn.executemany("INSERT OR REPLACE INTO books VALUES (?,?,?)",
-                     [(k, v, None) for k, v in books.items()])
+    # ⚠️ 時代區間不在 chapters 裡，只在 meta.books。缺了它「前朝」標記就沒法判。
+    era = {b["code"]: (b.get("eraRange") or [None, None])
+           for b in (d.get("meta") or {}).get("books") or []}
+    conn.executemany("INSERT OR REPLACE INTO books VALUES (?,?,?,?,?)",
+                     [(k, v, None, era.get(k, [None, None])[0],
+                       era.get(k, [None, None])[1]) for k, v in books.items()])
     conn.executemany(
         "INSERT OR REPLACE INTO chapters VALUES (?,?,?,?,?,?,?,?,?,?)",
         [(c["id"], c.get("bookId"), c.get("title"), c.get("fullTitle"),
@@ -333,9 +340,10 @@ def main():
 
     # ── persons / aliases / places ────────────────────────────────────
     conn.executemany(
-        "INSERT OR REPLACE INTO persons VALUES (?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO persons VALUES (?,?,?,?,?,?,?,?)",
         [(p["id"], p.get("tradName"), p.get("name"), p.get("dynasty"),
-          p.get("title"), p.get("summary"), "active") for p in d["persons"]])
+          p.get("title"), p.get("summary"), p.get("eraRank"), "active")
+         for p in d["persons"]])
     # variant → 是否繁体（供 aliases.is_trad 用；见下方 aliases 灌入处的说明）
     trad_of = {}
     for p in d["persons"]:

@@ -1040,10 +1040,16 @@
      地名命中入庫**（語料裡地名標記在 `pmarks`，建庫時只灌了人物的 `marks`），
      於是庫裡查不到任何地名計數，地名索引只能繞開資料庫去讀 JSON。
      補上 place_mentions 表之後，這幾塊就能正經從 /api/index 一次取回了。 */
+  /* ⚠️ era = 該書記載的時代區間，值與 pipeline/annotate.py 的 era_index 同源。
+     史記是通史，沒有區間（null）→ 全書不標「前朝」。
+     這份常量與庫裡 books.era_from/era_to **必須一致**，verify_p3 [15] 會對一遍
+     ——對不上不會報錯，只會標錯人（與 ALIAS_KINDS 順序同類型的壞）。 */
   var BOOKS = [
-    { code: "sj", name: "史記" }, { code: "hs", name: "漢書" },
-    { code: "hhs", name: "後漢書" }, { code: "sgz", name: "三國志" },
-    { code: "js", name: "晉書" }
+    { code: "sj", name: "史記", era: null },
+    { code: "hs", name: "漢書", era: [8, 10] },
+    { code: "hhs", name: "後漢書", era: [10, 11] },
+    { code: "sgz", name: "三國志", era: [11, 12] },
+    { code: "js", name: "晉書", era: [12, 15] }
   ];
   // 地名分組順序，與 pipeline/annotate_places.py 的 KIND_ORDER 一致
   var PLACE_KIND_ORDER = ["国", "郡", "县", "关", "山", "川", "湖", "域", "外"];
@@ -1087,11 +1093,25 @@
     quickEl.innerHTML = h;
   }
 
+  /* 「前朝」標記：斷代史裡出現的**前朝人**（《漢書》裡的孔子就是）。
+     兩條不標的規矩：① 沒選書、或選的是通史（史記無區間）→ 不標；
+     ② 人沒斷出時代（eraRank 為 null，169 人）→ 不標，**不猜**。
+     ⚠️ 判斷放在前端：離線版沒有服務端，跟 aliasScopeN 同一個道理；
+     數據（eraRank / 時代區間）則由後端給，前端只比大小。 */
+  function isFormerEra(p) {
+    var b = null;
+    if (!scopeBook || p.eraRank == null) return false;
+    BOOKS.forEach(function (x) { if (x.code === scopeBook) b = x; });
+    return !!(b && b.era && p.eraRank < b.era[0]);
+  }
+
   function indexGrid(items) {
     var h = '<div class="grid">';
     items.forEach(function (p) {
       h += '<div class="item" data-name="' + esc(p.name) + '" title="' +
         esc(p.summary || "") + '"><span class="n">' + esc(p.name) +
+        (isFormerEra(p) ? '<i class="era-old" title="本書記載時代之前的' +
+         '人物（前朝）">前朝</i>' : "") +
         '</span><span class="c">' + statText(p.n, p.c) + "</span></div>";
     });
     return h + "</div>";

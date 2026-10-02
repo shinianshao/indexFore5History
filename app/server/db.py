@@ -266,7 +266,7 @@ def list_persons(book: str = "", sort: str = "c", limit: int = 0,
             _book_counts(conn, "mentions", "person_id", book)
         rows = []
         for r in conn.execute(
-                "SELECT id, trad_name, name, dynasty, title, summary "
+                "SELECT id, trad_name, name, dynasty, title, summary, era_rank "
                 "FROM persons WHERE status='active'"):
             bk = counts.get(r["id"]) or {}
             st = _scope(bk)
@@ -276,6 +276,10 @@ def list_persons(book: str = "", sort: str = "c", limit: int = 0,
                 "id": r["id"], "name": r["trad_name"] or r["name"],
                 "dynasty": r["dynasty"] or "", "title": r["title"] or "",
                 "summary": r["summary"] or "",
+                # 時代序號（NULL = 沒斷出時代）。前端拿它跟當前書的 eraRange 比，
+                # 標出「前朝」——斷代史裡出現的前朝人（如《漢書》裡的孔子）。
+                # ⚠️ 比大小是前端做的，理由同 aliasScopeN：離線版沒有服務端。
+                "eraRank": r["era_rank"],
                 "n": st["nAll"], "c": st["cAll"],
                 "books": sorted(
                     [{"id": b, "n": v["n"], "c": v["c"]} for b, v in bk.items()],

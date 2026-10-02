@@ -13,7 +13,8 @@
      7. 检索框候选（datalist）有人有地，换书后跟着收窄
      8. 点索引条目 → 进检索；点篇目 → 开原文层
      9. 完整称谓表：分组 / ×N / 未用 / 泛称分色 / 换书后由 byBook 收窄
-    10. 无 JS 报错
+    10. 「前朝」小标记：断代史标、通史（史記）不标
+    11. 无 JS 报错
 
    用法（依赖 jsdom，装在隔离目录里，不污染本工程）：
      1) 起服务：PORT=8811 python app/server/main.py
@@ -272,7 +273,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     num(chipText("漢王")) > 0 && num(chipText("漢王")) < 739,
     wideTxt + " → " + chipText("漢王"));
 
-  console.log("\n【10】控制台无异常");
+  console.log("\n【10】「前朝」小标记（断代史里的前朝人）");
+  /* 选了断代史才标：人的 eraRank 落在该书记载区间之前（如《漢書》里的孔子）。
+     两条不标：史記是通史没有区间；人没断出时代（169 人）也不标、不猜。 */
+  click(tab("persons"));
+  await sleep(300);
+  const eraMarks = () => out.querySelectorAll(".item .era-old");
+  const nItem = () => out.querySelectorAll(".item[data-name]").length;
+  /* ⚠️ 换书后**等条目数真的变了**再断言（本文件开头第 2 条纪律）：
+     旧数据也是「非空」，只等非空就会把上一本书的 194 个标记当成史記的。 */
+  const n0 = nItem();
+  click(bk("sj"));                        // 通史：一律不标
+  await waitFor(() => nItem() !== n0, 25000);
+  ok("史記是通史 → 不标「前朝」", eraMarks().length === 0,
+    "实得 " + eraMarks().length + " 个标记");
+
+  const n1 = nItem();
+  click(bk("hs"));                        // 漢書：区间 [8,10]，前朝人不少
+  await waitFor(() => nItem() !== n1, 25000);
+  const gotEra = await waitFor(() => eraMarks().length > 0, 25000);
+  ok("選漢書 → 有人被标「前朝」", gotEra, "实得 " + eraMarks().length + " 个");
+  ok("标了的条目占比合理（不是全员前朝）",
+    eraMarks().length > 0
+      && eraMarks().length < out.querySelectorAll(".item[data-name]").length,
+    eraMarks().length + " / " + out.querySelectorAll(".item[data-name]").length);
+  ok("标记文案是繁体「前朝」",
+    [...eraMarks()].every((el) => (el.textContent || "") === "前朝"),
+    "实得「" + [...eraMarks()].map((el) => el.textContent).slice(0, 3).join("、") + "」");
+
+  console.log("\n【11】控制台无异常");
   ok("无 jsdomError", errs.length === 0, errs.slice(0, 2).join(" | "));
 
   console.log("\n=============== 索引四块 UI 测试：" + pass + " 通过 / " + fail +

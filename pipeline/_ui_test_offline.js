@@ -135,6 +135,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   click(bk(""));
   await waitFor(() => out.querySelectorAll(".item[data-name]").length === allPersons, 60000);
 
+  // 「前朝」小标记：离线版的索引是快照里的 /api/index 原样响应，
+  // eraRank 必须跟着一起进了快照，否则离线版标不出、联机版标得出（悄悄分叉）。
+  const eraMarks = () => out.querySelectorAll(".item .era-old").length;
+  ok("未选书时不标「前朝」（全五书没有单一时代区间）", eraMarks() === 0,
+    "实得 " + eraMarks());
+  click(bk("hs"));
+  const gotEra = await waitFor(() => eraMarks() > 0, 60000);
+  ok("選漢書 → 离线版也标得出「前朝」（eraRank 进了快照）", gotEra,
+    "实得 " + eraMarks() + " 个");
+  click(bk(""));
+  await waitFor(() => out.querySelectorAll(".item[data-name]").length === allPersons, 60000);
+
   console.log("\n【4】人物详情");
   q.value = "劉邦";
   click(doc.getElementById("btn"));
