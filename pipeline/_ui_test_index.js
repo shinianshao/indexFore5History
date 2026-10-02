@@ -14,7 +14,8 @@
      8. 点索引条目 → 进检索；点篇目 → 开原文层
      9. 完整称谓表：分组 / ×N / 未用 / 泛称分色 / 换书后由 byBook 收窄
     10. 「前朝」小标记：断代史标、通史（史記）不标
-    11. 无 JS 报错
+    11. 网页「标错」入口：hover 出按钮 → 搜人名 → 点选写入 → 徽章 → 撤銷
+    12. 无 JS 报错
 
    用法（依赖 jsdom，装在隔离目录里，不污染本工程）：
      1) 起服务：PORT=8811 python app/server/main.py
@@ -301,7 +302,72 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     [...eraMarks()].every((el) => (el.textContent || "") === "前朝"),
     "实得「" + [...eraMarks()].map((el) => el.textContent).slice(0, 3).join("、") + "」");
 
-  console.log("\n【11】控制台无异常");
+  console.log("\n【11】网页「标错」入口（人物页）");
+  /* 这条链路的坏法是**不报错**的：nth 算错 → 改归落到别人头上，界面照样显示
+     「已標錯」。所以这里守的是闭环：hover 出按钮 → 面板能搜到人 → 点选真的写进去
+     → 徽章出现 → 撤銷后徽章消失。
+     ⚠️ 写入落在**沙盒表**（run_all.sh 给临时服务设了 BOOKINDEX_OVERRIDES）——
+     revoke 是改状态不删行，打真实权威源会让 workbook/overrides.xlsx 每次回归多两行。 */
+  /* ⚠️ 先跳到检索页再进人物页：`location.hash` 设成**跟当前一样的值**不会触发
+     hashchange（【9】末尾已经停在 #/person/p_liubang），页面就不会重渲染，
+     断言得到的是上一屏（索引页）的 0 行命中——不是页面的 bug，是测试没换路由。 */
+  window.location.hash = "#/q/邦";
+  await sleep(400);
+  window.location.hash = "#/person/p_liubang";
+  const gotSents = await waitFor(
+    () => out.querySelectorAll(".sent[data-uid]").length > 0, 20000);
+  ok("人物页渲染出命中行", gotSents,
+    "实得 " + out.querySelectorAll(".sent[data-uid]").length + " 行");
+  const flagBtns = () => [...out.querySelectorAll('.sent button[data-act="flag"]')];
+  ok("命中行带「標錯」按钮", flagBtns().length > 0, "实得 " + flagBtns().length + " 个");
+  ok("命中行带定位用的 s / e / surface（后端靠它算 nth）",
+    out.querySelector(".sent[data-uid]").getAttribute("data-surface") !== null
+    && out.querySelector(".sent[data-uid]").getAttribute("data-s") !== null);
+  /* 后面每一步都做空值保护：按钮一旦没了，应当**只红这一条**并继续跑完，
+     而不是崩在 dispatchEvent 上把「控制台无异常」也一起吞掉（本文件【8】的写法）。 */
+  if (flagBtns()[0]) click(flagBtns()[0]);
+  const gotBox = await waitFor(() => out.querySelector(".fixbox"), 8000);
+  ok("点「標錯」→ 就地展开面板（不弹窗）", !!gotBox);
+  ok("面板有输入框（输人名，不是填 pid）", !!out.querySelector(".fixbox .fix-input"));
+  ok("面板有「不是他」（这处不作数）按钮",
+    !!out.querySelector('.fixbox button[data-act="drop"]'));
+
+  const inp = out.querySelector(".fixbox .fix-input");
+  if (inp) {
+    inp.value = "項羽";
+    inp.dispatchEvent(new window.Event("input", { bubbles: true }));
+  }
+  const gotCand = await waitFor(
+    () => out.querySelectorAll(".fixbox .fix-cand-row").length > 0, 15000);
+  ok("输入人名 → 出候选（不是要你手敲 pid）", gotCand);
+  const cand0 = out.querySelector(".fixbox .fix-cand-row");
+  ok("候选第一个就是項羽",
+    (cand0 && (cand0.querySelector(".nm") || {}).textContent) === "項羽",
+    "实得「" + (cand0 ? cand0.textContent : "") + "」");
+
+  if (cand0) click(cand0);
+  // ⚠️ waitFor 返回的是**布尔**，不是元素——拿它去读 textContent 会得到 ""，
+  // 于是「徽章写明改归给谁」永远是空串（踩过一次的写法）。等完再重新取一次。
+  const wrote = await waitFor(() => !!out.querySelector(".flag-badge"), 20000);
+  const gotBadge = out.querySelector(".flag-badge");
+  ok("点候选 → 真写进去了（命中行出现「已標錯」徽章）", wrote && !!gotBadge,
+    "out=" + out.innerHTML.slice(0, 120));
+  ok("徽章写明改归给谁（→ 項羽，不是 pid）",
+    ((gotBadge || {}).textContent || "").indexOf("項羽") > 0,
+    "实得「" + ((gotBadge || {}).textContent || "") + "」");
+  const ovbar = out.querySelector(".ovbar");
+  ok("顶部提示「已記錄 N 條糾錯，重建後生效」（不让人以为已改）",
+    ovbar && ovbar.textContent.indexOf("重建後生效") > 0,
+    "实得「" + ((ovbar || {}).textContent || "") + "」");
+  ok("徽章带撤銷出口（改错了能反悔）",
+    !!out.querySelector('.flag-badge button[data-act="unflag"]'));
+
+  const unflag = out.querySelector('.flag-badge button[data-act="unflag"]');
+  if (unflag) click(unflag);
+  const gone = await waitFor(() => !out.querySelector(".flag-badge"), 20000);
+  ok("撤銷 → 徽章消失", gone, "还剩 " + out.querySelectorAll(".flag-badge").length + " 个");
+
+  console.log("\n【12】控制台无异常");
   ok("无 jsdomError", errs.length === 0, errs.slice(0, 2).join(" | "));
 
   console.log("\n=============== 索引四块 UI 测试：" + pass + " 通过 / " + fail +

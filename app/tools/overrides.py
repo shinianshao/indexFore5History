@@ -46,7 +46,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 DB_PATH = os.path.join(ROOT, "data", "index", "index.db")
 BOOK = os.path.join(ROOT, "data", "index", "book-data.json")
-WORKBOOK = os.path.join(ROOT, "workbook", "overrides.xlsx")
+# ⚠️ 只有**沙盒**才設 `BOOKINDEX_OVERRIDES`（與 `BOOKINDEX_DB` 同一套約定）。
+# 為什麼要有它：UI 測試要真的點「標錯」走一遍寫入，而 revoke 是**改狀態不刪行**——
+# 每跑一次回歸，權威源裡就多兩行 dead 行，永遠髒著（purge 只認帶自檢標記的行，
+# UI 點擊可不會帶標記）。回歸時把服務指向 `data/index/overrides.ui-test.xlsx`
+# （已 gitignore），權威源一根手指都不碰。
+DEFAULT_WORKBOOK = os.path.join(ROOT, "workbook", "overrides.xlsx")
+WORKBOOK = os.environ.get("BOOKINDEX_OVERRIDES") or DEFAULT_WORKBOOK
 
 # 與 persons.xlsx 的風格一致：中文列名（簡體）+ 英文鍵
 HEADERS = [
@@ -156,6 +162,28 @@ def _read_rows():
             continue
         out.append(d)
     wb.close()
+    return out
+
+
+def active_rows() -> list:
+    """生效中的糾錯行（對外接口，網頁「標錯」入口用）。
+
+    為什麼要單獨一層：表裡是**中文列名**（`应归(newPid)` / `上下文`…），
+    讓前端去認中文表頭，等於把 xlsx 的列名寫死在第二個地方——
+    改一列就要改兩處，而且不會報錯。這裡統一翻成英文鍵再出去。
+    """
+    out = []
+    for r in _read_rows():
+        out.append({
+            "uid": str(r.get("uid") or "").strip(),
+            "s": r.get("s"), "e": r.get("e"),
+            "surface": r.get("surface"), "nth": r.get("nth"),
+            "from": r.get("原pid") or "",
+            "to": str(r.get("应归(newPid)") or "").strip(),
+            "action": r.get("动作(action)") or "",
+            "note": r.get("备注(note)") or "",
+            "context": r.get("上下文") or "",
+        })
     return out
 
 

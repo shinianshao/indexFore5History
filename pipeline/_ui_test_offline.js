@@ -175,6 +175,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     "样例 title「" + ((offChips[0] || {}).getAttribute
       ? String(offChips[0].getAttribute("title") || "").slice(0, 40) : "") + "」");
 
+  /* 離線版是只讀快照：標錯要 POST 到服務端，**給了就是空頭支票**。
+     與原文層那三個按鈕同一個道理（【7】裡斷的是 .acts，這裡斷 .sent 上的那顆）。 */
+  ok("人物页没有「標錯」按钮（离線版只读，寫不進 overrides）",
+    out.querySelectorAll('.sent button[data-act="flag"]').length === 0,
+    "实得 " + out.querySelectorAll('.sent button[data-act="flag"]').length + " 个");
+  ok("人物页没有糾錯條（离线不加载 /api/overrides）",
+    out.querySelectorAll(".ovbar").length === 0);
+
   console.log("\n【5】关系卡");
   const gotRel = await waitFor(() => !!doc.getElementById("relcard"), 60000);
   ok("关系卡渲染出来了", gotRel);

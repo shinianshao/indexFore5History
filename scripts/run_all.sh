@@ -196,8 +196,14 @@ if [ "$RUN_UI" -eq 1 ]; then
         # 静态页没有 /api，拿 BASE=静态页 去跑会得到「全红但其实打错靶」的假失败。
         # 所以这里单起一个 API 服务（独立端口，不与日常用的 8800 抢）。
         APIPORT="${APIPORT:-8811}"
+        # UI 測試要真的點「標錯」寫一條糾錯，而 revoke 是**改狀態不刪行**——
+        # 每跑一次回歸，權威源 workbook/overrides.xlsx 就多兩行 dead 行，永遠髒著。
+        # 所以讓這個臨時服務寫到 `data/index/` 下的臨時表（已 gitignore），
+        # 權威源一根手指都不碰。服務啟動時會把這件事嚷出來，不會悄悄寫錯地方。
+        OV_SANDBOX="$ROOT/data/index/overrides.ui-test.xlsx"
         if "$PY" -c "import fastapi, uvicorn" >/dev/null 2>&1; then
-          PORT="$APIPORT" "$PY" app/server/main.py >/dev/null 2>&1 &
+          PORT="$APIPORT" BOOKINDEX_OVERRIDES="$OV_SANDBOX" \
+            "$PY" app/server/main.py >/dev/null 2>&1 &
           API_PID=$!
           api_ready=0
           for i in $(seq 1 40); do

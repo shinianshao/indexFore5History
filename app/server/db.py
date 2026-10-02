@@ -574,6 +574,57 @@ def person_mentions(pid: str, tier: Optional[str] = None,
         return [dict(r) for r in conn.execute(sql, args)]
 
 
+def mention_nth(uid: str, s: Any, e: Any, surface: str,
+                pid: str = "") -> Optional[int]:
+    """一处命中 → `overrides` 要的 nth（**该句内第几个命中**，1-based）。
+
+    为什么必须由后端算，不能让前端传
+    --------------------------------
+    前端（人物页）看到的是「这个人在本句里的第几条」，而 nth 是
+    「本句**所有人**的命中里的第几条」。一句常同时挂着好几个人
+    （劉邦 / 項羽 / 樊噲），两个序号根本不是一回事。
+    前端传 nth 的话，改归就会落到**别人头上**，而且不报错——
+    `overrides.apply` 只按 nth 取第几条，取错也是「改归 1 条」。
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT person_id, surface, s, e FROM mentions "
+            "WHERE sentence_uid=? ORDER BY s, e", (uid,)).fetchall()
+    if not rows:
+        return None
+    # 先精确（串 + 偏移），与 overrides.cmd_apply 的匹配顺序保持一致
+    for i, r in enumerate(rows, 1):
+        if r["surface"] == surface and r["s"] == s and r["e"] == e:
+            return i
+    # 偏移对不上（这句被拆过 / 并过，或者前端给的是旧数据）：退回同串
+    for i, r in enumerate(rows, 1):
+        if r["surface"] != surface:
+            continue
+        if pid and r["person_id"] != pid:
+            continue
+        return i
+    for i, r in enumerate(rows, 1):
+        if r["surface"] == surface:
+            return i
+    return None
+
+
+def person_names(pids) -> Dict[str, str]:
+    """pid → 正名，**一次查完**而不是 N+1。
+
+    网页「已標錯 → 項羽」要显示人名；`/api/overrides` 里存的是 pid，
+    直接显示会变成 `→ p_xiangyu`。
+    """
+    pids = [p for p in (pids or []) if p]
+    if not pids:
+        return {}
+    ph = ",".join("?" * len(pids))
+    with connect() as conn:
+        return {r[0]: r[1] for r in conn.execute(
+            "SELECT id, trad_name FROM persons WHERE id IN ({})".format(ph),
+            pids)}
+
+
 def full_text_search(q: str, limit: int = 50) -> List[Dict[str, Any]]:
     """全文检索（不限人名，任意词）。命中句回带所属篇目。"""
     sql = """

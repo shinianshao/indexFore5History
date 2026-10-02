@@ -101,6 +101,15 @@
   人物索引条目是 `.item[data-name]`（`.row[data-pid]` 是搜索结果行）；
   **检索靠点按钮触发**（`qEl` 只绑 keydown，没有 input）；测试环境没有全局 `document`，用取到的 `doc`。
 - **前端文案一律繁体**（`check_trad.py` 扫 `app/web/app.js`，简体注释会让 F 闸失败）。
+- ⚠️ **`waitFor` 返回的是布尔，不是元素**：`const el = await waitFor(() => q(".x"))` 拿到 `true`，
+  再读 `el.textContent` 得到 `""` → 「徽章写了什么」这类断言永远空串。等完**重新取一次元素**。
+- ⚠️ **`location.hash` 设成与当前相同的值不会触发 hashchange**：测试里想「再进一次人物页」
+  必须先跳到别的路由（`#/q/邦`）再跳回来，否则页面不重渲染，断言读到上一屏（0 行命中）。
+- ⚠️ **UI 测试真点一次「写入」就会脏权威源**（revoke 只改状态不删行，purge 又只认带标记的行）
+  → 给临时服务加**沙盒环境变量**（新增 `BOOKINDEX_OVERRIDES`，与 `BOOKINDEX_DB` 同套），
+  run_all 指向 `data/index/overrides.ui-test.xlsx`；服务启动要嚷出来，断言要断「默认落点没被改」。
+- ⚠️ **UI 测试每步都要做空值保护**（`if (el) click(el)`）：按钮一旦没了应当只红那一条并跑完，
+  崩在 `dispatchEvent` 上会把「控制台无异常」也一起吞掉。
 
 ## 「AI 概率判定闭环」= 通用工作法
 **取证 → 判 → 落 → 断言**。取证生成器产 JSON（自带可计算信号 + 语料上下文 + 空 `ai` 字段）；
@@ -147,5 +156,8 @@
    → 重算就要迁移 39 行证据。实测 99 边仅 31 有据：29 条单书可机械补（sj22/hs7/hhs2/js2），
    2 条跨书，68 条无据。**取舍要用户定**）
 3. 人工清单剩 7 条（要先补 6 个库里没有的人）
-4. 文档 01–18 数字治理；`app/DEV.md` 待办清单清理
-| — | 网页「标错」入口（照 P4-2 同套做法，UI 代写 `overrides.xlsx`） | 新功能 |
+4. 文档 01–18 数字治理；`app/DEV.md` §七 待办清单清理
+5. ✅ **网页「标错」入口（P3-4）已完成**（2026-10-03 凌晨）：人物页命中 hover 出「標錯」；
+   ⚠️ **nth 只能后端算**（前端序号 ≠ 全句序号，实测 nth=3 / 前端 2，算错改到别人头上且不报错）；
+   ⚠️ UI 测试打权威源会每轮多两行 dead 行 → 新增 `BOOKINDEX_OVERRIDES` 沙盒变量，
+   run_all 的临时服务指向 `data/index/overrides.ui-test.xlsx`（已 gitignore）

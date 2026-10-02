@@ -121,6 +121,33 @@ python app/tools/overrides.py revoke --uid <uid>    # 反悔（状态改 dead，
 > **只在录入那一刻写，重建绝不刷新**——否则就是 P0「导出脚本冲掉权威源」那次事故的重演。
 > 写由 `add` / `revoke`（以及将来的 UI）承担，两者是「人」这一侧的动作。
 
+### P3-4 已交付什么（网页「标错」入口）
+
+人物页每条命中 hover 出「標錯」，就地展开一行面板：
+
+- **改归**：输人名 → 点候选（走 `/api/search`），不用手敲 pid；
+- **不是他**：这处不作数（drop，整条命中从索引里去掉）；
+- 已标错的命中带「已標錯 → 項羽」徽章 + 「撤銷」；顶部提示「已記錄 N 條糾錯，重建後生效」。
+
+新增端点：
+
+```
+GET  /api/overrides                               生效中的纠错（前端打徽章用）
+POST /api/override      {uid, s, e, surface, action, new?, pid?, note?}
+POST /api/override/revoke  {uid}                  撤销该句的全部纠错
+```
+
+> ⚠️ **nth 由后端算**（`db.mention_nth`），前端**不许传**。前端看到的是
+> 「这个人在本句里第几条」，nth 是「本句所有人命中里第几条」——一句常挂着好几个
+> 人，两个序号不是一回事。算错就会**改到别人头上，而且不报错**
+> （`overrides.apply` 只按 nth 取第几条，取错照样报「改歸 1 條」）。
+> 实测样本：某句「漢王」是全句第 3 条命中，在劉邦自己那儿排第 2。
+
+> ⚠️ **回归用的服务要设 `BOOKINDEX_OVERRIDES`**（与 `BOOKINDEX_DB` 同一套约定）：
+> UI 测试真的会点一次「标错」，而 revoke 是**改状态不删行**，打真实权威源就等于
+> 每次回归给 `workbook/overrides.xlsx` 多两行 dead 行。`run_all.sh` 已指向
+> `data/index/overrides.ui-test.xlsx`（已 gitignore），服务启动时会把这件事嚷出来。
+
 ### P6-2 已交付什么（关系抽取）
 
 走的是项目一贯的「取证 → 判 → 落 → 断言」闭环：
@@ -266,6 +293,9 @@ GET /api/fts?q=鴻門              全文检索（任意词，不限人名）
 GET /api/person/{pid}            人物档案 + 命中（按篇分组）
 GET /api/chapter/{cid}           一篇的原文
 GET /api/person/{pid}/relations  **关系接口预留**，当前返回空数组
+GET /api/overrides               生效中的单条纠错（网页「标错」打徽章用）
+POST /api/override               {uid, s, e, surface, action, new?, pid?, note?}
+POST /api/override/revoke        {uid}
 ```
 
 已实现的两个设计要点（§12.3）：

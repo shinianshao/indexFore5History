@@ -29,10 +29,14 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -1192,6 +1196,197 @@ def test_era_marker() -> None:
           got == want, "app.js {} / 库 {}".format(got, want))
 
 
+# ---------------------------------------------------------------- 16 网页标错入口
+
+def _free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _http(method: str, url: str, body=None):
+    """打一次 HTTP，返回 (状态码, body)。
+
+    ⚠️ 端点层的断言**必须真打一次 HTTP**，只测 db 层不够：
+    已经出过一次「db 单测全绿、端点 500」（`person_payload` 改签名漏了调用处），
+    那种坏法在单测里一点痕迹都没有。
+    """
+    data = None
+    if body is not None:
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            raw = r.read().decode("utf-8")
+            return r.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", "replace")
+        try:
+            return e.code, json.loads(raw)
+        except ValueError:
+            return e.code, {"message": raw[:120]}
+
+
+def _apply_dry() -> str:
+    """`overrides.py apply --dry-run` 的输出。
+
+    为什么断这个：行写进表里**不等于**能套用上。nth 写错时 apply 是
+    「未匹配 1 條」或「改歸 0 條」——界面上照样显示「已標錯」，只有這裡抓得到。
+    """
+    p = subprocess.run([PY, os.path.join(HERE, "overrides.py"), "apply",
+                        "--dry-run"], cwd=ROOT, capture_output=True,
+                       text=True, encoding="utf-8")
+    return (p.stdout or "") + (p.stderr or "")
+
+
+def test_override_api() -> None:
+    """网页「标错」入口（P3-4）：端点闭环。
+
+    这条链路有个**不会报错**的坏法：nth 算错 → 改归落到别人头上，
+    apply 报「改歸 1 條」，界面显示「已標錯」，全程无异常。
+    所以三件事都要断：nth 由后端算对、写进去的行套用得上、撤销后真的撤了。
+    """
+    print("\n[16] 網頁標錯入口 · 端點閉環")
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                          # noqa: E402
+
+    check("默認落點是權威源（BOOKINDEX_OVERRIDES 只許沙盒設）",
+          overrides.WORKBOOK == overrides.DEFAULT_WORKBOOK
+          and overrides.DEFAULT_WORKBOOK.replace("\\", "/").endswith(
+              "workbook/overrides.xlsx"),
+          overrides.WORKBOOK)
+
+    # 樣本：本句裡**不是第一條**命中的劉邦。前端只數「這人在本句裡第幾條」，
+    # 兩個序號對不上——正是這個端點要防的事。取兩句（drop / reassign 各一）。
+    conn = sqlite3.connect(db.db_path())
+    samples = []
+    for (cuid,) in conn.execute(
+            "SELECT sentence_uid FROM mentions WHERE person_id='p_liubang' "
+            "GROUP BY sentence_uid LIMIT 200"):
+        ms = conn.execute("SELECT person_id, surface, s, e FROM mentions "
+                          "WHERE sentence_uid=? ORDER BY s, e", (cuid,)).fetchall()
+        mine = 0
+        for i, m in enumerate(ms, 1):
+            if m[0] != "p_liubang":
+                continue
+            mine += 1
+            if i > 1:
+                samples.append({"uid": cuid, "s": m[2], "e": m[3],
+                                "surface": m[1], "nth": i, "naive": mine})
+                break
+        if len(samples) >= 2:
+            break
+    conn.close()
+    if len(samples) < 2:
+        check("取到兩個「非首條命中」樣本", False, "實得 {}".format(len(samples)))
+        return
+    a, b = samples[0], samples[1]
+
+    check("樣本有效：本句第 {} 條，前端會算成第 {} 條".format(a["nth"], a["naive"]),
+          a["nth"] > a["naive"], str(a))
+    check("後端 nth 與庫裡實際序號一致",
+          db.mention_nth(a["uid"], a["s"], a["e"], a["surface"], "p_liubang")
+          == a["nth"], "實得 {}".format(
+              db.mention_nth(a["uid"], a["s"], a["e"], a["surface"], "p_liubang")))
+    check("定位不到時返回 None（不是亂指一條）",
+          db.mention_nth(a["uid"], a["s"], a["e"], "絕無此人", "p_liubang") is None)
+
+    port = _free_port()
+    env = dict(os.environ, PORT=str(port), PYTHONIOENCODING="utf-8")
+    proc = subprocess.Popen([PY, os.path.join(ROOT, "app", "server", "main.py")],
+                            cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    base = "http://127.0.0.1:{}/".format(port)
+    try:
+        up = False
+        for _ in range(40):
+            try:
+                urllib.request.urlopen(base + "health", timeout=1).read()
+                up = True
+                break
+            except Exception:                          # noqa: BLE001
+                time.sleep(0.3)
+        check("臨時服務起來了", up, base)
+        if not up:
+            return
+
+        st, _b = _http("POST", base + "api/override",
+                       {"uid": a["uid"], "s": a["s"], "e": a["e"],
+                        "surface": a["surface"], "action": ""})
+        check("缺動作 → 400", st == 400, "實得 {}".format(st))
+        st, _b = _http("POST", base + "api/override",
+                       {"uid": "", "s": a["s"], "e": a["e"],
+                        "surface": a["surface"], "action": "drop"})
+        check("缺 uid → 400", st == 400, "實得 {}".format(st))
+        st, _b = _http("POST", base + "api/override",
+                       {"uid": a["uid"], "s": a["s"], "e": a["e"],
+                        "surface": a["surface"], "action": "zzz"})
+        check("非法動作 → 400", st == 400, "實得 {}".format(st))
+        st, _b = _http("POST", base + "api/override",
+                       {"uid": a["uid"], "s": a["s"], "e": a["e"],
+                        "surface": "絕無此人", "action": "drop"})
+        check("定位不到的命中 → 404（不是改到別人頭上）", st == 404,
+              "實得 {}".format(st))
+        st, _b = _http("POST", base + "api/override",
+                       {"uid": b["uid"], "s": b["s"], "e": b["e"],
+                        "surface": b["surface"], "action": "reassign"})
+        check("改歸但不給 new → 400", st == 400, "實得 {}".format(st))
+
+        st, rb = _http("POST", base + "api/override",
+                       {"uid": a["uid"], "s": a["s"], "e": a["e"],
+                        "surface": a["surface"], "pid": "p_liubang",
+                        "action": "drop", "note": "P3-4 自檢"})
+        check("drop 寫入成功", st == 200 and rb.get("ok"), str(rb)[:100])
+        check("端點回的 nth 是後端算的那個（不是 1）", rb.get("nth") == a["nth"],
+              "實得 {}".format(rb.get("nth")))
+        st, rb2 = _http("POST", base + "api/override",
+                        {"uid": b["uid"], "s": b["s"], "e": b["e"],
+                         "surface": b["surface"], "pid": "p_liubang",
+                         "action": "reassign", "new": "p_xiangyu",
+                         "note": "P3-4 自檢"})
+        check("reassign 寫入成功", st == 200 and rb2.get("ok"), str(rb2)[:100])
+
+        st, lb = _http("GET", base + "api/overrides")
+        rows = [r for r in lb.get("items", [])
+                if r["uid"] in (a["uid"], b["uid"])]
+        check("列表裡兩條都在（uid / nth / 動作 / 原歸屬）",
+              len(rows) == 2
+              and sorted(r["nth"] for r in rows) == sorted([a["nth"], b["nth"]])
+              and all(r["from"] == "p_liubang" for r in rows),
+              str([(r["uid"], r["nth"], r["action"]) for r in rows])[:120])
+        to_row = [r for r in rows if r["uid"] == b["uid"]]
+        check("pid 翻成正名（界面要寫「→ 項羽」不是「→ p_xiangyu」）",
+              bool(to_row) and to_row[0].get("toName") == "項羽",
+              str(to_row[0].get("toName")) if to_row else "—")
+
+        dry = _apply_dry()
+        check("apply（預演）認得這兩條：改歸 1 / 棄用 1",
+              "改歸 1 條" in dry and "棄用 1 條" in dry, dry.strip()[:100])
+
+        st, _b = _http("POST", base + "api/override/revoke", {"uid": a["uid"]})
+        st, _b = _http("POST", base + "api/override/revoke", {"uid": b["uid"]})
+        st, lb = _http("GET", base + "api/overrides")
+        check("撤銷後不再算生效（dead 行不進列表）",
+              not [r for r in lb.get("items", [])
+                   if r["uid"] in (a["uid"], b["uid"])],
+              str(len(lb.get("items", []))))
+        check("撤銷後 apply 一條都套不上", "改歸" not in _apply_dry(),
+              _apply_dry().strip()[:80])
+    finally:
+        # revoke 只改狀態不刪行，殘留由末尾 purge_test_rows 收走（帶「自檢」標記）
+        for smp in samples:
+            subprocess.run([PY, os.path.join(HERE, "overrides.py"), "revoke",
+                            "--uid", smp["uid"]], cwd=ROOT)
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:              # pragma: no cover
+            proc.kill()
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -1213,6 +1408,7 @@ def main() -> int:
         test_notes_ledger()
         test_alias_ledger()
         test_era_marker()
+        test_override_api()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")

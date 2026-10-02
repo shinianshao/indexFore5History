@@ -381,9 +381,46 @@
     return html;
   }
 
+  /* ---------- 網頁「標錯」入口（P3-4）----------
+     人物頁每條命中都能標錯：改歸給別人，或「這處不算他」。
+     與句級編輯同一套：**寫進 workbook/overrides.xlsx**（那張表歸人寫，這裡是 UI 代筆），
+     重建後才生效——所以每記一條都要把「待重建」說清楚。
+     ⚠️ nth 不自己算：`/api/override` 只收 (uid, s, e, surface)，由後端換成
+     「本句第幾條命中」。前端看到的是**這個人在本句裡的第幾條**，兩個序號不是一回事，
+     自己算必然改到別人頭上，而且不報錯。
+     離線快照沒有服務端可寫，一律不給這顆按鈕。 */
+  var ovMap = {};          // "uid|s|e|surface" → 糾錯行
+  var ovCount = 0;
+  var fixTimer = null;
+
+  function ovKeyOf(uid, s, e, surface) {
+    return [uid, s, e, surface].join("|");
+  }
+  function loadOverrides() {
+    if (OFF) return Promise.resolve({ items: [] });
+    // 拿不到就算了：糾錯是附加資訊，不能因為它失敗就整個人打不開
+    return request("/api/overrides").catch(function () { return { items: [] }; });
+  }
+  function flagBadge(ov) {
+    var txt = (ov.action === "drop")
+      ? "已標錯：這處不作數"
+      : ("已標錯 → " + (ov.toName || ov.to || "？"));
+    return "<span class=\"flag-badge\">" + esc(txt) +
+      "<button data-act=\"unflag\">撤銷</button></span>";
+  }
+
   function renderPerson(pid) {
-    return request("/api/person/" + encodeURIComponent(pid)).then(function (d) {
+    return Promise.all([
+      request("/api/person/" + encodeURIComponent(pid)),
+      loadOverrides()
+    ]).then(function (rs) {
+      var d = rs[0];
       var p = d.profile;
+      ovMap = {};
+      (rs[1].items || []).forEach(function (r) {
+        ovMap[ovKeyOf(r.uid, r.s, r.e, r.surface)] = r;
+      });
+      ovCount = (rs[1].items || []).length;
       // 記住這個人的命中 uid —— 原文層的「只看相關段落」靠它。
       // ⚠️ mentions 有 limit（默認 200），**只覆蓋前 N 條**。所以篩選是
       // 「本頁已加載的命中」，不是全集；命中太多時人物頁本身也只顯示前 N，
@@ -406,6 +443,11 @@
         }).join("") + "</div>";
       }
       html += "</div>";
+      // 有糾錯在生效前排隊 → 說清楚「重建後才生效」，別讓人以為已經改了
+      if (ovCount) {
+        html += "<div class=\"ovbar\">已記錄 " + ovCount + " 條糾錯，重建後生效" +
+          (OFF ? "" : "<button data-act=\"ovrebuild\">重建</button>") + "</div>";
+      }
 
       // 命中按篇分組
       var groups = [], byId = {};
@@ -420,9 +462,19 @@
         html += "<div class=\"chapter-title\">" + esc(g.title || "") +
           " · " + g.rows.length + " 處</div>";
         g.rows.forEach(function (m) {
+          var ov = ovMap[ovKeyOf(m.uid, m.s, m.e, m.surface)];
           html += "<div class=\"sent\" data-chapter=\"" + esc(m.chapter_id) +
-            "\" data-uid=\"" + esc(m.uid) + "\">" +
-            markSentence(m.text, m.surface, m.tier) + "</div>";
+            "\" data-uid=\"" + esc(m.uid) +
+            "\" data-s=\"" + esc(m.s) + "\" data-e=\"" + esc(m.e) +
+            "\" data-surface=\"" + esc(m.surface) + "\" data-pid=\"" + esc(pid) + "\">" +
+            markSentence(m.text, m.surface, m.tier) +
+            (ov ? flagBadge(ov) : "") +
+            // 沒有偏移（s/e 缺失）就別給按鈕：後端靠 (s, e, surface) 定位，
+            // 給了也只能報 400，不如一開始就不出現
+            ((!OFF && m.s != null && m.e != null)
+              ? "<span class=\"acts\"><button data-act=\"flag\">標錯</button></span>"
+              : "") +
+            "</div>";
         });
       });
 
@@ -444,6 +496,77 @@
       hint.textContent = "實線＝正名或別名直接命中；虛線＋？＝泛稱推斷，待確認。";
       currentPid = pid;
     });
+  }
+
+  /* 標錯面板：不彈窗，就地展開一行——彈窗要管焦點與層級，
+     而這裡只需要「輸入人名 → 點候選」兩下。 */
+  function openFixBox(row) {
+    var old = row.parentNode ? row.parentNode.querySelector(".fixbox") : null;
+    if (old) { old.parentNode.removeChild(old); }
+    var surface = row.getAttribute("data-surface") || "";
+    var box = document.createElement("div");
+    box.className = "fixbox";
+    ["uid", "s", "e", "surface", "pid"].forEach(function (k) {
+      box.setAttribute("data-" + k, row.getAttribute("data-" + k) || "");
+    });
+    box.innerHTML =
+      "<div class=\"fix-head\">這處判為「" + esc(surface) + "」</div>" +
+      "<div class=\"fix-line\"><input class=\"fix-input\" " +
+      "placeholder=\"改歸給誰？輸入人名，如 項羽\" autocomplete=\"off\">" +
+      "<button data-act=\"cancel\">取消</button></div>" +
+      "<div class=\"fix-cand\"></div>" +
+      "<div class=\"fix-alt\">或者 <button data-act=\"drop\">不是他（這處不算）</button>" +
+      "<span class=\"fix-hint\">　改動記進 overrides.xlsx，重建後生效</span></div>";
+    if (row.nextSibling) { row.parentNode.insertBefore(box, row.nextSibling); }
+    else { row.parentNode.appendChild(box); }
+    var inp = box.querySelector(".fix-input");
+    inp.addEventListener("input", function () { fixSearch(box, inp.value); });
+    inp.focus();
+  }
+
+  function fixSearch(box, q) {
+    var cand = box.querySelector(".fix-cand");
+    q = String(q || "").trim();
+    if (!q) { cand.innerHTML = ""; return; }
+    clearTimeout(fixTimer);
+    // 防抖：每敲一個字就查一次，古籍人名兩三個字，會連著查三次
+    fixTimer = setTimeout(function () {
+      request("/api/search?q=" + encodeURIComponent(q)).then(function (r) {
+        var items = (r.items || []).slice(0, 6);
+        cand.innerHTML = items.length
+          ? items.map(function (x) {
+              return "<div class=\"fix-cand-row\" data-pid=\"" + esc(x.id) + "\">" +
+                "<span class=\"nm\">" + esc(x.trad_name) + "</span>" +
+                "<span class=\"mt\">" + esc(x.dynasty || "") +
+                (x.title ? " · " + esc(x.title) : "") + " · " + x.n + " 處</span></div>";
+            }).join("")
+          : "<div class=\"fix-empty\">查不到這個人</div>";
+      }).catch(function () { cand.innerHTML = ""; });
+    }, 220);
+  }
+
+  function submitFlag(box, action, newPid) {
+    var body = {
+      uid: box.getAttribute("data-uid"),
+      s: parseInt(box.getAttribute("data-s"), 10),
+      e: parseInt(box.getAttribute("data-e"), 10),
+      surface: box.getAttribute("data-surface"),
+      pid: box.getAttribute("data-pid"),
+      action: action
+    };
+    if (newPid) { body.new = newPid; }
+    requestPost("/api/override", body).then(function () {
+      renderPerson(currentPid);        // 重渲染：徽章與計數都由服務端那份決定
+    }).catch(function (e) {
+      var alt = box.querySelector(".fix-hint");
+      if (alt) { alt.textContent = "　失敗：" + ((e && e.message) || e); }
+    });
+  }
+
+  function submitUnflag(row) {
+    requestPost("/api/override/revoke", { uid: row.getAttribute("data-uid") })
+      .then(function () { renderPerson(currentPid); })
+      .catch(showErr);
   }
 
   /* ---------- 渲染：全文檢索 ---------- */
@@ -479,6 +602,7 @@
   var btnRebuild = document.getElementById("btnRebuild");
   var pending = {};        // uid → action
   var readerCid = null;
+  var onRebuilt = null;    // 重建完成後要重取的那一屏（由發起處設）
 
   /* ---------- 原文層的跳段與段落篩選（對齊靜態版）----------
      兩件事，都是純前端：
@@ -633,9 +757,12 @@
       btnRebuild.disabled = false;
       syncEdstat("重建完成");
       if (readerCid) openChapter(readerCid);
+      // 糾錯/編輯生效後當前頁是舊的（命中還按舊歸屬顯示），要重取一次
+      if (typeof onRebuilt === "function") { var f = onRebuilt; onRebuilt = null; f(); }
     });
   }
-  btnRebuild.addEventListener("click", function () {
+  // 重建入口有兩處（原文層的按鈕 / 人物頁糾錯條），共用同一段，別抄第二遍
+  function startRebuild() {
     if (btnRebuild.disabled) return;
     btnRebuild.disabled = true;
     syncEdstat("正在啟動重建…");
@@ -643,7 +770,8 @@
       syncEdstat("重建失敗：" + ((e && e.message) || e));
       btnRebuild.disabled = false;
     });
-  });
+  }
+  btnRebuild.addEventListener("click", startRebuild);
 
   /* ---------- 原文層 ---------- */
   /* 跨句對話的續接標記（docs/21 §13 選 A 的改良版）：
@@ -1329,6 +1457,27 @@
     }
     var row = ev.target.closest ? ev.target.closest(".row[data-pid]") : null;
     if (row) { renderPerson(row.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
+    // 糾錯條上的「重建」
+    var ovr = ev.target.closest ? ev.target.closest("button[data-act=\"ovrebuild\"]") : null;
+    if (ovr) {
+      onRebuilt = function () { renderPerson(currentPid); };
+      startRebuild();
+      return;
+    }
+    // 網頁「標錯」入口。⚠️ 必須排在「點句子開原文」**之前**——
+    // 按鈕就在命中行裡，晚一步就被當成「點了句子」把原文層頂開。
+    var actBtn = ev.target.closest ? ev.target.closest("button[data-act]") : null;
+    var act = actBtn ? actBtn.getAttribute("data-act") : "";
+    if (act === "flag") { openFixBox(actBtn.closest(".sent")); return; }
+    if (act === "unflag") { submitUnflag(actBtn.closest(".sent")); return; }
+    var box = ev.target.closest ? ev.target.closest(".fixbox") : null;
+    if (box) {
+      if (act === "cancel") { box.parentNode.removeChild(box); return; }
+      if (act === "drop") { submitFlag(box, "drop"); return; }
+      var cr = ev.target.closest ? ev.target.closest(".fix-cand-row") : null;
+      if (cr) { submitFlag(box, "reassign", cr.getAttribute("data-pid")); return; }
+      return;                      // 點在面板空白處：別冒泡去開原文
+    }
     // 關係卡片的三個旋鈕（一跳 / 二跳 / 只看有證據）
     var kb = ev.target.closest ? ev.target.closest(".knob[data-k]") : null;
     if (kb) {

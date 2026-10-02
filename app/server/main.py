@@ -25,6 +25,9 @@
 
     POST /api/sentence/edit        {uid, action, at?}  记一条句级编辑（split/merge/dead）
     POST /api/sentence/revoke      {uid}               撤销该句的全部编辑
+    GET  /api/overrides                                生效中的单条纠错（网页「标错」用）
+    POST /api/override             {uid, s, e, surface, action, new?, pid?, note?}
+    POST /api/override/revoke      {uid}               撤销该句的全部纠错
     POST /api/rebuild                                  后台重建（约 40 秒）
     GET  /api/rebuild/status                           查重建状态与日志尾部
 """
@@ -49,6 +52,10 @@ import db                          # noqa: E402
 APP_ROOT = os.path.dirname(HERE)
 WEB_DIR = os.path.join(APP_ROOT, "web")
 PROJECT_ROOT = os.path.dirname(APP_ROOT)
+# 单条纠错（overrides）是**人这一侧**的工具，与 db 同属 app/，
+# 可以 import——它不碰 pipeline，也不破坏「两边只在 JSON 上交汇」。
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "app", "tools"))
+import overrides                   # noqa: E402
 
 # 配置集中在这里，全部来自环境变量（本地工具没有密钥，故不引入 .env 机制）
 PORT = int(os.environ.get("PORT", "8800"))
@@ -77,6 +84,11 @@ async def lifespan(app: FastAPI):
     if not os.path.exists(p):
         raise RuntimeError(
             "索引库不存在：{}\n先跑：python app/tools/build_index_db.py".format(p))
+    if overrides.WORKBOOK != overrides.DEFAULT_WORKBOOK:
+        # 只有回归的沙盒服务才设它；设了又忘了，纠錯就写不到权威源里去了，
+        # 而界面上**看不出任何异常**——所以要嚷出来。
+        print("⚠️ BOOKINDEX_OVERRIDES 生效：纠错写入的是 {}".format(
+            overrides.WORKBOOK))
     yield
 
 
@@ -187,6 +199,7 @@ def api_relations(pid: str,
 # （docs/23 §7.1，这是当初做对的一个决定）。两边只在 JSON 上交汇，
 # 这里也就继续用「调脚本」的方式，代价只是一次进程启动。
 EDITS = os.path.join(PROJECT_ROOT, "pipeline", "apply_sentence_edits.py")
+OV_TOOL = os.path.join(APP_ROOT, "tools", "overrides.py")
 ACTIONS = ("split", "merge", "dead")
 
 
@@ -235,6 +248,91 @@ def api_sentence_revoke(body: dict = Body(...)):
     if not uid:
         raise HTTPException(400, "缺 uid")
     _run_edits("revoke", "--uid", uid)
+    return {"ok": True, "uid": uid, "message": "已撤销，重建后还原"}
+
+
+# ---------------------------------------------------------------- 单条纠错（网页「标错」）
+#
+# 与句级编辑同套做法：**UI 代你写** `workbook/overrides.xlsx`，pipeline 侧依然只读
+# （红线 1）。写不进去（Excel 开着）时 `overrides.py` 自己会改落 `.new.xlsx`，
+# 不会把你的表冲掉。
+OV_ACTIONS = ("reassign", "drop", "keep")
+
+
+def _run_overrides(*args: str) -> str:
+    cmd = [sys.executable, OV_TOOL] + list(args)
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    p = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env,
+                       capture_output=True, text=True, encoding="utf-8")
+    if p.returncode != 0:
+        raise HTTPException(500, "写入失败：{}".format(
+            (p.stderr or p.stdout or "无输出").strip()[:200]))
+    return (p.stdout or "").strip()
+
+
+@app.get("/api/overrides")
+def api_overrides(uid: str = Query("", description="只看某句的纠错")):
+    """生效中的纠错列表——前端靠它给已标错的命中打「已標錯」徽章。
+
+    给的是英文键（`overrides.active_rows()` 翻好的），不要把中文列名漏到前端：
+    表头一改就要改两处，而且不报错。
+    """
+    items = overrides.active_rows()
+    if uid:
+        uid = uid.strip()
+        items = [r for r in items if r["uid"] == uid]
+    # pid 翻成正名：界面上「已標錯 → 項羽」比「→ p_xiangyu」有用得多
+    names = db.person_names([r["to"] for r in items] + [r["from"] for r in items])
+    for r in items:
+        r["toName"] = names.get(r["to"], "")
+        r["fromName"] = names.get(r["from"], "")
+    return {"items": items, "count": len(items)}
+
+
+@app.post("/api/override")
+def api_override(body: dict = Body(...)):
+    """标一条错：`reassign`（改归给别人）或 `drop`（这处不算他）。
+
+    ⚠️ nth **由后端算**（`db.mention_nth`）：前端给的 (s, e, surface) 定位一处命中，
+    nth 是「本句第几个命中」。前端自己算必然算错——它只看到这一个人的序号。
+    """
+    uid = str(body.get("uid") or "").strip()
+    surface = str(body.get("surface") or "").strip()
+    action = str(body.get("action") or "").strip()
+    if not uid or not surface:
+        raise HTTPException(400, "缺 uid 或 surface")
+    if action not in OV_ACTIONS:
+        raise HTTPException(400, "动作只能是 {} 之一".format(" / ".join(OV_ACTIONS)))
+    try:
+        s = int(body.get("s"))
+        e = int(body.get("e"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "s / e 必须是整数偏移")
+    pid = str(body.get("pid") or "").strip()
+    nth = db.mention_nth(uid, s, e, surface, pid)
+    if not nth:
+        raise HTTPException(404, "这句里已经没有「{}」这条命中了（可能已被编辑过）"
+                                 .format(surface))
+    new_pid = str(body.get("new") or "").strip()
+    if action == "reassign" and not new_pid:
+        raise HTTPException(400, "reassign 要给 new（人名或 pid）")
+    args = ["add", "--uid", uid, "--nth", str(nth), "--action", action]
+    if action == "reassign":
+        args += ["--new", new_pid]
+    if body.get("note"):
+        args += ["--note", str(body["note"])[:120]]
+    _run_overrides(*args)
+    return {"ok": True, "uid": uid, "nth": nth, "action": action,
+            "message": "已记录（本句第 {} 条命中），重建后生效".format(nth)}
+
+
+@app.post("/api/override/revoke")
+def api_override_revoke(body: dict = Body(...)):
+    """撤销某句的全部纠错（状态改 dead，不删行）。"""
+    uid = str(body.get("uid") or "").strip()
+    if not uid:
+        raise HTTPException(400, "缺 uid")
+    _run_overrides("revoke", "--uid", uid)
     return {"ok": True, "uid": uid, "message": "已撤销，重建后还原"}
 
 

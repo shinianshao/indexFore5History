@@ -315,6 +315,55 @@
     background: var(--panel); color: var(--muted); cursor: pointer;
   }
   .acts button:hover { border-color: var(--accent); color: var(--accent); }
+  .sent:hover .acts { display: inline; }
+  /* 網頁「標錯」入口（P3-4）：命中行 hover 出「標錯」，點開就地一行的面板。
+     不用彈窗——彈窗要管焦點與層級，這裡只需要「輸入人名 → 點候選」兩下。 */
+  .flag-badge {
+    font-family: var(--sans); font-size: 11px; margin-left: 8px;
+    color: var(--accent); border: 1px dashed var(--accent);
+    border-radius: 6px; padding: 1px 6px; white-space: nowrap;
+  }
+  .flag-badge button {
+    font-size: 11px; margin-left: 5px; padding: 0 4px;
+    border: none; background: none; color: var(--muted);
+    cursor: pointer; text-decoration: underline;
+  }
+  .ovbar {
+    font-family: var(--sans); font-size: 12px; color: var(--accent);
+    margin: 8px 0 0; display: flex; align-items: center; gap: 8px;
+  }
+  .ovbar button {
+    font-family: var(--sans); font-size: 12px; padding: 3px 10px;
+    border: 1px solid var(--accent); border-radius: 7px;
+    background: var(--panel); color: var(--accent); cursor: pointer;
+  }
+  .fixbox {
+    font-family: var(--sans); font-size: 12px; color: var(--muted);
+    background: #FBF9F5; border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; margin: 2px 0 8px 14px;
+  }
+  .fixbox .fix-head { color: var(--text); margin-bottom: 6px; }
+  .fixbox .fix-line { display: flex; gap: 6px; align-items: center; }
+  .fixbox .fix-input {
+    font-family: var(--sans); font-size: 13px; padding: 4px 8px;
+    border: 1px solid var(--border); border-radius: 7px;
+    background: var(--panel); color: var(--text); min-width: 220px;
+  }
+  .fixbox button {
+    font-family: var(--sans); font-size: 12px; padding: 3px 9px;
+    border: 1px solid var(--border); border-radius: 7px;
+    background: var(--panel); color: var(--muted); cursor: pointer;
+  }
+  .fixbox button:hover { border-color: var(--accent); color: var(--accent); }
+  .fixbox .fix-cand-row {
+    display: flex; gap: 8px; align-items: baseline; padding: 3px 2px;
+    cursor: pointer; border-top: 1px dashed var(--border);
+  }
+  .fixbox .fix-cand-row:hover { color: var(--accent); }
+  .fixbox .fix-cand-row .nm { font-family: var(--serif); font-size: 14px; }
+  .fixbox .fix-alt { margin-top: 6px; }
+  .fixbox .fix-hint { font-size: 11px; }
+  .fixbox .fix-empty { padding: 3px 2px; }
   .reader-body p.picking { background: var(--accent-soft); }
   .reader-body p.picking .ch { cursor: pointer; }
   .reader-body p.picking .ch:hover { background: var(--accent); color: #fff; }
