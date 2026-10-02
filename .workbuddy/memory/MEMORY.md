@@ -1,8 +1,10 @@
 # 项目长期约定 · BOOKINDEX（古籍人物/地名索引）
 
 > **施工入口 `app/DEV.md`**（三条红线/顺序/命令）。本文件只放「动手前必须知道」的约定与坑。
-> **当前状态快照 `docs/30`**（接在 29 之后）。推演 `docs/21`、优先级 `docs/16`、
+> **交接文档 `docs/31`**（2026-10-02 晚，路线图：能用什么/欠什么/下一刀）。
+> 当前状态快照 `docs/30`。推演 `docs/21`、优先级 `docs/16`、
 > 计划 `docs/24`、关系审查 `docs/25`/`docs/28`、盘点 `docs/29`。
+> **别读 docs/01–18（数字互相打架），要看现状只认 30/31。**
 
 ## 项目是什么
 离线 Python 管线 + 本地网页的**古籍实体索引**（不是全文检索）。
@@ -20,19 +22,58 @@
 ## 已拍板的方向
 - **小程序取消，不重启**。新能力只长在 `app/web/`。
 - **不再接新史书**。编辑深度**封顶 b 档**（拆/并/弃句），c 档改原文**不做**，留 dead 逃生口。
-- 裴注 / 晋书旧史注是**独立账本**，不进 mentionCount。
+- 裴注 / 晋书旧史注是**独立账本**，不进 mentionCount。**已上线**（2026-10-02）：
+  `db.person_notes_payload(pid)` 出 `{pei, peiMeta, jsNote, jsNoteMeta, chapterTitles}`，
+  挂进 `person_payload` 的 `notes` 键（联机端点与离线导出共用同一份）。
+  - **不入库是刻意的**：items 里的 `pseq` 是**段**号不是句号，硬塞进 `sentences`
+    会把正文与注文两套切分体系搅在一起。
+  - 视觉上用青灰（`--muted` 系）与正文命中区分，**朱砂只给正文与关系**；
+    注文分量标成【裴N】摆在正文命中旁边，**不做相加**。
+  - 离线快照 `export_static._notes()` 只取前 **8** 条 items（前端只显示 8 条，
+    曹操一人源文件有 40 条），实测只多 0.5MB。
+  - 注文数据实际规模比 docs/29 记的丰富：**523 人 / 4,173 處**（不是 451/2,829）。
 - **Excel 组织**：persons/places/chapters/overrides 各一 sheet，**只有 sentences 按书分 sheet**。
   「按书看」用只读布尔列 `in_sj…in_js` 筛，**不要拆 sheet**（人物是跨书实体）。
 
 ## 改动铁律
 - 算法三层（build 切分 / annotate 匹配·泛称 / 前端 scope）**不推倒**，改质量 = 改词典与守卫。
 - 每修一个坑就加一条断言，基线**只许升不许降**。
+- ⚠️ **红线断言要断在「会被打破的那一层」**。例：注文不进 mentionCount，
+  断在库里查不出来（真破法是有人往 `person_payload` 里拼 726 条），
+  且 `mentions` 有 limit(200) 让「payload 条数 ≤ 库内条数」形同虚设。
+  → 逐条查 payload 里的注文标记（章名含【】/ uid 前缀 / tier=note）。
+- ⚠️ **改完判据必须「注入错误 → 变红 → 还原 → 变绿」**，别"看一遍觉得对"。
+  判据里的**集合比较要想清方向**（写 `_zi <= set(_zi)` 是恒真，断言等于废了）。
+- ⚠️ **改数据形状必配断言**。给离线 `sents` 加段号时，`export_static.py` 有
+  **三处** `enumerate(sents)` 要同步，漏两处 → 导出中途炸，`dist/` 留旧档
+  （**还能打开**，最难发现）。已加 `--verify` 守形状（4 位 / 段号齐 / 篇内单调）。
+- ⚠️ **批量改 pid 会被 diff 计两次**（既进 `added` 又进 `pid_changed`）：
+  实测 613 个改名报「新增 306」，那 306 全是改名。**先拿映射表核对 `added` 桶。**
+- ⚠️ **「按 pid 索引的表」不止 relations.xlsx**：`check_trad.py` 的
+  `TRADNAME_EXCEPTIONS` 也是（9 条异体字豁免）。改 pid 必须同步。
+- ⚠️ **UI 測試寫錯時症狀是「等不到」不是報錯**，三個高頻錯：
+  原文层在 `#readerBody` 不在 `#out`；人物索引条目是 `.item[data-name]`
+  而 `.row[data-pid]` 是搜索结果行；**检索靠點按鈕觸發**（`qEl` 只綁 keydown，沒有 input）。
+  測試環境沒有全局 `document`，用已取到的 `doc`。
 - 别名只写**繁体**；裸官职、裸帝号/王号**禁止**进单人 core（走 GENERIC）；长名优先。
 - 跨书同人**只扩 books 并集**，禁止新建 `p_xxx2`。
 - **文档不写死统计数字**——「以当次输出为准」+ 给取数命令。
 - **前端文案一律繁体**（`check_trad.py` 扫 `app/web/app.js`，简体注释会让 F 闸失败）。
 - 一次性脚本归 `pipeline/_scratch/`（判据「下一轮还用不用」），移动时 `parents[1]→[2]`。
 - 复杂清洗写 `pipeline/_*.py`，**勿用 `python -c`**（PowerShell 吞引号/正则）。
+- ⚠️ **xlsx 的 sheet 名 / 列名一律自动探测**（同一坑踩 5 次）：
+  `persons.xlsx` 的表叫中文 **`人物`**（另有 `说明`）；`persons` **没有 `era` 列**（是 `dynasty`）；
+  `mentions` = `{id, sentence_uid, person_id, surface, s, e, tier}`，**没有 `book` 列**
+  （按书要 `mentions→sentences→chapters.book_id→books.code` 四跳）；
+  book-data 的 mark = `{s,e,pid,tier,alias}`；`relations` 两端 `person_a/person_b`；
+  `persons` 主键 `id` 不是 `pid`。→ `_pick_sheet(wb, need_cols)`。
+- ⚠️ `pipeline/verify.py` 的 `ROOT` 是**字符串**（第 56 行），`ROOT / "x"` 直接 TypeError。
+- ⚠️ 根目录会堆 4 字節 `blat` 臨時文件（`%TEMP%` 間歇不可用時 Python 吐出來的），
+  一次 1200+ 個把 `git status` 淹沒。清理 `$PY pipeline/_clean_root_blat.py --apply`
+  （按**內容 + git 跟蹤**雙重判據，默認預演）。
+  ⚠️ **別往 .gitignore 寫文件名規則**：gitignore 只看文件名看不見內容，
+  任何 7–8 位字符類規則都會誤傷 `pipeline/_scratch`（正好 8 個字符），
+  而 `!` 反豁免對「已被排除的目錄」裡的內容**無效**。
 
 ## 离线快照（docs/29 §六-6，P7-3，**已完成 2026-10-02**）
 - 原则：**一套前端、两种数据源**。`dist/` 的 app.js 就是 app/web/app.js 的拷贝，
@@ -109,33 +150,17 @@
 - ⚠️ `relations.py check` 的退出码：只有 `check` 子命令的返回值该变成退出码，
   其它子命令返回的是「灌入条数」不能当退出码（apply 返回 99 会被当成失败）。
 
-## 盘点与方案（docs/29）
-- **改得起是本钱**：全量重建 ~34s、一键回归 ~241s（11 项）。改完立刻能验，所以
-  「多做一轮」便宜、「猜着做」贵。
-- 规模（2026-10-02）：句 96,336 / 人 2,240 / 别名 6,040 / 地 1,575 / 篇 564 / 边 99。
-- **两套前端是持续税**（`web/` 48MB 已冻结 + `app/web/` 0.3MB 日常）：每加功能理论上改两处，
-  且回归里还跑着 4 个只守静态版的 UI 测试。
-- ⚠️ **pid 语义化已做完（2026-10-02）**：613 个 `p_xNNNNN` → 拼音语义 id，
-  `verify_p3 [12]` 守着「零占位 + 零悬空 + 别名没甩掉」。命名 `p_<全拼>`，
-  撞名加 `_<朝代缩写>`（sg/hs/hhs/js/zh）→ 再撞加数字；脚本 `pipeline/_rename_placeholder_pids.py`。
-  **同名合并（17 组）仍未做**，那 17 组**都不含占位 pid**（是正名真重复，必须人工看原文）。
-- ⚠️ **改 pid 时不止 relations.xlsx**：`check_trad.py` 的 `TRADNAME_EXCEPTIONS`
-  **也是按 pid 作键**（9 条异体字豁免）。不同步会同时报两种错：正名对账失效
-  +「例外表里的 X 已不再需要对账」。**凡是「按 pid 索引的表/表/断言」都要同步。**
-- ⚠️ **快照 diff 有盲区：批量改 pid 会被计两次**（既进 `added` 又进 `pid_changed`）。
-  快照按 `(uid, 偏移, surface)` 记，旧 pid 找不到匹配就落 `added`。
-  实测 613 个改名 → 报「新增 306 / 改归 4,420」，那 306 **全是改名**，真正新增 0。
-  **做批量 pid 改动前，先拿映射表核对 `added` 桶。**
-- ⚠️ **改断言判据后必须「注入错误 → 变红 → rebuild 撤销」**，别"看一遍觉得对"。
-  ⚠️ 判据里的**集合比较要想清方向**：写 `_zi and _zi <= set(_zi)` 是恒真，
-  任何东西都归成"字面"，等于把断言废了。
-- ⚠️ **xlsx 的 sheet 名 / 列名一律自动探测，别写死**（同一坑已踩 5 次）：
-  `persons.xlsx` 的表叫中文 **`人物`**（另有 `说明`）；`persons` 表**没有 `era` 列**，是 `dynasty`；
-  `mentions` = `{id, sentence_uid, person_id, surface, s, e, tier}`，**没有 `book` 列**
-  （按书要 `mentions→sentences→chapters.book_id→books.code` 四跳）；
-  book-data 的 mark = `{s,e,pid,tier,alias}`；`relations` 两端是 `person_a/person_b`；
-  `persons` 主键是 `id` 不是 `pid`。→ 用「找带某列的 sheet」（`_pick_sheet(wb, cols)`）。
-- ⚠️ `pipeline/verify.py` 的 `ROOT` 是**字符串**（第 56 行），`ROOT / "x"` 直接 TypeError。
+## 盘点与方案（docs/29；路线图看 docs/31）
+- **交接待办（docs/31 §四，按顺序）**：① **同名合并 17 组（只能人工看原文）**
+  ② 别名分组表 2h（数据已在 `aliasList`，只是没进库）③ 前朝小标记 0.5h
+  ④ 关系边 `book` 列补全 2h ⑤ docs/26 剩 7 条（要先补 6 个人）⑥ 文档 01–18 数字治理。
+  **明确不做**：从正文大规模抽关系。
+- **「改得起是本钱」**：全量重建 ~34s、一键回归 ~200s（10 项）。改完立刻能验，
+  「多做一轮」便宜、「猜着做」贵。⚠️ `verify_p3` 单跑要 4–5 分钟，别用短 timeout。
+- 规模（2026-10-02 晚）：句 96,336 / 人 2,240 / 别名 6,040 / 地 1,575 / 篇 564 /
+  边 99（有据 31）/ **占位 pid 0** / 裴注 523 人 4,173 處。
+- 基线（2026-10-02 晚）：`verify.py` 113/113 · `verify_p3` **79/79** ·
+  `_ui_test_index` 29/29 · `_ui_test_rel` 11/11 · `_ui_test_offline` **51/51** · 回归 **10/10**。
 - ❌ **不做：从正文大规模抽关系**。简介那条线已近抽干（70 条含关系词 / 已出边 59），
   要上量只能扫 96,336 句：无标注数据、误判会画成实线误导、规模无上限。要就只做小试点。
 - 「跟原来网页版一样」**不该 100% 照搬**：静态版的「一次性加载 32.8MB」、
