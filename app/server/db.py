@@ -10,6 +10,7 @@ SQLite 在这个规模（9.6 万句 / 6.6 万命中）下开销可忽略，
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 from typing import Any, Dict, List, Optional
@@ -474,7 +475,78 @@ def person_profile(pid: str) -> Optional[Dict[str, Any]]:
         out = dict(row)
         out["aliases"] = [r[0] for r in conn.execute(
             "SELECT alias FROM aliases WHERE person_id=?", (pid,))]
+        # 完整称谓表（含次数 / 类别 / 按书分账）——「这个别名靠不靠谱」全靠它判断。
+        out["aliasList"] = person_alias_list(pid)
         return out
+
+
+# 称谓类别的展示顺序与 pipeline/annotate.py::build_alias_list 的 KIND_ORDER 对齐。
+# ⚠️ 若 pipeline 新增类别而这里没跟上，它会被排到最后。见 verify_p3 [14]。
+ALIAS_KINDS = ("name", "title", "generic", "short", "other")
+
+
+def person_alias_list(pid: str) -> List[Dict[str, Any]]:
+    """某人的完整称谓清单（人物页「完整称谓表」的数据源）。
+
+    顺序、归并（繁简异体并成一条）、类别、次数都由 pipeline 的 `build_alias_list`
+    算好，经 `build_index_db` 原样灌进 `person_aliases` 表——**这里只读不重算**
+    （app/ 不能 import pipeline/，两者只在 JSON / DB 上交汇）。
+
+    ⚠️ **`n` 恒为全五书合计，按书收窄由前端用 `byBook` 算**。别给这个函数加 `book`
+    参数：离线版没有服务端可问，请求里带 book 也只会被离线路由当成查询串忽略，
+    理应收窄时收不到等值结果，两边就悄悄不一致了（这正是「响应体组装放在 db 层」
+    那条红线想防的事）。让联机与离线跑**同一段前端结算代码**才是真的一致，见
+    `app/web/app.js` 的 `aliasScopeN`。
+    前端敢这么算的前提是 `n == sum(byBook.values())` 对每行成立——verify_p3 [14] 守着。
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT w, simp, n, kind, variants, by_book FROM person_aliases "
+            "WHERE person_id=? ORDER BY seq", (pid,)).fetchall()
+    return _decode_alias_rows(rows)
+
+
+def person_alias_lists() -> Dict[str, List[Dict[str, Any]]]:
+    """批量版：**一趟查完全部人的称谓表**（离线导出用）。
+
+    按「每人一次」调用 `person_alias_list` 会在 2240 人身上开 2240 次连接，
+    慢；但解码必须复用同一个 `_decode_alias_rows`，否则又成了「导出抄一遍」。
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT person_id, w, simp, n, kind, variants, by_book "
+            "FROM person_aliases ORDER BY person_id, seq").fetchall()
+    grouped: Dict[str, List] = {}
+    for pid, *rest in rows:
+        grouped.setdefault(pid, []).append(tuple(rest))
+    return {pid: _decode_alias_rows(v) for pid, v in grouped.items()}
+
+
+def _decode_alias_rows(rows) -> List[Dict[str, Any]]:
+    """`(w, simp, n, kind, variants_json, by_book_json)` → 前端要的形状。
+
+    只有这一份解码。联机端点、离线导出、断言都走它——多写一份就会在某个接口上
+    悄悄分叉（「响应体组装放在 db 层」那条红线要防的就是这个）。
+    """
+    out = []
+    for w, simp, n, kind, variants, by_book in rows:
+        try:
+            vs = json.loads(variants) if variants else []
+        except (TypeError, ValueError):
+            vs = []
+        try:
+            bb = json.loads(by_book) if by_book else {}
+        except (TypeError, ValueError):
+            bb = {}
+        out.append({
+            "w": w,
+            "simp": simp,
+            "kind": kind if kind in ALIAS_KINDS else "other",
+            "n": int(n or 0),
+            "variants": vs,
+            "byBook": bb,
+        })
+    return out
 
 
 def person_mentions(pid: str, tier: Optional[str] = None,

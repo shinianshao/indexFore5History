@@ -145,8 +145,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok("点进人物后有命中句子", gotPerson,
     "实得 " + out.querySelectorAll(".sent[data-chapter]").length + " 条");
   ok("命中按篇分组（有 .chapter-title）", out.querySelectorAll(".chapter-title").length > 0);
-  ok("档案里带别名标签", out.querySelectorAll(".alias-tag").length > 0,
-    "实得 " + out.querySelectorAll(".alias-tag").length);
+  /* 2026-10-03 起：档案里的扁平别名升级成**完整称谓表**（分组 + ×N / 未用）。
+     ⚠️ 这条原来断 `.alias-tag`，换形状后自然是 0——不是坏了，是断言过期了。
+     新形状要断得更细：分组在、双向 marker（×N 与「未用」）都在、泛称单独分色。
+     离线版没有服务端，称谓表是 app.js 从快照的数组还原的，
+     所以这里同时验证了「紧凑数组 → 物件」的还原没漏字段。 */
+  ok("档案里带完整称谓表（分组）", out.querySelectorAll(".alias-group").length > 0,
+    "实得 " + out.querySelectorAll(".alias-group").length + " 组");
+  const offChips = [...out.querySelectorAll(".alias-group .chip")];
+  ok("称谓 chip 渲染出来了（离线还原成功）", offChips.length > 0,
+    "实得 " + offChips.length);
+  ok("有带次数的称谓（还原到 n 字段了）",
+    offChips.some((el) => (el.textContent || "").indexOf("×") > 0),
+    "样例「" + (offChips[0] ? offChips[0].textContent : "") + "」");
+  ok("有分書分帳的提示（还原到 byBook 了）",
+    offChips.some((el) => (el.getAttribute("title") || "").indexOf("分書：") >= 0),
+    "样例 title「" + ((offChips[0] || {}).getAttribute
+      ? String(offChips[0].getAttribute("title") || "").slice(0, 40) : "") + "」");
 
   console.log("\n【5】关系卡");
   const gotRel = await waitFor(() => !!doc.getElementById("relcard"), 60000);

@@ -102,6 +102,23 @@ CREATE TABLE IF NOT EXISTS aliases (
   is_trad   INTEGER
 );
 
+-- 称谓分组表：人物页「完整称谓表」的数据源。
+-- 数据在 annotate 阶段（pipeline/annotate.py build_alias_list）就算好了：
+-- 一条 = 一个归并后的称谓（繁简异体已并成同一条），自带类别 / 次数 / 按书分账。
+-- 这里**原样落表**，app 只读不重算——app/ 不能 import pipeline/，两者只在 JSON / DB 上交汇。
+CREATE TABLE IF NOT EXISTS person_aliases (
+  person_id TEXT,
+  seq       INTEGER,   -- 组内展示顺序（pipeline 已按 kind 序 + 次数降序排好）
+  w         TEXT,      -- 展示写法：取正文中实际出现最多的那一种
+  simp      TEXT,      -- 归并键：异体归一 → 繁转简
+  n         INTEGER,   -- 全五书合计出现次数（0 = 词典收录了但本书不用）
+  kind      TEXT,      -- name / title / generic / short / other
+  variants  TEXT,      -- JSON array：全部写法（繁简 + 异体）
+  by_book   TEXT       -- JSON object：按书分账 {"sj": 353, "hs": 350, ...}
+);
+CREATE INDEX IF NOT EXISTS idx_person_aliases
+  ON person_aliases(person_id, seq);
+
 -- 命中明细独立成表：这是「方便查找确认」的查询入口
 CREATE TABLE IF NOT EXISTS mentions (
   id           INTEGER PRIMARY KEY,
@@ -319,12 +336,31 @@ def main():
         "INSERT OR REPLACE INTO persons VALUES (?,?,?,?,?,?,?)",
         [(p["id"], p.get("tradName"), p.get("name"), p.get("dynasty"),
           p.get("title"), p.get("summary"), "active") for p in d["persons"]])
+    # variant → 是否繁体（供 aliases.is_trad 用；见下方 aliases 灌入处的说明）
+    trad_of = {}
+    for p in d["persons"]:
+        for g in (p.get("aliasList") or []):
+            for v in (g.get("variants") or []):
+                trad_of[(p["id"], v)] = 0 if v == g.get("simp") else 1
     arows = []
     for p in d["persons"]:
         for al in (p.get("aliases") or []):
-            # 是否繁体用「转简体后是否还等于自己」判断，和 check_trad 的口径一致
-            arows.append((p["id"], al, 1 if al == al else 0))
+            # 是否繁体：别写 `al == al` 那种恒真式（以前就是这么错的，整列全填 1）。
+            # 这里用 annotate 已经算好的归并键——variants 里不等于 `simp` 的就是
+            # 繁体写法（`simp` 是 t2s(norm(raw)) 的结果），语料是繁体所以兜底给 1。
+            arows.append((p["id"], al, trad_of.get((p["id"], al), 1)))
     conn.executemany("INSERT OR REPLACE INTO aliases VALUES (?,?,?)", arows)
+
+    # ── 称谓分组表（人物页「完整称谓表」，见 SCHEMA 注释）──────────────
+    parows = []
+    for p in d["persons"]:
+        for i, g in enumerate(p.get("aliasList") or []):
+            parows.append((p["id"], i, g.get("w"), g.get("simp"),
+                           int(g.get("n") or 0), g.get("kind"),
+                           json.dumps(g.get("variants") or [], ensure_ascii=False),
+                           json.dumps(g.get("byBook") or {}, ensure_ascii=False)))
+    conn.executemany(
+        "INSERT OR REPLACE INTO person_aliases VALUES (?,?,?,?,?,?,?,?)", parows)
     conn.executemany(
         "INSERT OR REPLACE INTO places VALUES (?,?,?,?,?,?)",
         [(p["id"], p.get("tradName"), p.get("name"), p.get("kind"),
@@ -356,8 +392,8 @@ def main():
 
     print("\n=== index.db ===")
     for t in ("books", "chapters", "sentences", "mentions",
-              "persons", "aliases", "places", "relations"):
-        print("  {:<10s} {:>8,d}".format(t, cnt(t)))
+              "persons", "aliases", "person_aliases", "places", "relations"):
+        print("  {:<14s} {:>8,d}".format(t, cnt(t)))
     print("  uid 来源：语料透传 {} / 旧库复用 {} / 新建 {} 条".format(
         n_corpus, n_db, len(srows) - reused))
     print("  FTS5 全文索引: {}".format("已建" if fts else "未建"))
@@ -370,6 +406,13 @@ def main():
     r = conn.execute(
         "SELECT COUNT(*) FROM mentions WHERE person_id='p_liubang'").fetchone()[0]
     print("\n  自检：劉邦在库里的命中数 = {}".format(r))
+    # 称谓分组表：劉邦应有「漢王 ×N」这类带次数的条目，且条数与 book-data 对齐
+    na = conn.execute(
+        "SELECT COUNT(*) FROM person_aliases WHERE person_id='p_liubang'").fetchone()[0]
+    top1 = conn.execute(
+        "SELECT w, n FROM person_aliases WHERE person_id='p_liubang' "
+        "ORDER BY n DESC LIMIT 1").fetchone()
+    print("  自检：劉邦称谓 {} 条，最高频「{} ×{}」".format(na, top1[0], top1[1]))
     # 地名同理：秦的命中数应与 book-data 的 places 一致（以前这张表是空的）
     rp = conn.execute(
         "SELECT COUNT(*) FROM place_mentions WHERE place_id='pl_qin'").fetchone()[0]

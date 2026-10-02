@@ -96,10 +96,25 @@ def _chapters(sents: list) -> dict:
     return out
 
 
+def _alias_kind_index(kind: str) -> int:
+    """類別名 → 下標（離線數組不想重複存字符串）。
+
+    ⚠️ 這份順序與 app/web/app.js 的 ALIAS_KINDS **必須一字不差**，對不上不會報錯，
+    只是稱謂分錯組——與關係圖那個 `"%g" % conf` 是同一類型的壞。
+    """
+    return db.ALIAS_KINDS.index(kind) if kind in db.ALIAS_KINDS \
+        else len(db.ALIAS_KINDS) - 1
+
+
 def _persons() -> dict:
-    """人 → [繁名, 簡名, 朝代, 頭銜, 簡介, [別名…]]。"""
+    """人 → [繁名, 簡名, 朝代, 頭銜, 簡介, [別名…], [[w,simp,n,kind碼,[variants],{書:次}]]]。
+
+    末位是完整稱謂表：與聯機 `/api/person` 的 `profile.aliasList` **同一份產出**
+    （都走 db._decode_alias_rows），只是排布成緊湊數組。離線層只做下標還原。
+    """
     als: dict = {}
     out = {}
+    ali = db.person_alias_lists()
     with db.connect() as c:
         for pid, al in c.execute("SELECT person_id, alias FROM aliases"):
             als.setdefault(pid, []).append(al)
@@ -108,7 +123,10 @@ def _persons() -> dict:
         for r in c.execute(sql):
             out[r["id"]] = [r["trad_name"] or "", r["name"] or "",
                             r["dynasty"] or "", r["title"] or "",
-                            r["summary"] or "", als.get(r["id"], [])]
+                            r["summary"] or "", als.get(r["id"], []),
+                            [[a["w"], a["simp"], a["n"], _alias_kind_index(a["kind"]),
+                              a["variants"], a["byBook"]]
+                             for a in ali.get(r["id"], [])]]
     return out
 
 
@@ -331,7 +349,9 @@ def dump_js(data: dict) -> str:
             " * 緊湊格式（省體積，由 app/web/app.js 的離線層還原成前端要的形狀）：\n"
             " *   sents[i] = [uid, 篇號, 正文, 段號]  —— 全庫句子只存一份，按下標引用\n"
             " *   chaps[cid] = [全名, 書號, 起始, 結束)\n"
-            " *   pers[pid]  = [繁名, 簡名, 朝代, 頭銜, 簡介, [別名…]]\n"
+            " *   pers[pid]  = [繁名, 簡名, 朝代, 頭銜, 簡介, [別名…], [稱謂…]]\n"
+            " *               稱謂 = [寫法, 歸并鍵, 次數, 類別碼(見 db.ALIAS_KINDS),\n"
+            " *                       [全部寫法…], {書號: 次數}]\n"
             " *   pm[pid]    = [[句下標, 表面詞, s, e, tier], …]\n"
             " *   pla[pid]   = [繁名, 簡名, 類型, 類型說明, 時代, 簡介]\n"
             " *   pbook[pid] = [總次數, [[書號, 書名, 次數], …]]\n"

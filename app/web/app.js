@@ -65,7 +65,14 @@
     if (!p) return null;
     return {
       profile: { id: pid, trad_name: p[0], name: p[1], dynasty: p[2],
-                 title: p[3], summary: p[4], aliases: p[5] },
+                 title: p[3], summary: p[4], aliases: p[5],
+                 // 稱謂表：只是「緊湊數組 → 物件」的機械還原，
+                 // 與聯機 person_payload 的 aliasList **同形**，共用 aliasTable 渲染。
+                 aliasList: (p[6] || []).map(function (a) {
+                   return { w: a[0], simp: a[1], n: a[2],
+                            kind: ALIAS_KINDS[a[3]] || "other",
+                            variants: a[4] || [], byBook: a[5] || {} };
+                 }) },
       mentions: (D.pm[pid] || []).map(function (m) {
         var s = D.sents[m[0]];
         return { chapter: CHAPT[s[1]] || "", chapter_id: s[1], uid: s[0],
@@ -298,6 +305,82 @@
     return h;
   }
 
+  /* ---------------- 完整稱謂表 ----------------
+     「這個別名靠不靠譜」的唯一依據：「漢王 ×739」是硬命中，「未用」是詞典收了
+     但這批書裡沒出現過——兩者差一個數量級的可信度，混在一起顯示就等於沒告訴用戶。
+     數據由後端 db.person_alias_list 出（離線快照複用同一份），前端只做展示選擇。 */
+  var ALIAS_KINDS = ["name", "title", "generic", "short", "other"];
+  var ALIAS_KIND_LABEL = {
+    name: "本名",
+    title: "職銜（不參與檢索）",
+    generic: "泛稱",
+    short: "單字",
+    other: "其他"
+  };
+  var ALIAS_KIND_HINT = {
+    name: "姓名本身",
+    title: "職銜、封號等（僅展示，不參與檢索；檢索請用本名／字／專屬稱謂）",
+    generic: "稱號類別名，同一稱號在不同篇目可能指不同人，按篇目上下文逐條判定",
+    short: "單字指代，只在特定篇目內有效，不做全庫匹配",
+    other: "字、號、尊稱、別稱等"
+  };
+
+  /* 當前書作用域內的出現次數。
+     ⚠️ **刻意在前端算**：離線版沒有服務端，請求裡帶 book 也只會被離線路由當成
+     查詢串忽略，理应收窄時就收不到等值結果。讓聯機與離線跑**同一段代碼**，
+     是唯一不會悄悄分叉的辦法。前提是 n == ΣbyBook（後端 verify_p3 [14] 守著）。 */
+  function aliasScopeN(a) {
+    var bb = a.byBook;
+    if (!scopeBook || !bb) return a.n || 0;
+    return bb[scopeBook] || 0;
+  }
+
+  /* 懸停提示裡列出各書分帳——不被當前書作用域影響，否則「收窄」就看不到全貌了 */
+  function aliasBookTip(a) {
+    var bb = a.byBook, parts = [];
+    if (!bb) return "";
+    BOOKS.forEach(function (b) {
+      if (bb[b.code]) parts.push(b.name + " " + count(bb[b.code]));
+    });
+    return parts.length ? "\n分書：" + parts.join("　") : "";
+  }
+
+  function aliasTable(list) {
+    var groups = {};
+    list.forEach(function (a) {
+      var k = ALIAS_KINDS.indexOf(a.kind) >= 0 ? a.kind : "other";
+      (groups[k] = groups[k] || []).push(a);
+    });
+    var html = '<div class="alias-groups">';
+    ALIAS_KINDS.forEach(function (kind) {
+      var rows = groups[kind];
+      if (!rows || !rows.length) return;
+      html += '<div class="alias-group"><span class="kind" title="' +
+        esc(ALIAS_KIND_HINT[kind]) + '">' + esc(ALIAS_KIND_LABEL[kind]) +
+        '</span><span class="chips">';
+      rows.forEach(function (a) {
+        var n = aliasScopeN(a);
+        var others = (a.variants || []).filter(function (v) { return v !== a.w; });
+        var tip = a.w + (others.length ? "（亦作 " + others.join("、") + "）" : "") +
+          "\n" + ALIAS_KIND_HINT[kind] + aliasBookTip(a) +
+          "\n" + (scopeBook ? "在本書出現 " : "五書合計出現 ") + count(n) +
+          // 文案要跟着作用域走：全五书下叫「一律未用」才准确，不能说「本书」
+          " 次" + (n ? "" : (scopeBook ? "（本書未用）" : "（五書均未出現）"));
+        html += '<span class="chip' + (n ? "" : " off") +
+          (kind === "generic" ? " gen" : "") + '" title="' + esc(tip) + '">' +
+          esc(a.w) + "<em>" + (n ? "×" + count(n) : "未用") + "</em></span>";
+      });
+      html += "</span></div>";
+    });
+    html += "</div>";
+    if (groups.generic && groups.generic.length) {
+      html += '<div class="alias-note">泛稱稱號（' +
+        groups.generic.map(function (a) { return esc(a.w); }).join("、") +
+        "）不固定屬於誰，每處都按所在篇目的上下文判定歸屬。</div>";
+    }
+    return html;
+  }
+
   function renderPerson(pid) {
     return request("/api/person/" + encodeURIComponent(pid)).then(function (d) {
       var p = d.profile;
@@ -313,8 +396,12 @@
         "<span class=\"dyn\">" + esc(p.dynasty || "") +
         (p.title ? " · " + esc(p.title) : "") + "</span></div>";
       if (p.summary) html += "<p class=\"summary\">" + esc(p.summary) + "</p>";
-      if (p.aliases && p.aliases.length) {
-        html += "<div style=\"margin-top:10px\">" + p.aliases.map(function (a) {
+      // 完整稱謂表（含次數 / 類別 / 分書），沒有它就退回扁平寫法——
+      // 稱謂表是 aliasList 的超集（別名都併進各條的 variants），所以不必兩個都顯示。
+      if (p.aliasList && p.aliasList.length) {
+        html += aliasTable(p.aliasList);
+      } else if (p.aliases && p.aliases.length) {
+        html += "<div class=\"alias-note\">" + p.aliases.map(function (a) {
           return "<span class=\"alias-tag\">" + esc(a) + "</span>";
         }).join("") + "</div>";
       }

@@ -12,7 +12,8 @@
      6. 排序开关（篇数 ⇄ 次数）点了会换文案
      7. 检索框候选（datalist）有人有地，换书后跟着收窄
      8. 点索引条目 → 进检索；点篇目 → 开原文层
-     9. 无 JS 报错
+     9. 完整称谓表：分组 / ×N / 未用 / 泛称分色 / 换书后由 byBook 收窄
+    10. 无 JS 报错
 
    用法（依赖 jsdom，装在隔离目录里，不污染本工程）：
      1) 起服务：PORT=8811 python app/server/main.py
@@ -198,7 +199,80 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok("点篇目 → 原文层打开",
     doc.getElementById("reader").classList.contains("on"));
 
-  console.log("\n【9】控制台无异常");
+  console.log("\n【9】完整称谓表（人物页）");
+  /* 这张表是「这个别名靠不靠谱」的唯一依据：硬命中显示 ×N，词典收了但书里没出现
+     的显示「未用」。它坏了页面**不报错**（renderPerson 有扁平别名兜底），
+     所以必须盯着：分组渲染出来了、两组 marker（×N / 未用）都在、换书后收窄生效。 */
+  const chipOf = (w) => [...doc.querySelectorAll(".alias-group .chip")]
+    .find((el) => (el.textContent || "").indexOf(w) === 0);
+  const chipText = (w) => { const c = chipOf(w); return c ? c.textContent : ""; };
+
+  /* ⚠️ 换书的正确姿势：**先退出人物页再换，换完再进来**。
+     两点原因：① 书切换会 `loadIndex(renderCurrentTab)` 重渲染当前标签页，
+     站在人物页上换书等于把称谓表冲掉；② 人物页的数字是客户端按 byBook 算的，
+     只有重新渲染一次才会刷新。另外必须先切回「全部」读基准——前面【4】
+     已经把书切成了三國志，不切回来就是在跟收窄后的值比（踩过一次）。 */
+  const reindexed = (expectCao) => () => {
+    const ns = [...quick.querySelectorAll("span[data-name]")]
+      .map((el) => el.getAttribute("data-name"));
+    return ns.length > 0 && (expectCao ? ns[0] === "曹操" : ns[0] !== "曹操");
+  };
+  window.location.hash = "#/q/邦";
+  await sleep(400);
+  click(bk(""));
+  await waitFor(reindexed(false), 25000);
+  window.location.hash = "#/person/p_liubang";
+  const gotAlias = await waitFor(
+    () => out.querySelectorAll(".alias-group").length > 0, 20000);
+  ok("人物页渲染出称谓分组表", gotAlias,
+    "out=" + out.innerHTML.slice(0, 80));
+  ok("分组不止一组（本名 / 職銜 / 泛稱…各成一行）",
+    out.querySelectorAll(".alias-group").length >= 2,
+    "实得 " + out.querySelectorAll(".alias-group").length + " 组");
+  ok("每组有类别标签（本名 / 職銜…）",
+    [...out.querySelectorAll(".alias-group .kind")]
+      .some((el) => (el.textContent || "").indexOf("本名") >= 0),
+    "实得 " + [...out.querySelectorAll(".alias-group .kind")]
+      .map((el) => el.textContent).join("、"));
+
+  const chips = [...out.querySelectorAll(".alias-group .chip")];
+  ok("称谓 chip 渲染出来了", chips.length > 0, "实得 " + chips.length);
+  ok("高频称谓带 ×N（「漢王 ×739」这种）",
+    (chipText("漢王") || "").indexOf("×") > 0, "实得「" + chipText("漢王") + "」");
+  ok("存在「未用」称谓（本名劉邦五书里一次没出现过）",
+    chips.some((el) => (el.textContent || "").indexOf("未用") > 0
+      && el.classList.contains("off")),
+    "实得 " + chips.filter((el) => el.classList.contains("off")).length + " 条未用");
+  ok("泛称单独一类、且视觉区分（带 .gen）",
+    out.querySelectorAll(".alias-group .chip.gen").length > 0,
+    "gen=" + out.querySelectorAll(".alias-group .chip.gen").length);
+  ok("泛称有归属说明（不固定属于谁）",
+    (out.querySelector(".alias-note") || {}).textContent
+      && out.querySelector(".alias-note").textContent.indexOf("不固定屬於誰") >= 0,
+    "实得「" + ((out.querySelector(".alias-note") || {}).textContent || "").slice(0, 30) + "」");
+
+  // ⚠️ 换书要在**重新进人物页**之后才有意义：人物页的数字是客户端按 byBook 算的，
+  // 只有重新渲染一次才会刷新。
+  const wideTxt = chipText("漢王");
+  ok("全部书下读到五书合计（「漢王 ×739」）", wideTxt.indexOf("×739") > 0,
+    "实得「" + wideTxt + "」");
+  click(bk("sgz"));
+  const reIdx = await waitFor(reindexed(true), 25000);
+  ok("切换到三國志后索引重算完成", reIdx);
+  window.location.hash = "#/q/邦";
+  await sleep(400);
+  window.location.hash = "#/person/p_liubang";
+  const narrowed = await waitFor(
+    () => chipText("漢王") && chipText("漢王") !== wideTxt, 20000);
+  ok("换书后称谓次数跟着收窄（客戶端按 byBook 算）", narrowed,
+    wideTxt + " → " + chipText("漢王"));
+  const num = (t) => parseInt(((t || "").match(/×([\d,]+)/) || [])[1]
+    ? ((t).match(/×([\d,]+)/)[1]).replace(/,/g, "") : "0", 10);
+  ok("三國志里的数字小于五书合计（不是全量冒充）",
+    num(chipText("漢王")) > 0 && num(chipText("漢王")) < 739,
+    wideTxt + " → " + chipText("漢王"));
+
+  console.log("\n【10】控制台无异常");
   ok("无 jsdomError", errs.length === 0, errs.slice(0, 2).join(" | "));
 
   console.log("\n=============== 索引四块 UI 测试：" + pass + " 通过 / " + fail +

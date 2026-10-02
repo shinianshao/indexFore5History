@@ -1029,6 +1029,104 @@ def test_notes_ledger() -> None:
               ((payload.get("notes") or {}).get("pei") or {}).get("n")))
 
 
+def test_alias_ledger() -> None:
+    """完整称谓表（人物页「×××未用」那张表）· 后端契约。
+
+    为什么单独一组断言：这张表是**人物页判断别名可靠性的唯一依据**，
+    而它坏了之后页面**不报错**——只是退化成扁平别名列表（我在 renderPerson 里
+    留了 fallback）。所以要专门盯着两件事：
+      1. `n == Σ byBook`（前端敢在客户端按书收窄的前提：离线版没有服务端可问）；
+      2. 类别顺序三处对齐（db.ALIAS_KINDS / 导出时的下标 / app.js 的 ALIAS_KINDS）
+         —— 三者错位不会报错，只会把称谓分进错组，是最难发现的一类坏。
+    """
+    print("\n[14] 完整稱謂表 · 後端契約")
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                          # noqa: E402
+
+    con = sqlite3.connect(os.path.join(ROOT, "data", "index", "index.db"))
+    try:
+        rows = con.execute(
+            "SELECT person_id, w, simp, n, kind, variants, by_book "
+            "FROM person_aliases").fetchall()
+        n_pers = con.execute(
+            "SELECT COUNT(*) FROM persons WHERE status='active'").fetchone()[0]
+        # 软弱水源：orphane
+        orphan = con.execute(
+            "SELECT COUNT(DISTINCT person_id) FROM person_aliases "
+            "WHERE person_id NOT IN (SELECT id FROM persons)").fetchone()[0]
+    finally:
+        con.close()
+
+    check("称谓表落库了（不是空的）", bool(rows), "{} 条".format(len(rows)))
+    # 与权威中间产物对齐：book-data.json 的 aliasList 是 pipeline 的输出，
+    # 落表时少一条都不知道。这是「数据形状变了没人知道」的那类防线。
+    bd = os.path.join(ROOT, "data", "index", "book-data.json")
+    want = 0
+    if os.path.exists(bd):
+        with open(bd, encoding="utf-8") as fh:
+            data = json.load(fh)
+        want = sum(len(p.get("aliasList") or []) for p in data.get("persons") or [])
+    check("条数与 book-data.json 的 aliasList 一致（没漏灌 / 没翻倍）",
+          bool(want) and len(rows) == want,
+          "库里 {} 条 / book-data {} 条".format(len(rows), want))
+    check("称谓表没有孤儿 pid", orphan == 0, "孤儿 {}".format(orphan))
+
+    # ⚠️ 不变量：前端 aliasScopeN 敢在客户端求和的前提。破了的话离线版会显示
+    # 与联机版不同的数字，而且不报错。
+    bad_sum = [(r[0], r[1], r[3], sum((json.loads(r[6]) if r[6] else {}).values()))
+               for r in rows
+               if sum((json.loads(r[6]) if r[6] else {}).values()) != (r[3] or 0)]
+    check("不变量 n == Σ byBook（客户端按书收窄的前提）", not bad_sum,
+          "不符 {} 条，样例：{}".format(len(bad_sum), bad_sum[:3]))
+
+    kinds = {}
+    for r in rows:
+        kinds[r[4]] = kinds.get(r[4], 0) + 1
+    check("类别都在 ALIAS_KINDS 里（pipeline 新增类别会被归到 other，但不会丢）",
+          set(kinds) <= set(db.ALIAS_KINDS),
+          "库里类别 {}".format(sorted(kinds)))
+    # 每条都必须能显示为某个分组：落到 other 也要 counts 得到
+    rowsald = set(r[0] for r in rows)
+    check("每个活跃人物都有自己的称谓表",
+          len(rowsald) >= n_pers,
+          "有表的 {} 人 / 活跃人物 {} 人".format(len(rowsald), n_pers))
+
+    # payload 形状：这是**最可能的破法**——有人改了 SELECT 少取一列，
+    # 前端 silent fallback 成扁平别名列表，页面照开。
+    payload = db.person_payload("p_liubang")
+    alist = (payload.get("profile") or {}).get("aliasList") or []
+    check("person_payload.profile.aliasList 存在且不为空", bool(alist),
+          "{} 条".format(len(alist)))
+    shape = all(("w" in a and "kind" in a and "n" in a and "variants" in a
+                 and "byBook" in a) for a in alist)
+    check("每条都有前端要的五个字段（w/kind/n/variants/byBook）", shape,
+          "样例键 {}".format(sorted(alist[0].keys()) if alist else "-"))
+    check("存在「未用」的称谓（这张表存在的意义）",
+          any(int(a.get("n") or 0) == 0 for a in alist),
+          "未用条目 {}".format([a["w"] for a in alist if not a.get("n")][:5]))
+    check("存在高频称谓（芯片显示 ×N 的依据）",
+          any(int(a.get("n") or 0) > 100 for a in alist),
+          "最大 n = {}".format(max((a.get("n") or 0) for a in alist) if alist else 0))
+
+    # 批量版（离线导出用）与单人版（联机用）必须逐字节一致，否则
+    # 「一套前端两种数据源」就在称谓表上悄悄分成两岔。
+    batched = db.person_alias_lists()
+    mismatch = [p for p in list(batched)[:400]
+                if batched[p] != db.person_alias_list(p)]
+    check("批量版与单人版一致（离线/联机同源）", not mismatch,
+          "不一致 {} 人：{}".format(len(mismatch), mismatch[:3]))
+
+    # ⚠️ 顺序对齐：导出时把类别压成下标，app.js 再用 ALIAS_KINDS 反查。
+    # 对不上**不报错**，只是称谓错组——与关系图快照那个 "%g" % conf 同类。
+    js = os.path.join(ROOT, "app", "web", "app.js")
+    m = re.search(r"var ALIAS_KINDS\s*=\s*\[([^\]]*)\]",
+                  open(js, encoding="utf-8").read())
+    js_kinds = tuple(re.findall(r'"([^"]+)"', m.group(1))) if m else ()
+    check("app.js 的 ALIAS_KINDS 与 db.ALIAS_KINDS 一字不差（顺序错位会错组）",
+          js_kinds == db.ALIAS_KINDS,
+          "app.js {} / db {}".format(js_kinds, db.ALIAS_KINDS))
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -1048,6 +1146,7 @@ def main() -> int:
         test_index_pages()
         test_pid_semantic()
         test_notes_ledger()
+        test_alias_ledger()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
