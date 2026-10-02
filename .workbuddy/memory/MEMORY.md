@@ -49,6 +49,12 @@
   （按书要 `mentions→sentences→chapters.book_id→books.code` 四跳）。
 - book-data.json 的 mark = `{s,e,pid,tier,alias}`；取「在书分布」用它 **`byBook`**，
   不是 people.json 的 `books`。
+- **`person_aliases` 表**（2026-10-03）：`{person_id, seq, w, simp, n, kind, variants(JSON), by_book(JSON)}`
+  3,926 条，由 annotate 的 `build_alias_list` 算好后原样落表（app/ 不 import pipeline/）。
+  不变量 **`n == Σ byBook`**（verify_p3 [14] 守）。每人最多 14 条（曹操）。
+- **`persons.era_rank` / `books.era_from,era_to`**（2026-10-03）：时代序号 + 书记载区间
+  （hs[8,10] hhs[10,11] sgz[11,12] js[12,15]，**sj 通史为 NULL**）。eraRank 覆盖 2071/2240。
+  前端 `BOOKS[].era` 是常量，**与库必须一致**（verify_p3 [15] 守）。
 - ⚠️ `pipeline/verify.py` 的 `ROOT` 是**字符串**，`ROOT / "x"` 直接 TypeError（build_dict 同）。
 - ⚠️ **「按 pid 索引的表」不止 relations.xlsx**：`check_trad.py` 的 `TRADNAME_EXCEPTIONS` 也是。
 - ⚠️ **大 JSON 一律走 `common.write_json`**（已改原子写），别手写 `open(p,"w")+json.dump`。
@@ -78,6 +84,17 @@
 - ⚠️ **大 JSON 写 `JSON.parse('…')`**，不要写成对象字面量（15MB 字面量撑爆 V8 AST，jsdom 4GB OOM）。
 - ⚠️ **`location.hash` 规范化必须「守卫与解析吃同一份」**（`normHash`）。教训：两处共用同一个
   规范化值时必须都改，只改一处会把另一个坑从遮蔽下放出来。
+
+## ⚠️ 联机/离线一致性（反复出现的结构性决定）
+- **凡是「按当前书作用域变化」的数字，一律让前端算**（`aliasScopeN` / `isFormerEra`）。
+  离线路由 `offlineGet` 用 `person/([^/?]+)` 匹配，**查询串会被忽略**——后端收窄的话
+  离线版拿不到等值结果，两边悄悄分叉且不报错。数据（byBook / eraRank / eraRange）
+  由后端给全，前端只做选择，两份前端跑同一段代码。
+- **常量漂移是同一类坏**：app.js 的 `ALIAS_KINDS`、`BOOKS[].era` 与库/后端必须一字不差
+  （与关系图 `"%g" % conf` 同类）——错了不报错，只分错组 / 标错人。两条都已在 verify_p3
+  [14]/[15] 里用「正则抽 JS 常量 vs 库」门住。
+- ⚠️ **改了 UI 形状，旧断言会红**——那是断言过期不是 bug（实测：`.alias-tag` 扁平别名
+  → 分组表后离线测试红 1 条）。把旧断言升级成新形状的判据，别删。
 
 ## UI / 测试
 - ⚠️ **UI 测试写错时症状是「等不到」不是报错**：原文层在 `#readerBody` 不在 `#out`；
@@ -124,11 +141,11 @@
 - 审查规矩：关系数据审两次，第二次换**不参与开发的会话**且**只准它写那一份报告**；
   判据是「故意注入错误，断言必须变红」。**不可再生的审定数据，先问它落在哪个会被删重建的产物里。**
 
-## 当前待办（docs/31 §四，按顺序）
+## 当前待办（docs/31 §四，2026-10-03 凌晨更新）
 1. **同名合并 17 组 / 35 人**（⚠️ **只能用户本人看原文拍板**，AI 只出取证清单）+ `p_liuyan_sg`/`_ys` 重复 pid
-2. **人物详情别名分组表**（数据已在 book-data 的 `aliasList`，只是没进库）
-3. 朝代「前朝」小标记（降级版）
-4. 关系边 `book` 列补全（多数为空）
-5. 人工清单剩 7 条（要先补 6 个库里没有的人）
-6. 文档 01–18 数字治理；`app/DEV.md` 待办清单清理
+2. 关系边 `book` 列补全（⚠️ **卡点：`rel_id=md5(a|b|rel|book|era)`，填 book 会改变 rel_id**
+   → 重算就要迁移 39 行证据。实测 99 边仅 31 有据：29 条单书可机械补（sj22/hs7/hhs2/js2），
+   2 条跨书，68 条无据。**取舍要用户定**）
+3. 人工清单剩 7 条（要先补 6 个库里没有的人）
+4. 文档 01–18 数字治理；`app/DEV.md` 待办清单清理
 | — | 网页「标错」入口（照 P4-2 同套做法，UI 代写 `overrides.xlsx`） | 新功能 |
