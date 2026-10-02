@@ -115,9 +115,27 @@
 - 规模（2026-10-02）：句 96,336 / 人 2,240 / 别名 6,040 / 地 1,575 / 篇 564 / 边 99。
 - **两套前端是持续税**（`web/` 48MB 已冻结 + `app/web/` 0.3MB 日常）：每加功能理论上改两处，
   且回归里还跑着 4 个只守静态版的 UI 测试。
-- ⚠️ **pid 语义化（676 个 `p_xNNNNN`）+ 同名合并（17 组）是唯一「越拖越贵」的活**：
-  改 pid 要同步 relations.xlsx / overrides / sentence-edits / people.json，
-  每多落一批数据就多一笔。**应插队到前端细节之前。**（同名人无法自动化，必须人工看原文判。）
+- ⚠️ **pid 语义化已做完（2026-10-02）**：613 个 `p_xNNNNN` → 拼音语义 id，
+  `verify_p3 [12]` 守着「零占位 + 零悬空 + 别名没甩掉」。命名 `p_<全拼>`，
+  撞名加 `_<朝代缩写>`（sg/hs/hhs/js/zh）→ 再撞加数字；脚本 `pipeline/_rename_placeholder_pids.py`。
+  **同名合并（17 组）仍未做**，那 17 组**都不含占位 pid**（是正名真重复，必须人工看原文）。
+- ⚠️ **改 pid 时不止 relations.xlsx**：`check_trad.py` 的 `TRADNAME_EXCEPTIONS`
+  **也是按 pid 作键**（9 条异体字豁免）。不同步会同时报两种错：正名对账失效
+  +「例外表里的 X 已不再需要对账」。**凡是「按 pid 索引的表/表/断言」都要同步。**
+- ⚠️ **快照 diff 有盲区：批量改 pid 会被计两次**（既进 `added` 又进 `pid_changed`）。
+  快照按 `(uid, 偏移, surface)` 记，旧 pid 找不到匹配就落 `added`。
+  实测 613 个改名 → 报「新增 306 / 改归 4,420」，那 306 **全是改名**，真正新增 0。
+  **做批量 pid 改动前，先拿映射表核对 `added` 桶。**
+- ⚠️ **改断言判据后必须「注入错误 → 变红 → rebuild 撤销」**，别"看一遍觉得对"。
+  ⚠️ 判据里的**集合比较要想清方向**：写 `_zi and _zi <= set(_zi)` 是恒真，
+  任何东西都归成"字面"，等于把断言废了。
+- ⚠️ **xlsx 的 sheet 名 / 列名一律自动探测，别写死**（同一坑已踩 5 次）：
+  `persons.xlsx` 的表叫中文 **`人物`**（另有 `说明`）；`persons` 表**没有 `era` 列**，是 `dynasty`；
+  `mentions` = `{id, sentence_uid, person_id, surface, s, e, tier}`，**没有 `book` 列**
+  （按书要 `mentions→sentences→chapters.book_id→books.code` 四跳）；
+  book-data 的 mark = `{s,e,pid,tier,alias}`；`relations` 两端是 `person_a/person_b`；
+  `persons` 主键是 `id` 不是 `pid`。→ 用「找带某列的 sheet」（`_pick_sheet(wb, cols)`）。
+- ⚠️ `pipeline/verify.py` 的 `ROOT` 是**字符串**（第 56 行），`ROOT / "x"` 直接 TypeError。
 - ❌ **不做：从正文大规模抽关系**。简介那条线已近抽干（70 条含关系词 / 已出边 59），
   要上量只能扫 96,336 句：无标注数据、误判会画成实线误导、规模无上限。要就只做小试点。
 - 「跟原来网页版一样」**不该 100% 照搬**：静态版的「一次性加载 32.8MB」、

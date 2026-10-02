@@ -969,17 +969,57 @@ def check():
                   "零命中={} 合计={}".format(_cls_zero, _cls_total)))
     # 负向：这批人是魏晉人，books 限在 js / sgz，绝不能漏进史記、漢書——
     # 漏进去就是同名异人误挂（史記里没有嵇康，有也不该由这条补人链路标）。
-    _cls_leak = []
+    #
+    # ⚠️ 判据 2026-10-02 收紧过一次：原判据是「sj/hs 的 mentionCount 为 0」，
+    # 红了 1 条（嵇康 1 處）。查了才知那處命中串是**他的字「叔夜」**，出現在
+    # 《漢書·古今人表》——那是一张「古今」通表，收兩漢先賢，魏晉人在里面
+    # 有条目是**合理的**；正名「嵇康」在史記/漢書**零命中**。
+    # 所以判据改成「**正名/非字面命中**不得越书」，字面命中单独列出当信息项。
+    # 教训仍是那条：**断言红 ≠ 数据错，先看清它断的那批是什么**。
+    _cls_leak = []       # 正名越书 —— 真的错
+    _cls_byzi = []       # 字面越书 —— 只记录，不当失败
+    # 判据用**库里实查的命中串**（mentions.surface），不是静态名字集合——
+    # 后者只认得「当前这两个写法」，将来别名表一改就会漏判。
+    # book-data 的实际字段：mark = {s, e, pid, tier, alias}；person 主键是 `id`
+    # （不是 `pid`——这个坑踩过不止一次）。这里读 index.db 拿权威命中面。
+    import sqlite3 as _sq
+    # ⚠️ ROOT 是**字符串**（第 56 行），不是 Path——写 ROOT / "x" 会 TypeError。
+    _db = _sq.connect(os.path.join(ROOT, "data", "index", "index.db"))
+    try:
+        _zi_by_pid = {}
+        for _pid, _bk, _surf in _db.execute(
+                "SELECT m.person_id, b.code, m.surface FROM mentions m "
+                "JOIN sentences s ON s.uid = m.sentence_uid "
+                "JOIN chapters ch ON ch.id = s.chapter_id "
+                "JOIN books b ON b.code = ch.book_id "
+                "WHERE b.code IN ('sj','hs')"):
+            _zi_by_pid.setdefault(_pid, []).append((_bk, _surf))
+    except Exception as _e:                        # 库不存在 / schema 变了
+        _zi_by_pid = {}
+        print("  · [警告] 读不到命中面（{}），本条按保守判：只要计数非零就算越书".format(_e))
+
     for _nm in _CLASS_FILL:
         for p in persons:
             if p.get("tradName") != _nm and p.get("name") != _nm:
                 continue
-            bb = p.get("byBook") or {}
-            leak = ((bb.get("sj") or {}).get("mentionCount") or 0) + \
-                   ((bb.get("hs") or {}).get("mentionCount") or 0)
-            if leak:
-                _cls_leak.append((_nm, leak))
-    cases.append(("类传补齐人物不越书到史記/漢書", not _cls_leak,
+            _hits = _zi_by_pid.get(p.get("id")) or []
+            _names = {p.get("name") or "", p.get("tradName") or ""} - {""}
+            for _bk in ("sj", "hs"):
+                _c = ((p.get("byBook") or {}).get(_bk) or {}).get("mentionCount") or 0
+                if not _c:
+                    continue
+                _mine = sorted({s for (bk, s) in _hits if bk == _bk})
+                # 有正名参与 → 是真的同名异人误挂；只有字/号 → 合理，只记录
+                _by_name = sorted(set(_mine) & _names)
+                if not _mine:                      # 查不到命中面 → 保守算错
+                    _cls_leak.append((_nm, _bk, _c, "命中面缺失"))
+                elif _by_name:
+                    _cls_leak.append((_nm, _bk, _c, "正名", _by_name))
+                else:
+                    _cls_byzi.append((_nm, _bk, _c, _mine[:3]))
+    if _cls_byzi:
+        print("  · 字面越书（不计失败）：{}".format(_cls_byzi))
+    cases.append(("类传补齐人物不越书到史記/漢書（正名口径）", not _cls_leak,
                   "越书={}".format(_cls_leak)))
 
     # ===== docs/17 人工判定回填（2026-09 用户逐条勾选后落地）=====

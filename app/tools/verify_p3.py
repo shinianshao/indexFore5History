@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -917,6 +918,52 @@ def test_index_pages() -> None:
                             q_sgz[0]["name"] if q_sgz else "-"))
 
 
+def test_pid_semantic() -> None:
+    """pid 语义化 + 引用完整性。
+
+    为什么要有它：占位 pid（`p_xNNNNN`）本身不是 bug，但它们**会随时间变贵**——
+    每多落一批关系 / override，要改的引用就多一批（2026-10 一次性把 613 个
+    改成拼音语义 id，牵动 persons.xlsx 与 relations.xlsx 两张权威源）。
+
+    这里守三件事：
+      1. 不再产生新的占位 pid（新增人物走拼音语义 id）
+      2. relations 的两端都能在 persons 里查到（**悬空引用不报错，只会静默少一条边**）
+      3. 改过 id 之后别名没有丢（aliases.person_id 对得上）
+    """
+    print("\n[12] pid 语义化 · 引用完整性")
+    idx = os.path.join(ROOT, "data", "index", "index.db")
+    if not os.path.exists(idx):
+        check("索引库存在", False, "找不到 {}".format(idx))
+        return
+    con = sqlite3.connect(idx)
+    try:
+        pids = {r[0] for r in con.execute("SELECT id FROM persons")}
+        ph = sorted(p for p in pids if re.match(r"^p_x\d+$", p or ""))
+        check("不再有占位 pid（p_xNNNNN）", not ph,
+              "剩 {} 个，例 {}".format(len(ph), "、".join(ph[:3])))
+
+        # 关系的两端必须都能查到人 —— 悬空引用是最难发现的一类坏：
+        # apply_relations 照灌不误，前端只是凭空少一条边。
+        dangling = []
+        for r in con.execute(
+                "SELECT person_a, person_b FROM relations WHERE status='active'"):
+            for pid in (r[0], r[1]):
+                if pid and pid not in pids:
+                    dangling.append(pid)
+        check("关系边两端都能在 persons 查到（没有悬空引用）", not dangling,
+              "悬空 {} 个，例 {}".format(len(dangling),
+                                     "、".join(sorted(set(dangling))[:3])))
+
+        n_alias = con.execute("SELECT COUNT(*) FROM aliases").fetchone()[0]
+        bad_alias = con.execute(
+            "SELECT COUNT(*) FROM aliases WHERE person_id IS NOT NULL "
+            "AND person_id NOT IN (SELECT id FROM persons)").fetchone()[0]
+        check("别名都挂在存在的人身上（改 id 没把别名甩掉）", bad_alias == 0,
+              "别名 {} 条，甩掉 {}".format(n_alias, bad_alias))
+    finally:
+        con.close()
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -934,6 +981,7 @@ def main() -> int:
         test_relation_evidence_multi()
         test_relation_evidence_quality()
         test_index_pages()
+        test_pid_semantic()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
