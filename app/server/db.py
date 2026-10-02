@@ -59,6 +59,93 @@ FEMALE_HINT = ("太后", "皇后", "公主", "王后", "夫人", "姬", "妃",
 NO_EVIDENCE_CAP = 0.4      # 与 relations.NO_EVIDENCE_CAP 一致（断言守着）
 
 
+# ---------------------------------------------------------------- 注文账本
+# 裴注（三國志裴松之注）与晉書舊史注是**独立账本**，不进 mentionCount、库里没有表
+# （红线之一）。所以这里从 pipeline 产出的 JSON 直接读。
+#
+# ⚠️ 为什么不入 db：一旦入表就得跟着 uid / 编辑 / 重建一起维护，而注文本来
+# 就是「另一层文本」，与正文的句不是一套切分（items 里的 pseq 是**段**号，
+# 不是句号），硬塞进 sentences 会把两个体系搅在一起。
+#
+# 缓存：1MB 的 JSON 每次请求重解析太浪费，用 mtime 做 key，重跑 pipeline
+# 自动失效（mtime 变了就重新读，不需要手动清缓存）。
+_PEI_CACHE: Dict[str, Any] = {}
+
+
+def _load_note_json(filename: str) -> Dict[str, Any]:
+    """读注文 JSON（带 mtime 缓存）。文件不存在就返回空壳，不报错。"""
+    path = os.path.join(ROOT, "data", "index", filename)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return {"meta": {}, "persons": {}, "chapters": {}}
+    cached = _PEI_CACHE.get(filename)
+    if cached and cached.get("_mtime") == mtime:
+        return cached
+    import json
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    data["_mtime"] = mtime
+    _PEI_CACHE[filename] = data
+    return data
+
+
+def pei_of(pid: str) -> Optional[Dict[str, Any]]:
+    """某人的裴注命中：无则 None。
+
+    返回形状与静态版 `peiOf` 一致（n / chapters / aliases / byChapter / items），
+    这样前端渲染逻辑可以照静态版抄。
+    """
+    return _load_note_json("pei-data.json").get("persons", {}).get(pid)
+
+
+def pei_meta() -> Dict[str, Any]:
+    return _load_note_json("pei-data.json").get("meta", {})
+
+
+def js_note_of(pid: str) -> Optional[Dict[str, Any]]:
+    """某人的晉書舊史注命中。同一份 JSON 形状。"""
+    return _load_note_json("js-note-data.json").get("persons", {}).get(pid)
+
+
+def js_note_meta() -> Dict[str, Any]:
+    return _load_note_json("js-note-data.json").get("meta", {})
+
+
+def person_notes_payload(pid: str) -> Dict[str, Any]:
+    """人物页附带的注文区块（联机端点与离线导出共用这一份）。
+
+    ⚠️ 刻意**不含**「把注文并进总数」的开关：docs/29 §六-3 定了注文只作独立区块，
+    合计要标【裴N】。合并逻辑放前端（显示层），数据层保持两本账分清——
+    一旦在这里相加，红线就破了而没人知道。
+
+    `chapterTitles`：注文的 byChapter 只有篇号，前端得有篇名才能显示。
+    联机模式前端没有「篇号 → 篇名」表（那个表 CHAPT 只在离线快照里填），
+    所以这里把用到的篇名一并带上前端，不必让前端自己建映射。
+    """
+    pei = pei_of(pid)
+    js = js_note_of(pid)
+    cids = set()
+    for note in (pei, js):
+        if note:
+            cids |= set(note.get("byChapter") or {})
+    titles: Dict[str, str] = {}
+    if cids:
+        # 一次查完，别在循环里开连接（曹操 49 篇 → 49 次连接，sqlite 每次
+        # 都要 parse + 打开文件，慢得没道理）
+        qs = ",".join("?" * len(cids))
+        with connect() as conn:
+            for cid, ft in conn.execute(
+                    "SELECT id, full_title FROM chapters WHERE id IN (" + qs + ")",
+                    tuple(cids)):
+                titles[cid] = ft
+        for cid in cids:                 # 查不到的（弃用篇）退回篇号本身
+            titles.setdefault(cid, cid)
+    return {"pei": pei, "peiMeta": pei_meta(),
+            "jsNote": js, "jsNoteMeta": js_note_meta(),
+            "chapterTitles": titles}
+
+
 def looks_female(*texts) -> bool:
     s = "".join(str(t or "") for t in texts)
     return any(w in s for w in FEMALE_HINT)
@@ -320,6 +407,9 @@ def person_payload(pid: str, limit: int = 200) -> Optional[Dict[str, Any]]:
         "mentions": person_mentions(pid, None, limit),
         # 直接给图（{nodes, edges}），与前端 renderGraph 的契约一致
         "relations": relations_graph(pid, 1, limit=limit),
+        # 注文（裴注 / 晉書舊史注）：**独立账本**，与上面的正文命中分开算。
+        # 前端合计时要把注文分量标成【裴N】，不能混进 mentionCount。
+        "notes": person_notes_payload(pid),
     }
 
 

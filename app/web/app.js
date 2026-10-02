@@ -71,7 +71,21 @@
         return { chapter: CHAPT[s[1]] || "", chapter_id: s[1], uid: s[0],
                  text: s[2], surface: m[1], s: m[2], e: m[3], tier: m[4] };
       }),
+      // 注文：離線版與聯機版**同源**（同一份 pei-data.json / js-note-data.json），
+      // 形狀也一樣，所以 notesSection 一段代碼兩邊都能用。
+      notes: offNotes(pid),
       relations: offRel(pid, "1:0")
+    };
+  }
+
+  function offNotes(pid) {
+    var N = D.notes || {};
+    return {
+      pei: (N.pei || {})[pid] || null,
+      peiMeta: N.peiMeta || {},
+      jsNote: (N.jsNote || {})[pid] || null,
+      jsNoteMeta: N.jsNoteMeta || {},
+      chapterTitles: N.chapterTitles || {}
     };
   }
 
@@ -211,6 +225,79 @@
   }
 
   /* ---------- 渲染：人物詳情 ---------- */
+  /* ---------- 注文區塊（裴注 / 晉書舊史注）----------
+     兩本獨立賬本，**不合進正文命中**（紅線）。顯示策略照 static 版：
+     按篇 Top 12 + 明細抽 8 條。差異只有兩處，都是刻意的：
+       1. 合計處標【裴N】/【舊注N】——讓用戶知道這是另一層文本的數字；
+       2. 晉書舊史注只留一行（docs/29 §六-3：全庫僅 4 篇 / 69 處，
+          為它做完整區塊是浪費），但**不是不顯示**——完全藏起來
+          等於讓人以為「這個人沒有舊史注材料」。 */
+  /* 千分位：注文的處數可以到四位数（曹操 726），不隔位的話讀不過來。
+     ⚠️ UI 測試斷過千分位（×1,026），別改成裸數字。 */
+  function count(n) { return (n || 0).toLocaleString("en-US"); }
+
+  function noteBlock(note, label, noteBook, showItems, titles) {
+    if (!note || !note.n) return "";
+    var h = "<div class=\"group-title\">" + label + "　<span class=\"count\">" +
+      count(note.n) + " 處 / " + count(note.chapters) + " 篇" +
+      "　<span class=\"note-warn\">獨立賬本，不計入正文命中</span></span></div>";
+
+    var byCh = note.byChapter || {};
+    var cids = Object.keys(byCh).sort(function (a, b) { return byCh[b] - byCh[a]; });
+    if (cids.length) {
+      h += "<div class=\"card\">";
+      cids.slice(0, showItems ? 12 : 6).forEach(function (id) {
+        var c = (titles && titles[id]) || CHAPT[id] || id;
+        h += "<div class=\"mention-head\"><span class=\"name\">" + esc(c) +
+          "</span><span class=\"meta\">" + count(byCh[id]) + " 處 · " +
+          "<b class=\"open-full\" data-chapter=\"" + esc(id) + "\">讀全篇 ›</b>" +
+          "</span></div>";
+      });
+      if (cids.length > (showItems ? 12 : 6)) {
+        h += "<div class=\"alias-note\">另有 " +
+          count(cids.length - (showItems ? 12 : 6)) + " 篇…</div>";
+      }
+      h += "</div>";
+    }
+
+    var items = note.items || [];
+    if (items.length && showItems) {
+      h += "<div class=\"card\">";
+      items.slice(0, 8).forEach(function (it) {
+        h += "<div class=\"pei-line\" data-chapter=\"" + esc(it.cid) + "\"" +
+          (it.pseq ? " data-pseq=\"" + esc(String(it.pseq)) + "\"" : "") +
+          " title=\"" + esc(it.alias || "") + "\">" + esc(it.text) + "</div>";
+      });
+      h += "<div class=\"alias-note\">摘自" + esc(noteBook || "") +
+        "注文（〈…〉），樣本最多顯示 8 條；完整計數見上方，" +
+        "全文可在讀全篇中以灰藍小字辨認。</div></div>";
+    }
+    return h;
+  }
+
+  function notesSection(pid, notes, mainN) {
+    var h = "";
+    var pei = notes.pei;
+    if (pei && pei.n) {
+      // 【裴N】標記擺在正文命中旁邊：讓用戶一眼看到這是另一層文本的數字。
+      // ⚠️ 這裡**不做 n + pei.n 的相加**（紅線：注文不進 mentionCount）。
+      h += "<div class=\"note-sum\">正文命中 <b>" + count(mainN) +
+        "</b> 處　＋　注文另計 <b class=\"note-chip\">【裴" +
+        count(pei.n) + "】</b></div>";
+    }
+    var titles = notes.chapterTitles || {};
+    h += noteBlock(pei, "三國志裴松之注明細", "三國志", true, titles);
+    var js = notes.jsNote;
+    if (js && js.n) {
+      // 晉書舊史注：docs/29 §六-3 判定只留一行（全庫僅少數篇），
+      // 但**不是不顯示**——完全藏起來會讓人以為這人沒這份材料。
+      h += "<div class=\"group-title\">晉書舊史注　<span class=\"count\">" +
+        count(js.n) + " 處（另有 " + count(js.chapters) +
+        " 篇）　<span class=\"note-warn\">獨立賬本</span></span></div>";
+    }
+    return h;
+  }
+
   function renderPerson(pid) {
     return request("/api/person/" + encodeURIComponent(pid)).then(function (d) {
       var p = d.profile;
@@ -251,6 +338,13 @@
             markSentence(m.text, m.surface, m.tier) + "</div>";
         });
       });
+
+      /* 注文區塊（裴注 / 晉書舊史注）——**獨立賬本**。
+         ⚠️ 紅線：注文命中**不進正文 mentionCount**。這裡只把它的分量
+         寫成【裴N】/【舊注N】並列，絕不與正文的「N 處」相加。
+         數據源是 pipeline 產的 pei-data.json / js-note-data.json（不入庫），
+         經 db.person_notes_payload 傳過來，與聯機端點/離線導出共用一份。 */
+      html += notesSection(pid, d.notes || {}, (d.mentions || []).length);
 
       /* 關係：資料來自 workbook/relations.xlsx，後端已轉成 {nodes, edges}。
          圖 + 列表並存：**虛線＝無證據的推斷**，實線＝語料裡有原句可跳，

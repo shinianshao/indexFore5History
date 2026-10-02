@@ -187,6 +187,42 @@ def _relations() -> dict:
     return out
 
 
+def _notes(max_items: int = 8) -> dict:
+    """注文（裴注 / 晉書舊史注）→ 離線版要的形狀。
+
+    與聯機版共用 `db.person_notes_payload` 的**同一份數據源**
+    （pipeline 產的 pei-data.json / js-note-data.json），只是這裡一次全量取。
+    ⚠️ items 只取前 `max_items` 條：前端只顯示 8 條，而源文件裡曹操一人就 40 條，
+    全量塞進去只是白胖 15MB 的快照。
+    """
+    out: dict = {"pei": {}, "peiMeta": {}, "jsNote": {}, "jsNoteMeta": {},
+                "chapterTitles": {}}
+    for key, filename in (("pei", "pei-data.json"),
+                          ("jsNote", "js-note-data.json")):
+        raw = db._load_note_json(filename)
+        out[key + "Meta"] = {k: v for k, v in (raw.get("meta") or {}).items()
+                             if k != "generatedAt"}
+        for pid, note in (raw.get("persons") or {}).items():
+            slim = {k: note[k] for k in ("n", "chapters", "aliases", "byChapter")
+                    if k in note}
+            items = (note.get("items") or [])[:max_items]
+            if items:
+                slim["items"] = items
+            out[key][pid] = slim
+            for cid in (note.get("byChapter") or {}):
+                out["chapterTitles"].setdefault(cid, None)
+    with db.connect() as c:
+        cids = list(out["chapterTitles"])
+        if cids:
+            qs = ",".join("?" * len(cids))
+            got = {cid: ft for cid, ft in c.execute(
+                "SELECT id, full_title FROM chapters WHERE id IN (" + qs + ")",
+                tuple(cids))}
+            for cid in cids:
+                out["chapterTitles"][cid] = got.get(cid, cid)
+    return out
+
+
 def build() -> dict:
     """取數並組裝。26 秒裡大部分花在關係圖上，所以逐步記時——
     想知道該優化哪一步，看一眼就知道，不用再插打印。"""
@@ -246,6 +282,11 @@ def build() -> dict:
         "pbook": pbook,
         "idx": idx,
         "rel": rel,
+        # 注文（裴注 / 晉書舊史注）：**獨立賬本**，離線版也要能顯示。
+        # ⚠️ 只取前 8 條 items（前端也只顯示 8 條，源文件裡曹操一人就有 40 條），
+        #    n / chapters / byChapter / aliases 全量給（那是計數與篇級分布）。
+        #    這樣體積只多約 0.3MB，而顯示效果與聯機版一致。
+        "notes": _notes(),
     }
     data["_sec"] = round(time.time() - t0, 1)
     data["_steps"] = took
@@ -255,7 +296,7 @@ def build() -> dict:
 # ---------------------------------------------------------------- 落盤
 
 # 这几个键是大块，先写成**字符串**再由 JSON.parse 还原（见 dump_js 里的原因）
-BIG = ("sents", "chaps", "pers", "pm", "pla", "pbook", "idx", "rel")
+BIG = ("sents", "chaps", "pers", "pm", "pla", "pbook", "idx", "rel", "notes")
 
 
 def dump_js(data: dict) -> str:
@@ -347,7 +388,8 @@ def report(data: dict, out_dir: str) -> None:
     print("  ── 體積 ──")
     # ⚠️ 按**字節**算，不是字符數：中文一個字 1 字符但 3 字節，
     # 用 len(str) 會把體積低估到三分之一，看著像「還能再塞點」。
-    for k in ("sents", "idx", "pm", "pers", "pla", "rel", "chaps", "pbook", "stats"):
+    for k in ("sents", "idx", "pm", "pers", "pla", "rel", "chaps", "pbook", "stats",
+              "notes"):
         n = len(json.dumps(data.get(k), ensure_ascii=False,
                            separators=(",", ":")).encode("utf-8"))
         print("  {:<8} {:>6.1f} MB".format(k, n / 1048576.0))

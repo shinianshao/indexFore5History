@@ -320,6 +320,39 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
   }
 
+  /* ---- 注文區塊（裴注 / 晉書舊史注）：獨立賬本（docs/30 §五 第 4 项）----
+     後端斷的是「沒并進正文 mentions」，這裡斷**顯示層**：
+     區塊在、標了【裴N】、正文與注文兩個數字分開擺著。 */
+  click(tab("persons"));
+  await waitFor(() => out.querySelectorAll(".item[data-name]").length > 0, 60000);
+  // 找一個裴注命中多的人（曹操：正文 1,823 / 裴注 726）
+  // ⚠️ 檢索是**點按鈕**觸發的（qEl 只綁了 keydown，沒綁 input）——
+  // 我一開始派發 input事件，結果一行都沒出來，症狀是「等不到」不是報錯。
+  q.value = "曹操";
+  click(doc.getElementById("btn"));
+  const gotRow2 = await waitFor(
+    () => out.querySelectorAll(".row[data-pid]").length > 0, 60000);
+  ok("搜到曹操（有大量裴注命中）", gotRow2,
+    "結果 " + out.querySelectorAll(".row[data-pid]").length + " 行");
+  click(out.querySelector(".row[data-pid]"));
+  await waitFor(() => out.querySelectorAll(".note-sum").length > 0, 60000);
+  ok("人物页有注文合計條（note-sum）", out.querySelectorAll(".note-sum").length > 0);
+  const noteSum = out.querySelector(".note-sum");
+  ok("合計條把正文與裴注**分開**標（【裴N】）",
+    noteSum && noteSum.querySelector(".note-chip") &&
+    /【裴[\d,]+】/.test(noteSum.textContent),
+    "顯示「" + (noteSum ? noteSum.textContent.replace(/\s+/g, " ") : "") + "」");
+  ok("裴注區塊有篇級分布（讀全篇可點）",
+    out.querySelectorAll(".open-full[data-chapter]").length > 0,
+    "可讀全篇 " + out.querySelectorAll(".open-full[data-chapter]").length + " 處");
+  ok("裴注明細行可點（能跳原文）", out.querySelectorAll(".pei-line[data-chapter]").length > 0,
+    "明細 " + out.querySelectorAll(".pei-line[data-chapter]").length + " 條");
+  ok("裴注區塊有千分位（曹操 726 處）",
+    /[\d],[\d]{3}/.test(doc.body.textContent),
+    "页面上有千分位數字");
+  ok("標了「獨立賬本，不計入正文命中」",
+    /獨立賬本|獨立帳本/.test(doc.body.textContent));
+
   console.log("\n【8】无 JS 报错");
   ok("全程无 JS 报错（误用 fetch 会在这里红）", errs.length === 0,
     errs.slice(0, 4).join(" | "));

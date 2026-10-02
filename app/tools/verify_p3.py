@@ -964,6 +964,71 @@ def test_pid_semantic() -> None:
         con.close()
 
 
+def test_notes_ledger() -> None:
+    """裴注 / 晉書舊史注：**獨立賬本**（红线）。
+
+    为什么这条必须有一條断言：注文是「另一层文本」的命中，數字一大就很容易被
+    顺手加进总命中里（靜態版就有 `peiStatOf` 把它併入顯示統計）。一旦破，
+    **所有命中数都会悄悄变**——而正文标注、泛称基线、快照全都不变，
+    看起来「只是显示口径调整」。所以要专门盯着。
+    """
+    print("\n[13] 注文賬本 · 獨立計數")
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                          # noqa: E402
+
+    notes = db.person_notes_payload("p_caocao")
+    pei = notes.get("pei")
+    check("裴注数据能读到（裴注账本不是空的）", bool(pei and pei.get("n")),
+          "曹操 pei.n = {}".format((pei or {}).get("n")))
+    check("裴注带篇级分布与明细", bool(pei and pei.get("byChapter") and pei.get("items")),
+          "byChapter {} 篇 / items {} 條".format(
+              len((pei or {}).get("byChapter") or {}),
+              len((pei or {}).get("items") or [])))
+    check("注文带篇名表（前端聯機模式沒有 CHAPT 可用）",
+          bool(notes.get("chapterTitles")),
+          "给了 {} 個篇名".format(len(notes.get("chapterTitles") or {})))
+
+    # ⚠️ 红线本体：person_payload 的正文 mentions 不含任何注文来源。
+    # 判据用「正文命中总数」对不上「正文 + 注文」——但更硬的是直接查库：
+    # mentions 表里不该有 pei/jsNote 混进来的行。
+    con = sqlite3.connect(os.path.join(ROOT, "data", "index", "index.db"))
+    try:
+        # 库里压根不该有 pei_mentions 之类的表（注文不入库）
+        tabs = {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        check("注文不入库（没有 pei/notes 相关的表）",
+              not any("pei" in t.lower() or "note" in t.lower() for t in tabs),
+              "库里含注文表：{}".format(
+                  [t for t in tabs if "pei" in t.lower() or "note" in t.lower()]))
+        n_main = con.execute(
+            "SELECT COUNT(*) FROM mentions WHERE person_id='p_caocao'").fetchone()[0]
+    finally:
+        con.close()
+
+    # ⚠️ 红线本体，且必须**在 payload 层面**断：
+    # 最典型的破法不是往库里灌表，而是有人为了「显示更全」在 person_payload 里
+    # 把 pei 的 n 条拼进 mentions（我故意注入过，库里查不出来）。
+    # ⚠️ 判据不能用「payload 条数 == 库里条数」——mentions 有 limit（默认 200），
+    # payload 天然只有 200 条，比库里少是正常的；注入 726 条后反而可能还是
+    # 「不超库内总数」，判据形同虚设（第一版就栽在这）。
+    # 可靠判据：**逐条看命中章名/uid 有没有注文标记**——注文的条目必然带
+    # 独立的 chapter 标记（【裴】之类）或独立 uid 前缀，因为它们不是正文句子。
+    payload = db.person_payload("p_caocao")
+    ms = payload.get("mentions") or []
+    note_marked = [m for m in ms
+                   if "【" in str(m.get("chapter") or "")
+                   or str(m.get("uid") or "").startswith(("PEI", "JSNOTE"))
+                   or str(m.get("tier") or "") == "note"]
+    check("payload 的 mentions 里没有注文条目（逐条查标记）", not note_marked,
+          "混进 {} 条，样例：{}".format(
+              len(note_marked),
+              [str(m.get("chapter")) for m in note_marked[:3]]))
+    check("注文分量能单独取到（没被丢掉，只是不合并）",
+          bool((payload.get("notes") or {}).get("pei")),
+          "notes.pei.n = {}".format(
+              ((payload.get("notes") or {}).get("pei") or {}).get("n")))
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -982,6 +1047,7 @@ def main() -> int:
         test_relation_evidence_quality()
         test_index_pages()
         test_pid_semantic()
+        test_notes_ledger()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
