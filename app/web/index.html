@@ -15,6 +15,8 @@
     --border: #DED8C8;  /* 版框線 */
     --accent: #9E3D32;  /* 朱砂 */
     --accent-soft: #F5E9E6;
+    --place: #2f7d7d;   /* 地名：青碧，與人物的朱砂分色（與靜態版同值） */
+    --place-soft: #e4f0f0;
     --serif: "Songti SC", "SimSun", "Source Han Serif SC", "Noto Serif CJK SC", serif;
     --sans: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
   }
@@ -159,6 +161,96 @@
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .err { color: var(--accent); font-size: 13px; padding: 10px 0; }
 
+  /* ---- 書切換條 ---- 視覺沿用靜態版 web/：膠囊按鈕 + 「選書」前綴 */
+  .bookbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 22px 0 0; }
+  .bookbar::before {
+    content: "選書"; font-size: 12px; color: var(--muted);
+    letter-spacing: 1px; margin-right: 2px;
+  }
+  .bk {
+    display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; user-select: none;
+    padding: 6px 13px; border: 1px solid var(--border); border-radius: 20px;
+    background: var(--panel); color: var(--muted); font-family: var(--serif); font-size: 15px;
+  }
+  .bk:hover { border-color: var(--accent); color: var(--accent); }
+  .bk.on {
+    border-color: var(--accent); background: var(--accent-soft);
+    color: var(--accent); font-weight: 600;
+  }
+  .bk.all { font-family: var(--sans); font-size: 13px; margin-left: 6px; }
+
+  /* ---- 標籤頁 ---- 與靜態版同序：檢索結果 / 人物索引 / 地名索引 / 篇目一覽 */
+  .tabs { display: flex; gap: 4px; margin: 18px 0 14px; border-bottom: 1px solid var(--border); }
+  .tabs span {
+    padding: 8px 16px; font-size: 14px; cursor: pointer; color: var(--muted);
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tabs span.on { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+  /* ---- 快捷詞 ---- 人物（朱砂）與地名（青碧）分色，一眼分辨兩類實體 */
+  .quick { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+  .quick span {
+    padding: 5px 12px; font-size: 13px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 20px;
+    background: var(--panel); color: var(--muted);
+  }
+  .quick span:hover { border-color: var(--accent); color: var(--accent); }
+  .quick span.land { border-color: #cfe2e2; }
+  .quick span.land:hover { border-color: var(--place); color: var(--place); }
+  .quick i.sep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 4px; }
+  .quick .qn { font-weight: 400; color: #b8b3a8; font-size: 11px; margin-left: 5px; }
+
+  /* ---- 索引面板 ---- */
+  .group-title {
+    margin: 26px 0 12px; font-size: 14px; font-weight: 600;
+    color: var(--accent); letter-spacing: 1px; display: flex; align-items: center; gap: 10px;
+  }
+  .group-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+  .group-title .count { font-weight: 400; color: var(--muted); font-size: 13px; }
+  .group-title .sort-toggle {
+    color: var(--accent); text-decoration: underline dotted; cursor: pointer;
+  }
+  .group-title .sort-toggle:hover { text-decoration: underline solid; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+  .grid .item {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+    padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); cursor: pointer; font-size: 14px;
+  }
+  .grid .item:hover { border-color: var(--accent); }
+  .grid .item .n { font-family: var(--serif); }
+  .grid .item .c { color: var(--muted); font-size: 12px; }
+  /* 單字國名：左側青碧細線，提示「與姓氏同形、判定非絕對」 */
+  .grid .item.char-place {
+    border-left: 3px solid var(--place);
+    background: linear-gradient(to right, var(--place-soft), var(--panel) 38%);
+  }
+  .grid .item.char-place .n { color: var(--place); }
+
+  /* ---- 篇目一覽 ---- */
+  .book-title {
+    margin: 26px 0 10px; font-size: 15px; font-weight: 600; color: var(--accent);
+    letter-spacing: 1px; border-left: 3px solid var(--accent); padding-left: 10px;
+  }
+  .book-title .count { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 8px; }
+  .chap-row {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+    padding: 9px 12px; border-bottom: 1px dashed var(--border); cursor: pointer;
+  }
+  .chap-row:last-child { border-bottom: none; }
+  .chap-row:hover .n { color: var(--accent); }
+  .chap-row .n { font-family: var(--serif); font-size: 15px; }
+  .chap-row .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .chap-row .cat {
+    font-family: var(--serif); font-size: 11px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 5px; padding: 0 6px; margin-left: 8px;
+  }
+  /* 篇主 / 高頻地名：與 .cat 同形但換色，讓「這一類」和「這一篇講誰」分得開 */
+  .chap-row .tag {
+    font-family: var(--serif); font-size: 11px; color: var(--accent-soft, #8a6d3b);
+    background: var(--panel); border-radius: 5px; padding: 0 6px; margin-left: 6px;
+  }
+
   /* 原文層 */
   .reader { position: fixed; inset: 0; background: rgba(43,42,39,.35); display: none; z-index: 20; }
   .reader.on { display: block; }
@@ -221,13 +313,24 @@
 </header>
 
 <div class="wrap">
+  <div class="bookbar" id="books"></div>
   <div class="searchbar">
-    <input id="q" type="text" placeholder="輸入人名／稱謂，如 劉邦、梁王、霍光" autocomplete="off">
+    <input id="q" type="text" list="names" placeholder="輸入人名／稱謂／地名，如 劉邦、梁王、霍光、滎陽" autocomplete="off">
+    <!-- 候選由 /api/index 回來的人名 + 地名現填：換書就跟著換，
+         不會在漢書裡推薦一個只出現在晉書的人 -->
+    <datalist id="names"></datalist>
     <button id="btn">檢索</button>
   </div>
   <div class="modes">
     <span data-mode="person" class="on">人物檢索</span>
     <span data-mode="fts">全文檢索</span>
+  </div>
+  <div class="quick" id="quick"></div>
+  <div class="tabs">
+    <span data-tab="search" class="on">檢索結果</span>
+    <span data-tab="persons">人物索引</span>
+    <span data-tab="places">地名索引</span>
+    <span data-tab="chapters">篇目一覽</span>
   </div>
   <div id="out"></div>
   <div class="hint" id="hint"></div>
@@ -247,6 +350,8 @@
   </div>
 </div>
 
-<script src="/app.js"></script>
+<!-- ⚠️ 相對路徑，不是 /app.js：dist/ 離線版要能 file:// 双击打开，
+     絕對路徑會指到 file:///app.js 去。聯機時頁面在 / 下，相對路徑一樣解析成 /app.js。 -->
+<script src="app.js"></script>
 </body>
 </html>

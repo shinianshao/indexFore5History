@@ -105,15 +105,37 @@ def norm(text):
 def load_json(path, default=None):
     if not os.path.exists(path):
         return default
-    with open(path, encoding="utf-8") as fh:
-        return json.load(fh)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except json.JSONDecodeError as e:
+        # 別讓「上一輪被中斷留下的半截檔」偽裝成「你的改動寫壞了」
+        raise SystemExit(
+            "{} 不是合法 JSON（{}）。\n"
+            "多半是上一輪寫到一半被中斷（Ctrl-C / 測試超時）留下的半截檔，"
+            "而不是你的改動有問題——重跑 app/tools/rebuild.py 即可再生。".format(path, e))
 
 
 def write_json(path, obj, indent=None):
+    """原子寫：先寫同目錄的 .tmp，再 os.replace 頂掉舊檔。
+
+    ⚠️ 為什麼必須原子：book-data.json 有 8MB，「open(w) 清空原檔 → 慢慢 dump」
+    中間只要被打斷（Ctrl-C、測試超時 SIGTERM、機器卡死），留下的就是**半截 JSON**。
+    半截檔比沒有更糟——下一次 load_json 報的是
+    「Expecting ',' delimiter: line 1 column 6775237」，
+    看不出是「上一輪被中斷」，只會讓人以為是自己的改動寫壞了。
+    原子寫之後，這種情況最多留下一個 .tmp 垃圾，原檔永遠是上一輪完整的。
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(obj, fh, ensure_ascii=False, indent=indent,
                   separators=None if indent else (",", ":"))
+        # 先 flush 再 fsync，確保真的落到磁盤上——os.replace 只保證目錄項原子，
+        # 不保證數據已寫完（掉電時仍可能換上一個空殼）
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
 
 
 def compile_alias_pattern(alias_pairs):

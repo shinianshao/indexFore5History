@@ -207,28 +207,33 @@ def test_overrides() -> None:
                     "--uid", uid2, "--nth", "1", "--action", "drop",
                     "--note", "P3-5 自檢"], cwd=ROOT)
 
-    with open(BOOK, encoding="utf-8") as f:
-        before_drop = _count_mark(json.load(f), uid2, surf2)
+    # ⚠️ revoke 必須放 finally：這兩條 override 一旦「加了但沒撤」，就不是多兩行
+    # 髒數據，而是**真的在改數據**——下一次重建會把它們套用上去，「沛公」被改歸
+    # 給項羽就是這麼來的（實測：verify_p3 崩在 revoke 之前，留了兩條 active）。
+    try:
+        with open(BOOK, encoding="utf-8") as f:
+            before_drop = _count_mark(json.load(f), uid2, surf2)
 
-    run("app/tools/overrides.py", "apply")
-    with open(BOOK, encoding="utf-8") as f:
-        d = json.load(f)
+        run("app/tools/overrides.py", "apply")
+        with open(BOOK, encoding="utf-8") as f:
+            d = json.load(f)
 
-    _, m1 = _find_mark(d, uid1, surf1)
-    check("reassign 生效（pid 已改）", m1 is not None and m1.get("pid") == "p_xiangyu",
-          "pid={}".format(m1.get("pid") if m1 else "—"))
-    check("reassign 保留原 tier（只加 override 標記）",
-          m1 is not None and m1.get("override") == 1 and m1.get("tier") != "override")
+        _, m1 = _find_mark(d, uid1, surf1)
+        check("reassign 生效（pid 已改）",
+              m1 is not None and m1.get("pid") == "p_xiangyu",
+              "pid={}".format(m1.get("pid") if m1 else "—"))
+        check("reassign 保留原 tier（只加 override 標記）",
+              m1 is not None and m1.get("override") == 1 and m1.get("tier") != "override")
 
-    after_drop = _count_mark(d, uid2, surf2)
-    check("drop 生效（命中條數 -1）", after_drop == before_drop - 1,
-          "{} → {}（surface={}）".format(before_drop, after_drop, surf2))
-
-    # 復原：撤銷兩條糾錯 + 重跑 annotate（apply 是破壞性的，只能靠重標註還原）
-    subprocess.run([PY, os.path.join(HERE, "overrides.py"), "revoke",
-                    "--uid", uid1], cwd=ROOT)
-    subprocess.run([PY, os.path.join(HERE, "overrides.py"), "revoke",
-                    "--uid", uid2], cwd=ROOT)
+        after_drop = _count_mark(d, uid2, surf2)
+        check("drop 生效（命中條數 -1）", after_drop == before_drop - 1,
+              "{} → {}（surface={}）".format(before_drop, after_drop, surf2))
+    finally:
+        # 復原：撤銷兩條糾錯 + 重跑 annotate（apply 是破壞性的，只能靠重標註還原）
+        subprocess.run([PY, os.path.join(HERE, "overrides.py"), "revoke",
+                        "--uid", uid1], cwd=ROOT)
+        subprocess.run([PY, os.path.join(HERE, "overrides.py"), "revoke",
+                        "--uid", uid2], cwd=ROOT)
     # ⚠️ 復原必須走完整重建（annotate 四步 + 建庫）。
     # 只跑 annotate.py 會讓 book-data.json 缺 `places` 鍵——地名是
     # annotate_places.py 加的，缺了它舊斷言 verify.py 直接 KeyError。
@@ -692,14 +697,25 @@ def purge_test_rows() -> None:
         if not nc:
             wb.close()
             continue
-        doomed = []
+        doomed, revived = [], []
         for r in ws.iter_rows(min_row=2):
-            stat = str(r[sc - 1].value or "active") if sc else "active"
-            if stat != "dead":
+            if not any(m in str(r[nc - 1].value or "") for m in TEST_MARKERS):
                 continue
-            if any(m in str(r[nc - 1].value or "") for m in TEST_MARKERS):
+            stat = str(r[sc - 1].value or "active") if sc else "active"
+            if stat == "dead":
                 doomed.append(r[0].row)
-        for i in sorted(doomed, reverse=True):
+            else:
+                # ⚠️ 活著的自檢行 = 上一輪崩在 revoke **之前**留下的。
+                # 這不是「多一行髒數據」，是**真的在改數據**：本次重建把它套用上去，
+                # 「沛公」就被改歸給項羽（實測出現過）。先標 dead 再一起刪。
+                if sc:
+                    r[sc - 1].value = "dead"
+                revived.append(r[0].row)
+        if revived:
+            print("  ⚠ {} 裡有 {} 行**活著**的自檢行（上一輪崩在中途），已先作廢".format(
+                os.path.basename(path), len(revived)))
+            doomed.extend(revived)
+        for i in sorted(set(doomed), reverse=True):
             ws.delete_rows(i)
         if doomed:
             try:
@@ -846,6 +862,61 @@ def test_relation_evidence_quality() -> None:
         conn.close()
 
 
+def test_index_pages() -> None:
+    """索引四块（书切换 / 快捷词 / 人物索引 / 地名索引 / 篇目一覽）的后端契约。
+
+    为什么要有它：这几块是「跟静态版对齐」时补的，前端有 _ui_test_index.js 守着，
+    但**后端那半没人管**——尤其 chapters 的 main_persons / top_places 两列，
+    是后来才加进建库脚本的，下次改 SCHEMA 被人顺手删掉也不会有任何测试变红。
+    """
+    print("\n[10] 索引四块 · 后端契约")
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                          # noqa: E402
+
+    chapters = db.list_chapters()["items"]
+    check("篇目一覽取到五书全部篇目（>500）", len(chapters) > 500,
+          "实得 {}".format(len(chapters)))
+    with_owner = sum(1 for c in chapters if c.get("mainPersons"))
+    # book-data 里 445/564 篇标了篇主；写 >=400 而不是写死 445，
+    # 免得将来 annotate 改判据时这条变成假失败
+    check("篇目带篇主（不是空标签）", with_owner >= 400,
+          "{}/{}".format(with_owner, len(chapters)))
+    with_place = sum(1 for c in chapters if c.get("topPlaces"))
+    check("篇目带高频地名", with_place > 500, "{}/{}".format(with_place, len(chapters)))
+    # 只斷「本紀 / 世家」：這兩類是**以人命名**的（項羽本紀、齊太公世家），
+    # 沒有篇主就是標註漏了。列傳**不能這麼斷**——它裡面混著類傳與四夷傳
+    # （西南夷列傳、龜策列傳、貨殖傳、匈奴傳、西域傳、宣元六王傳…），
+    # 本來就沒有一個可指的篇主，實測 31 篇，拿它當紅線只會得到假失敗。
+    bad = [c["id"] for c in chapters
+           if c.get("category") in ("本紀", "世家") and not c.get("mainPersons")]
+    check("本紀/世家篇篇有篇主（它们以人命名，没有就是漏标）", not bad,
+          "缺 {} 篇，例 {}".format(len(bad), "、".join(bad[:3])))
+    check("篇目带字數與句數（静态版篇目行有）",
+          all(c.get("charCount") and c.get("sentenceCount") for c in chapters))
+
+    persons = db.list_persons()["items"]
+    places = db.list_places()["items"]
+    check("人物索引非空（全书 2240 人）", len(persons) > 2000, "实得 {}".format(len(persons)))
+    check("地名索引非空", len(places) > 1000, "实得 {}".format(len(places)))
+    check("人物索引条目带分书分布（前端「见於哪本书」靠它）",
+          all(p.get("books") for p in persons[:50]))
+    check("地名索引条目带类型（按类型分组靠它）",
+          all(p.get("kindLabel") for p in places))
+
+    sgz = db.list_persons(book="sgz")["items"]
+    check("按书收窄：三國志人物少于全部",
+          0 < len(sgz) < len(persons), "全部 {} → 三國志 {}".format(len(persons), len(sgz)))
+    q_all = db.quick_words()["persons"]
+    q_sgz = db.quick_words(book="sgz")["persons"]
+    check("快捷词按书换（三國志头一个应是曹操）",
+          bool(q_sgz) and q_sgz[0]["name"] == "曹操",
+          "实得 {}".format(q_sgz[0]["name"] if q_sgz else "无"))
+    check("快捷词全量头一个不是三國志的头一个（口径真的分书）",
+          bool(q_all) and q_all[0]["name"] != q_sgz[0]["name"],
+          "{} vs {}".format(q_all[0]["name"] if q_all else "-",
+                            q_sgz[0]["name"] if q_sgz else "-"))
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -862,6 +933,7 @@ def main() -> int:
         test_rel_view()
         test_relation_evidence_multi()
         test_relation_evidence_quality()
+        test_index_pages()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")

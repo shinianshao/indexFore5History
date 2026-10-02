@@ -95,6 +95,246 @@ def stats() -> Dict[str, Any]:
         return out
 
 
+# ---------------------------------------------------------------- 索引页
+#
+# 静态版 web/ 的四块（人物索引 / 地名索引 / 篇目一覽 / 快捷词）在新版里一直没做，
+# 因为 index.db 当初**漏了把地名命中入库**（`pmarks` 没写），只能绕开数据库读 JSON。
+# 现在补了 `place_mentions` 表，这几块就能正经从库里查了。
+#
+# 排序口径与静态版一致：**按提及篇数（.c）默认，可切按次数（.n）**。
+# ⚠️ 不是拼音序——拼音只是 Excel 里给人看排序用的辅助列，界面从来没按它排过。
+
+# 地名按类型分组展示。顺序与 pipeline/annotate_places.py 的 KIND_ORDER 一致。
+PLACE_KIND_ORDER = ["国", "郡", "县", "关", "山", "川", "湖", "域", "外"]
+PLACE_KIND_LABEL = {"国": "国/朝代", "郡": "郡", "县": "县邑都城", "关": "关隘",
+                    "山": "山", "川": "川", "湖": "湖", "域": "域外",
+                    "外": "其他"}
+
+
+def _book_counts(conn, table: str, key_col: str,
+                 book: str = "") -> Dict[str, Dict[str, Dict]]:
+    """一次 GROUP BY 取回「按书命中数 n + 篇数 c」，避免 N+1。
+
+    ⚠️ n 和 c 必须在**同一遍**里取出来。第一版写了两遍同样的 GROUP BY
+    （第二遍只为拿 c），白白多花一倍时间——COUNT(DISTINCT) 和 COUNT(*)
+    在一条 SELECT 里就能同时算，没理由分开查。
+    """
+    where = "WHERE (? = '' OR ch.book_id = ?)" if book else ""
+    sql = """
+        SELECT m.{k} AS kid, ch.book_id AS bid,
+               COUNT(*) AS n, COUNT(DISTINCT s.chapter_id) AS c
+        FROM {t} m
+        JOIN sentences s ON s.uid = m.sentence_uid
+        JOIN chapters ch ON ch.id = s.chapter_id
+        {w}
+        GROUP BY m.{k}, ch.book_id
+    """.format(t=table, k=key_col, w=where)
+    args: List[Any] = [book, book] if book else []
+    out: Dict[str, Dict[str, Dict]] = {}
+    for kid, bid, n, c in conn.execute(sql, args):
+        out.setdefault(kid, {})[bid] = {"n": n, "c": c}
+    return out
+
+
+def _narrow(counts: Dict[str, Dict[str, Dict]], book: str) -> Dict[str, Dict[str, Dict]]:
+    """把「全五書」的按書計數收窄到某一本書。
+
+    與「帶 `WHERE ch.book_id=?` 再查一遍」**結果完全一致**——收窄就是從同一個
+    dict 裡只留那本書的鍵（帶 WHERE 查出來時 `book_id` 恆等於該書，也只會有一個鍵）。
+    之所以這麼繞：六個書作用域各查一遍＝12 次三表 JOIN 聚合（實測 23s），
+    一次查完再收窄只要 4s。離線導出（`app/tools/export_static.py`）走的就是這條路。
+    """
+    if not book:
+        return counts
+    return {k: {book: v[book]} for k, v in counts.items() if book in v}
+
+
+def all_counts(conn) -> tuple:
+    """一次算完人物 / 地名兩張命中表的按書計數（不帶 WHERE），供 `_narrow` 複用。"""
+    return (_book_counts(conn, "mentions", "person_id", ""),
+            _book_counts(conn, "place_mentions", "place_id", ""))
+
+
+def _scope(bk: Dict[str, Dict]) -> Dict[str, int]:
+    """把按书计数压成 (nAll, cAll)。
+
+    篇数可以放心相加：一篇只属一书（`chapters.book_id` 是单值），
+    所以同一篇不会被两本书重复计。
+    """
+    return {"nAll": sum(v["n"] for v in bk.values()),
+            "cAll": sum(v["c"] for v in bk.values())}
+
+
+def list_persons(book: str = "", sort: str = "c", limit: int = 0,
+                 counts: Optional[Dict[str, Dict[str, Dict]]] = None
+                 ) -> Dict[str, Any]:
+    """人物索引：当前书作用域内**有命中**的人物，按篇数/次数降序。
+
+    `counts` 是**不带 WHERE 的全量**按书计数（见 `all_counts`），传了就按 `book`
+    收窄复用，不再查一遍。不传＝自己查（联机单次请求的正常路径）。
+    """
+    with connect() as conn:
+        counts = _narrow(counts, book) if counts is not None else \
+            _book_counts(conn, "mentions", "person_id", book)
+        rows = []
+        for r in conn.execute(
+                "SELECT id, trad_name, name, dynasty, title, summary "
+                "FROM persons WHERE status='active'"):
+            bk = counts.get(r["id"]) or {}
+            st = _scope(bk)
+            if st["nAll"] <= 0:
+                continue
+            rows.append({
+                "id": r["id"], "name": r["trad_name"] or r["name"],
+                "dynasty": r["dynasty"] or "", "title": r["title"] or "",
+                "summary": r["summary"] or "",
+                "n": st["nAll"], "c": st["cAll"],
+                "books": sorted(
+                    [{"id": b, "n": v["n"], "c": v["c"]} for b, v in bk.items()],
+                    key=lambda x: -x["n"]),
+            })
+    rows.sort(key=lambda x: (-(x["c"] if sort == "c" else x["n"]), -x["n"]))
+    return {"total": len(rows), "items": rows[:limit] if limit else rows}
+
+
+def list_places(book: str = "", sort: str = "c", limit: int = 0,
+                counts: Optional[Dict[str, Dict[str, Dict]]] = None
+                ) -> Dict[str, Any]:
+    """地名索引：按类型分组（国/郡/县/关/山/川/湖/域/外）。`counts` 同上。"""
+    with connect() as conn:
+        counts = _narrow(counts, book) if counts is not None else \
+            _book_counts(conn, "place_mentions", "place_id", book)
+        rows = []
+        for r in conn.execute(
+                "SELECT id, trad_name, name, kind, era, summary FROM places"):
+            bk = counts.get(r["id"]) or {}
+            st = _scope(bk)
+            if st["nAll"] <= 0:
+                continue
+            kind = r["kind"] or "外"
+            rows.append({
+                "id": r["id"], "name": r["trad_name"] or r["name"],
+                "kind": kind, "kindLabel": PLACE_KIND_LABEL.get(kind, kind),
+                "era": r["era"] or "", "summary": r["summary"] or "",
+                "n": st["nAll"], "c": st["cAll"],
+            })
+    rows.sort(key=lambda x: (-(x["c"] if sort == "c" else x["n"]), -x["n"]))
+    return {"total": len(rows), "items": rows[:limit] if limit else rows}
+
+
+def list_chapters(book: str = "") -> Dict[str, Any]:
+    """篇目一覽：按书分组，书内按卷序；附篇主/高频地名標籤。
+
+    篇目行上那兩個 tag（「這篇主要講誰」「地：xx」）是靜態版就有的，
+    缺了它 564 篇就只剩一串篇名，挑不出想讀的那篇。
+    """
+    with connect() as conn:
+        books = [{"id": r[0], "name": r[1]} for r in conn.execute(
+            "SELECT code, name FROM books ORDER BY code")]
+        # id → 顯示名：兩張小表一次讀進內存，別在 564 篇的循環裡逐條查
+        pname = {r[0]: (r[1] or r[2]) for r in conn.execute(
+            "SELECT id, trad_name, name FROM persons")}
+        lname = {r[0]: (r[1] or r[2]) for r in conn.execute(
+            "SELECT id, trad_name, name FROM places")}
+        rows = []
+        sql = ("SELECT id, book_id, title, full_title, category, volume, "
+               "char_count, sentence_count, main_persons, top_places "
+               "FROM chapters")
+        args: List[Any] = []
+        if book:
+            sql += " WHERE book_id=?"
+            args.append(book)
+        sql += " ORDER BY book_id, volume, id"
+        def names(ids: str, tbl: Dict[str, str]) -> List[str]:
+            """逗號分隔的 id → 顯示名；id 不在表裡（人被合併/改名）就靜默跳過，
+            別讓一個髒 id 把整篇的標籤欄弄壞。"""
+            return [tbl[i] for i in (ids or "").split(",") if i and i in tbl]
+
+        for r in conn.execute(sql, args):
+            rows.append({
+                "id": r["id"], "book": r["book_id"], "title": r["title"],
+                "fullTitle": r["full_title"], "category": r["category"] or "",
+                "volume": r["volume"],
+                "charCount": r["char_count"] or 0,
+                "sentenceCount": r["sentence_count"] or 0,
+                "mainPersons": names(r["main_persons"], pname),
+                "topPlaces": names(r["top_places"], lname),
+            })
+    return {"books": books, "items": rows}
+
+
+def _top_by_book(conn, table: str, key_col: str, ref_tbl: str,
+                 book: str, limit: int) -> List[Dict[str, Any]]:
+    """Top N 直接在 SQL 层取，不跑全量聚合——全量要 0.6~1.2s，取 Top 只要几十毫秒。
+
+    姓名在 persons / places 主表里，命中表里只有 id，所以要 JOIN 回去取名字。
+    """
+    sql = """
+        SELECT m.{k} AS id, MAX(r.trad_name) AS name,
+               COUNT(DISTINCT s.chapter_id) AS c, COUNT(*) AS n
+        FROM {t} m
+        JOIN {rt} r ON r.id = m.{k}
+        JOIN sentences s ON s.uid = m.sentence_uid
+        JOIN chapters ch ON ch.id = s.chapter_id
+        WHERE (? = '' OR ch.book_id = ?)
+        GROUP BY m.{k}
+        ORDER BY c DESC, n DESC
+        LIMIT ?
+    """.format(t=table, k=key_col, rt=ref_tbl)
+    return [{"id": r["id"], "name": r["name"], "c": r["c"], "n": r["n"]}
+            for r in conn.execute(sql, (book or "", book or "", limit))]
+
+
+def index_payload(book: str = "", sort: str = "c",
+                  counts: Optional[tuple] = None) -> Dict[str, Any]:
+    """`/api/index` 的响应体。
+
+    ⚠️ 这个函数被**两处**调用：main.py 的联机端点，和 `app/tools/export_static.py`
+    的离线快照导出。当初只在端点里拼，导出那边就得照抄一遍——四块的聚合口径
+    有一处改了另一处不知道，离线版就悄悄跟联机版不一致。共用一个函数，**只有一份**。
+
+    `counts` = `all_counts()` 的结果，导出时六个书作用域共用一次计算结果。
+    """
+    sort = "n" if sort == "n" else "c"
+    pc, lc = counts if counts else (None, None)
+    return {
+        "book": book,
+        "sort": sort,
+        "persons": list_persons(book=book, sort=sort, counts=pc),
+        "places": list_places(book=book, sort=sort, counts=lc),
+        "chapters": list_chapters(book=book),
+        "quick": quick_words(book=book),
+    }
+
+
+def person_payload(pid: str, limit: int = 200) -> Optional[Dict[str, Any]]:
+    """`/api/person/{pid}` 的响应体（同上：联机端点与离线导出共用）。
+
+    查不到人返回 None，由调用方翻成 404 / 跳过。
+    """
+    profile = person_profile(pid)
+    if not profile:
+        return None
+    return {
+        "profile": profile,
+        "mentions": person_mentions(pid, None, limit),
+        # 直接给图（{nodes, edges}），与前端 renderGraph 的契约一致
+        "relations": relations_graph(pid, 1, limit=limit),
+    }
+
+
+def quick_words(book: str = "", np: int = 20, nl: int = 10) -> Dict[str, Any]:
+    """快捷词：当前书作用域内 Top N 人物 + Top N 地名。
+
+    与静态版同口径——换书后快捷词跟着换，不会出现「选了漢書，头一排全是漢書里
+    查不到的人」。人物与地名在界面上分色（赭石 / 青碧），所以分两个数组返回。
+    """
+    with connect() as conn:
+        persons = _top_by_book(conn, "mentions", "person_id", "persons", book, np)
+        places = _top_by_book(conn, "place_mentions", "place_id", "places", book, nl)
+    return {"persons": persons, "places": places}
+
+
 def search_persons(q: str, limit: int = 30) -> List[Dict[str, Any]]:
     """按正名 / 简体名 / 别名检索人物。同名异人会**都返回**，由前端提示消歧。
 

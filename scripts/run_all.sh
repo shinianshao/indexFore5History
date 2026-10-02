@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# 一键回归：数据断言 → 字面层守卫 → 无头 UI 四套（可选全量扫描）。
+# 一键回归：数据断言 → 字面层守卫 → 无头 UI（可选全量扫描）。
 #
 # 用法（Git Bash / bash）：
-#   bash scripts/run_all.sh            # 常规回归（约 1-2 分钟）
-#   bash scripts/run_all.sh --full     # 追加 _ui_sweep.js 全量扫描（慢，约 10 分钟+）
+#   bash scripts/run_all.sh            # 常规回归（约 4 分钟）
+#   bash scripts/run_all.sh --full     # 追加静态版三套 + _ui_sweep.js 全量扫描（慢，约 15 分钟+）
+#
+# UI 分成两档：日常只跑**新版 app/web** 的三套（关系图 / 索引四块 / 样式表）；
+# 打静态版 web/ 的三套已降频到 --full —— 静态版已冻结不再演进，天天跑是交税，
+# 但它是「新版对齐」的参照物，不能完全删（docs/29 §六-1）。
 #   bash scripts/run_all.sh --no-ui    # 只跑 Python 侧（改词典时的快速回路）
 #
 # 环境变量可覆盖：PYTHON / NODE / NODE_PATH / PORT
@@ -124,6 +128,15 @@ run_step "字面层守卫 check_trad.py（A–G 七道闸）" "$PY" pipeline/che
 run_step "新链路断言 app/tools/verify_p3.py" "$PY" app/tools/verify_p3.py
 # 权威源体检放在 verify_p3 之后：它要拿重建后的库判「证据句是否已失效」。
 run_step "关系权威源体检 relations.py check" "$PY" pipeline/relations.py check
+# 离线静态快照 dist/（docs/29 §六-6）：跟联机版**同一套前端**，只换数据源。
+# 放在这里是因为它要读刚重建好的库；放在日常档而不是 --full，是因为
+# 快照一旦过期就没人发现——而它恰恰是要发给别人的那份。
+run_step "离线静态快照 export_static.py" "$PY" app/tools/export_static.py
+# 「按书收窄」是导出提速 6 倍换来的假设（db._narrow），破了会产出跟联机版
+# 对不上的快照且不报错——所以要有断言盯着它。慢（约 23s），只在 --full 跑。
+if [ "$RUN_FULL" -eq 1 ]; then
+  run_step "快照与联机等价 export_static.py --verify" "$PY" app/tools/export_static.py --verify
+fi
 
 # ---------- 3：无头 UI ----------
 SERVER_PID=""
@@ -170,10 +183,15 @@ if [ "$RUN_UI" -eq 1 ]; then
         echo "  服务就绪：$BASE"
         export BASE
         export NODE_PATH="$NM"
-        run_step "UI 人物页 _ui_test.js"       "$NODE_BIN" pipeline/_ui_test.js
-        run_step "UI 多书检索 _ui_test_books.js" "$NODE_BIN" pipeline/_ui_test_books.js
-        run_step "UI 地名层 _ui_test_places.js"  "$NODE_BIN" pipeline/_ui_test_places.js
         run_step "UI 样式表 _ui_csscheck.js"     "$NODE_BIN" pipeline/_ui_csscheck.js
+        # ⚠️ 下面三套打的是**已冻结的静态版 web/**（docs/29 §六-1，用户 2026-10-02 定：降频）。
+        #   它不再演进，天天为它跑等于给死掉的分支交税；但它是「新版对齐的参照物」，
+        #   全删不安全——挪到 --full，改静态版或做对齐时再跑。
+        if [ "$RUN_FULL" -eq 1 ]; then
+          run_step "UI 人物页（静态版）_ui_test.js"       "$NODE_BIN" pipeline/_ui_test.js
+          run_step "UI 多书检索（静态版）_ui_test_books.js" "$NODE_BIN" pipeline/_ui_test_books.js
+          run_step "UI 地名层（静态版）_ui_test_places.js"  "$NODE_BIN" pipeline/_ui_test_places.js
+        fi
         # 关系卡/关系图（P6-3）打的是 **FastAPI 版**（app/web），不是 web/ 静态页。
         # 静态页没有 /api，拿 BASE=静态页 去跑会得到「全红但其实打错靶」的假失败。
         # 所以这里单起一个 API 服务（独立端口，不与日常用的 8800 抢）。
@@ -194,6 +212,14 @@ if [ "$RUN_UI" -eq 1 ]; then
           else
             run_step "UI 关系图 _ui_test_rel.js" \
               env BASE="http://127.0.0.1:${APIPORT}/" "$NODE_BIN" pipeline/_ui_test_rel.js
+            # 索引四块（書切換 / 快捷詞 / 人物索引 / 地名索引 / 篇目一覽）同样是
+            # app/web/ 的新页面，静态页没有——跟关系图一样打 APIPORT。
+            run_step "UI 索引四块 _ui_test_index.js" \
+              env BASE="http://127.0.0.1:${APIPORT}/" "$NODE_BIN" pipeline/_ui_test_index.js
+            # ⚠️ 离线快照打的是 dist/，**刻意不起服务也不注入 fetch**——
+            # 这是唯一能证明「双击就能开、不用跑 FastAPI」的方式。
+            run_step "UI 离线快照 _ui_test_offline.js" \
+              "$NODE_BIN" pipeline/_ui_test_offline.js
           fi
         else
           echo "跳过关系图测试：$PY 里没有 fastapi/uvicorn" >&2

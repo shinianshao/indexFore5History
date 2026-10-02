@@ -104,6 +104,26 @@ def api_stats():
     return db.stats()
 
 
+@app.get("/api/index")
+def api_index(book: str = Query("", description="书号 sj/hs/hhs/sgz/js，空=全部"),
+              sort: str = Query("c", description="c=篇数（默认） 或 n=次数")):
+    """一次性取回索引页三块（人物 / 地名 / 篇目）+ 快捷词。
+
+    为什么要合成一个端点：四块都要按书作用域重算，分开请求会把同一份
+    JOIN 聚合跑四遍（实测单跑一遍 0.6~1.2s）。合成一次前端只等一轮。
+
+    ⚠️ 响应体在 db.index_payload 里拼（与离线导出共用），这里只做参数校验。
+    """
+    return db.index_payload(book, sort)
+
+
+@app.get("/api/quick")
+def api_quick(book: str = Query("", description="书号，空=全部"),
+              np: int = Query(20, ge=1, le=50), nl: int = Query(10, ge=1, le=30)):
+    """只取快捷词（换书时用，比 /api/index 轻）。"""
+    return db.quick_words(book=book, np=np, nl=nl)
+
+
 @app.get("/api/search")
 def api_search(q: str = Query(..., min_length=1, max_length=MAX_Q),
                limit: int = Query(30)):
@@ -120,16 +140,12 @@ def api_fts(q: str = Query(..., min_length=1, max_length=MAX_Q),
 
 @app.get("/api/person/{pid}")
 def api_person(pid: str, limit: int = Query(200)):
-    profile = db.person_profile(pid)
-    if not profile:
-        raise HTTPException(404, "查无此人：{}".format(pid))
     limit = max(1, min(int(limit), MAX_LIMIT))
-    return {
-        "profile": profile,
-        "mentions": db.person_mentions(pid, None, limit),
-        # 直接给图（{nodes, edges}），与前端 renderGraph 的契约一致
-        "relations": db.relations_graph(pid, 1, limit=MAX_LIMIT),
-    }
+    # 响应体同样在 db 层拼（db.person_payload），与离线导出共用一份
+    data = db.person_payload(pid, limit)
+    if not data:
+        raise HTTPException(404, "查无此人：{}".format(pid))
+    return data
 
 
 @app.get("/api/chapter/{cid}")

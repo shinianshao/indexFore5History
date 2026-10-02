@@ -16,6 +16,24 @@ data/corpus-orig/
 # 索引产物（annotate.py / annotate_places.py）约 46MB
 data/index/
 
+# 离线静态快照（app/tools/export_static.py）约 15MB / 3 文件
+# 它是 dist/ 的意义所在：整个文件夹可以直接发给别人，双击 index.html 就能用。
+# 但它是**重跑即再生**的产物，入库只会让仓库白胖 15MB。
+dist/
+
+# 本机 %TEMP% 间歇不可用时，Python 的 sqlite 临时文件会掉在 CWD（仓库根目录）。
+# 特征：4 字节、内容恰为 `blat`、文件名是 7–8 位 [0-9a-z_]，一次能堆 1200+ 个，
+# 把 `git status` 淹掉。
+#
+# ⚠️ 这里**故意不加文件名规则**（试过 `/xxx`、`/*/xxx`、`!` 反豁免，全都会误伤子目录：
+#   git 对「只有开头一个斜杠」的模式仍拿 basename 匹配所有层级，而 `!` 救不了
+#   已被排除的目录——`pipeline/_scratch` 这类 7–8 字符的目录名会被规则命中，
+#   导致新写的脚本在 status 里凭空消失）。gitignore 只能看文件名、看不见内容，
+#   任何名字规则都有误伤风险。
+# 真正的防线是 pipeline/_clean_root_blat.py：**按内容 `blat` + git 跟踪状态双重判据**
+# 精确删除（默认预演、留名单、git 跟踪的一律不碰）。%TEMP% 故障是间歇性的，
+# 跑一次脚本即可，不必为它承担误伤风险。
+
 # 词典产物：唯一来源是 build_dict.py 的 PERSONS / CHAPTER_OWNERS
 # 与 build_places.py 的 PLACES —— Python 源码已入库，产物不必入库
 data/dict/people.json

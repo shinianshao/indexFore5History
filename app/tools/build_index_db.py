@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS books (
   volumes  INTEGER
 );
 
+-- main_persons / top_places：篇主與高頻地名，id 以逗號分隔存文本。
+-- 為什麼不單開關聯表：篇目一覽只要「這篇主要講誰」的**名字**做標籤，
+-- 564 篇 × 3~5 個 id，為了它再 JOIN 兩張表不划算；而「誰在哪篇出現過」
+-- 這種反查已經有 mentions 表了，不需要冗余一份。
 CREATE TABLE IF NOT EXISTS chapters (
   id          TEXT PRIMARY KEY,
   book_id     TEXT,
@@ -66,7 +70,9 @@ CREATE TABLE IF NOT EXISTS chapters (
   category    TEXT,
   volume      TEXT,
   char_count  INTEGER,
-  sentence_count INTEGER
+  sentence_count INTEGER,
+  main_persons TEXT,
+  top_places   TEXT
 );
 
 -- uid = 稳定主键；pos_key = 位置键（只用于排序，会随切分变化）
@@ -106,6 +112,22 @@ CREATE TABLE IF NOT EXISTS mentions (
   e            INTEGER,
   tier         TEXT
 );
+
+-- 地名命中明细（与 mentions 对称）。
+-- ⚠️ 建库时曾**只灌了 marks（人物）漏了 pmarks（地名）**，结果库里查不到
+-- 任何地名命中数——地名索引页因此只能去读 book-data.json，绕开了数据库。
+-- 现在补上：地名索引/快捷词/篇目里的 topPlaces 一律从本表聚合。
+CREATE TABLE IF NOT EXISTS place_mentions (
+  id           INTEGER PRIMARY KEY,
+  sentence_uid TEXT,
+  place_id     TEXT,
+  surface      TEXT,
+  s            INTEGER,
+  e            INTEGER,
+  tier         TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_pmention_place ON place_mentions(place_id);
+CREATE INDEX IF NOT EXISTS ix_pmention_uid ON place_mentions(sentence_uid);
 
 CREATE TABLE IF NOT EXISTS places (
   id        TEXT PRIMARY KEY,
@@ -242,13 +264,18 @@ def main():
     conn.executemany("INSERT OR REPLACE INTO books VALUES (?,?,?)",
                      [(k, v, None) for k, v in books.items()])
     conn.executemany(
-        "INSERT OR REPLACE INTO chapters VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT OR REPLACE INTO chapters VALUES (?,?,?,?,?,?,?,?,?,?)",
         [(c["id"], c.get("bookId"), c.get("title"), c.get("fullTitle"),
           c.get("category"), c.get("volume"), c.get("charCount"),
-          c.get("sentenceCount")) for c in d["chapters"]])
+          c.get("sentenceCount"),
+          ",".join(c.get("mainPersons") or []),
+          # topPlaces 是 [{pid, n}]，按 n 降序只留前三——標籤欄放不下更多
+          ",".join(t["pid"] for t in sorted(
+              (c.get("topPlaces") or []), key=lambda x: -x.get("n", 0))[:3]))
+         for c in d["chapters"]])
 
     # ── sentences + mentions ──────────────────────────────────────────
-    srows, mrows = [], []
+    srows, mrows, prows = [], [], []
     uid_of = {}
     n_corpus = n_db = 0
     for s in d["sentences"]:
@@ -273,11 +300,19 @@ def main():
         for m in (s.get("marks") or []):
             mrows.append((uid, m.get("pid"), m.get("alias"),
                           m.get("s"), m.get("e"), m.get("tier")))
+        # ⚠️ 地名在 `pmarks`（p=place），不是 `marks`。以前这行没写，
+        # 于是库里查不到任何地名命中——地名索引只能绕开数据库去读 JSON。
+        for m in (s.get("pmarks") or []):
+            prows.append((uid, m.get("pid"), m.get("alias"),
+                          m.get("s"), m.get("e"), m.get("tier")))
 
     conn.executemany("INSERT OR REPLACE INTO sentences VALUES (?,?,?,?,?,?,?)", srows)
     conn.executemany(
         "INSERT INTO mentions (sentence_uid, person_id, surface, s, e, tier) "
         "VALUES (?,?,?,?,?,?)", mrows)
+    conn.executemany(
+        "INSERT INTO place_mentions (sentence_uid, place_id, surface, s, e, tier) "
+        "VALUES (?,?,?,?,?,?)", prows)
 
     # ── persons / aliases / places ────────────────────────────────────
     conn.executemany(
@@ -335,6 +370,10 @@ def main():
     r = conn.execute(
         "SELECT COUNT(*) FROM mentions WHERE person_id='p_liubang'").fetchone()[0]
     print("\n  自检：劉邦在库里的命中数 = {}".format(r))
+    # 地名同理：秦的命中数应与 book-data 的 places 一致（以前这张表是空的）
+    rp = conn.execute(
+        "SELECT COUNT(*) FROM place_mentions WHERE place_id='pl_qin'").fetchone()[0]
+    print("  自检：秦（地名）在库里的命中数 = {}".format(rp))
     if fts:
         n = conn.execute(
             "SELECT COUNT(*) FROM sentences_fts WHERE sentences_fts MATCH ?",

@@ -18,8 +18,123 @@
   var currentPid = null;
   var lastQuery = "";
 
+  /* ---------- 離線快照（dist/）----------
+     同一份 app.js 同時服務「聯機 FastAPI 版」與「離線靜態版 dist/」：
+     dist/data.js 會定義 window.BOOKINDEX_DATA，有它＝離線。
+     刻意**不複製一套前端**——兩套前端的維護稅已經交過一次（web/ 靜態版凍結後，
+     每次改動都要糾結要不要同步），這裡只換數據來源。
+     業務規則仍然只有服務端一份：離線層做的是「緊湊數組 → 前端要的物件形狀」的
+     **機械還原**，不含計數／排序／關係推導（docs/29 §六-6）。 */
+  var OFF = !!window.BOOKINDEX_DATA;
+  var D = OFF ? window.BOOKINDEX_DATA : null;
+  var CHAPT = {};                 // 篇號 → 全名（還原命中時要用，避免每次查表）
+  if (OFF) {
+    Object.keys(D.chaps).forEach(function (cid) { CHAPT[cid] = D.chaps[cid][0]; });
+  }
+
+  /* 還原：全部是下標查找 + 物件組裝，沒有任何規則。
+     與聯機版唯一的刻意差異——mentions / 句子**不截斷**（聯機上限 200 / 500），
+     快照一次給全；只多不少，不影響顯示。 */
+  function offChapter(cid) {
+    var c = D.chaps[cid];
+    if (!c) return null;
+    var rows = [];
+    for (var i = c[2]; i < c[3]; i++) {
+      var s = D.sents[i];
+      rows.push({ uid: s[0], chapter_id: cid, text: s[2] });
+    }
+    return { chapter: { id: cid, full_title: c[0], book_id: c[1] }, sentences: rows };
+  }
+
+  function offRel(pid, key) {
+    var m = D.rel[pid];
+    // 沒邊的人聯機返回的就是這個形狀，離線自己造一個同形的
+    return (m && m[key]) || { nodes: [{ id: pid, degree: 0 }], edges: [] };
+  }
+
+  function offPerson(pid) {
+    var p = D.pers[pid];
+    if (!p) return null;
+    return {
+      profile: { id: pid, trad_name: p[0], name: p[1], dynasty: p[2],
+                 title: p[3], summary: p[4], aliases: p[5] },
+      mentions: (D.pm[pid] || []).map(function (m) {
+        var s = D.sents[m[0]];
+        return { chapter: CHAPT[s[1]] || "", chapter_id: s[1], uid: s[0],
+                 text: s[2], surface: m[1], s: m[2], e: m[3], tier: m[4] };
+      }),
+      relations: offRel(pid, "1:0")
+    };
+  }
+
+  /* 檢索與全文：離線沒有 SQLite 也沒有 FTS——直接掃。
+     9.6 萬句在內存裡做 indexOf 是毫秒級，比分詞建索引划算得多，
+     而且跟線上 FTS 的「按字切分 + 短語」在效果上等價（都是連續子串）。 */
+  function offFts(q, limit) {
+    var got = [];
+    for (var i = 0; i < D.sents.length && got.length < limit; i++) {
+      var s = D.sents[i];
+      if (s[2].indexOf(q) >= 0) {
+        got.push({ uid: s[0], text: s[2], chapter_id: s[1],
+                   chapter: CHAPT[s[1]] || "" });
+      }
+    }
+    return { query: q, items: got };
+  }
+
+  function offSearch(q, limit) {
+    var got = [];
+    Object.keys(D.pers).forEach(function (pid) {
+      var p = D.pers[pid], pb = D.pbook[pid] || [0, []];
+      if (p[0].indexOf(q) >= 0 || p[1].indexOf(q) >= 0 ||
+          p[5].some(function (a) { return a.indexOf(q) >= 0; })) {
+        got.push({ id: pid, trad_name: p[0], name: p[1], dynasty: p[2],
+                   title: p[3], summary: p[4], n: pb[0],
+                   books: pb[1].map(function (b) {
+                     return { id: b[0], name: b[1], n: b[2] }; }) });
+      }
+    });
+    got.sort(function (a, b) { return b.n - a.n; });
+    return { query: q, items: got.slice(0, limit) };
+  }
+
+  function offlineGet(path) {
+    var u = path.replace(/^\/?api\//, ""), m;
+    if (u === "stats") return Promise.resolve(D.stats);
+    if (u.indexOf("index") === 0) {
+      var bk = (u.match(/book=([^&]*)/) || [0, ""])[1];
+      return Promise.resolve(D.idx[decodeURIComponent(bk)] || D.idx[""]);
+    }
+    if ((m = u.match(/^person\/([^/?]+)\/relations/))) {
+      var rp = decodeURIComponent(m[1]);
+      var dg = (u.match(/degree=(\d)/) || [0, 1])[1];
+      var cf = parseFloat((u.match(/min_conf=([\d.]+)/) || [0, 0])[1]) || 0;
+      return Promise.resolve(offRel(rp, dg + ":" + cf));
+    }
+    if ((m = u.match(/^person\/([^/?]+)/))) {
+      var pid = decodeURIComponent(m[1]);
+      var d = offPerson(pid);
+      return d ? Promise.resolve(d)
+               : Promise.reject(new Error("查無此人：" + pid));
+    }
+    if ((m = u.match(/^chapter\/([^/?]+)/))) {
+      var cid = decodeURIComponent(m[1]);
+      var c = offChapter(cid);
+      return c ? Promise.resolve(c)
+               : Promise.reject(new Error("查無此篇：" + cid));
+    }
+    if ((m = u.match(/^search\?q=(.*)$/))) {
+      return Promise.resolve(offSearch(decodeURIComponent(m[1]), 30));
+    }
+    if ((m = u.match(/^fts\?q=(.*)$/))) {
+      return Promise.resolve(offFts(decodeURIComponent(m[1]), 50));
+    }
+    return Promise.reject(new Error("離線版沒有這個接口：" + path));
+  }
+
   /* ---------- 請求層：錯誤要映射成人話，4xx 不重試、5xx 最多重試 3 次 ---------- */
   function request(path, retry) {
+    if (OFF) return offlineGet(path);
     retry = retry || 0;
     return fetch(path, { headers: { Accept: "application/json" } }).then(function (r) {
       if (r.ok) return r.json();
@@ -169,8 +284,11 @@
   var btnRebuild = document.getElementById("btnRebuild");
   var pending = {};        // uid → action
   var readerCid = null;
+  // 離線快照是只讀的：沒有服務端可寫，重建按鈕留著只會讓人點了空轉
+  if (OFF) { btnRebuild.hidden = true; btnRebuild.disabled = true; }
 
   function requestPost(path, body) {
+    if (OFF) return Promise.reject(new Error("離線版是只讀快照，改動請用聯機版"));
     return fetch(path, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -295,8 +413,9 @@
     }).join("");
   }
 
-  /* 每句 hover 出的三個動作。按鈕文案一律繁體（check_trad F 閘會掃）。 */
-  var ACTS = "<span class=\"acts\">" +
+  /* 每句 hover 出的三個動作。按鈕文案一律繁體（check_trad F 閘會掃）。
+     離線版不給這三個按鈕——它們 POST 到服務端，離線寫不了，給了就是空頭支票。 */
+  var ACTS = OFF ? "" : "<span class=\"acts\">" +
     "<button data-act=\"split\">拆分</button>" +
     "<button data-act=\"merge\">併下句</button>" +
     "<button data-act=\"dead\">棄用</button>" +
@@ -341,18 +460,45 @@
     backBtn.hidden = !(history.length > 1 || currentPid || onReader);
     backBtn.textContent = onReader ? "← 關閉原文" : "← 返回";
   }
+  /* ⚠️ hash 的正規化：**守衛與路由解析必須吃同一份**，否則兩邊打架。
+     這裡踩過兩個坑，都很難查：
+     1. `location.hash` 會把中文**百分號編碼**（鴻門 → %E9%B4%BB%E9%96%80），
+        拿它跟自己寫的字串直接比**永遠不等**——「自己寫的不重渲染」這條守衛形同虛設，
+        每次中文檢索都被當成「改了地址」再渲染一遍，把使用者剛點開的標籤頁頂回去。
+     2. 只改守衛、沒同步改解析，或反之：`#/q/舜操/person` 這種形狀，
+        正則裡的 `([^?]+)` 貪婪會把 `/person` 一起吞進查詢詞，
+        於是下一輪寫出 `#/q/舜操%2Fperson/person`——**每點一次長一段**，
+        最後 `/api/search?q=舜操/person/person/…` 超過 64 字上限變 422。
+        （第 1 個坑一直遮著第 2 個：守衛失效時根本走不到解析那行，所以解析壞了沒人發現。）
+     file:// 下還會把 "/" 也編成 %2F，所以解碼後再把 %2F 換回 "/"。
+     解碼失敗就當地址被人手改壞了，用原值往下走，別讓它把頁面搞崩。 */
+  function normHash(s) {
+    try { return decodeURIComponent(s).replace(/%2F/gi, "/"); }
+    catch (e) { return s; }
+  }
+  function hashOf() {
+    return normHash(location.hash || "");
+  }
+
   function writeHash() {
     var h = routeHash();
-    if (location.hash === h) { syncBack(); return; }
+    // ⚠️ lastWritten 必須**兩條路徑都設**。以前只在下面寫 location.hash 那條設，
+    // 結果「hash 已經是對的」而提前 return 時，lastWritten 留著**上一次**的值；
+    // 而上一次寫入觸發的 hashchange 是異步到貨的，它拿著舊 lastWritten 對不上
+    // → 被當成使用者改地址 → 又渲染一遍，把剛點的標籤頁頂回去。
     lastWritten = h;                       // 自己寫的不重渲染，只有後退/改地址才渲染
+    if (hashOf() === normHash(h)) { syncBack(); return; }
     location.hash = h;
     syncBack();
   }
   function applyHash() {
-    var h = location.hash || "";
-    if (lastWritten && h === lastWritten) { lastWritten = null; syncBack(); return; }
+    var h = hashOf();
+    if (lastWritten && h === normHash(lastWritten)) {
+      lastWritten = null; syncBack(); return;
+    }
     lastWritten = null;
-    var m = /^#\/(person|q)(?:\/([^?]+))?(?:\/(fts|person))?$/.exec(h);
+    // ⚠️ [^?#/]+：**不能讓查詢詞吞掉後面的 /person**（見 normHash 上方的坑 2）
+    var m = /^#\/(person|q)(?:\/([^?#/]+))?(?:\/(fts|person))?$/.exec(h);
     if (!m) { currentPid = null; lastQuery = ""; return; }
     if (m[1] === "person" && m[2]) {
       renderPerson(decodeURIComponent(m[2])).then(syncBack).catch(showErr);
@@ -599,6 +745,229 @@
       el.classList.toggle("on", el.getAttribute("data-mode") === mode);
     });
   }
+  /* ---------- 書切換 + 快捷詞 + 四個標籤頁（對齊靜態版 web/）----------
+     這四塊靜態版一直有，新版之前沒做——不是不想做，是 index.db 當初**漏了把
+     地名命中入庫**（語料裡地名標記在 `pmarks`，建庫時只灌了人物的 `marks`），
+     於是庫裡查不到任何地名計數，地名索引只能繞開資料庫去讀 JSON。
+     補上 place_mentions 表之後，這幾塊就能正經從 /api/index 一次取回了。 */
+  var BOOKS = [
+    { code: "sj", name: "史記" }, { code: "hs", name: "漢書" },
+    { code: "hhs", name: "後漢書" }, { code: "sgz", name: "三國志" },
+    { code: "js", name: "晉書" }
+  ];
+  // 地名分組順序，與 pipeline/annotate_places.py 的 KIND_ORDER 一致
+  var PLACE_KIND_ORDER = ["国", "郡", "县", "关", "山", "川", "湖", "域", "外"];
+
+  var scopeBook = "";        // 空 = 全五書
+  var currentTab = "search";
+  var sortMode = "c";        // c = 篇數（默認），n = 次數
+  var IDX = null;            // 索引資料緩存，換書才重取
+
+  var bookbarEl = document.getElementById("books");
+  var quickEl = document.getElementById("quick");
+
+  function statText(n, c) {
+    return (c || 0) + " 篇 / " + (n || 0).toLocaleString() + " 次";
+  }
+
+  function renderBookbar() {
+    var h = '<span class="bk all' + (scopeBook === "" ? " on" : "") +
+      '" data-book="">全部</span>';
+    BOOKS.forEach(function (b) {
+      h += '<span class="bk' + (scopeBook === b.code ? " on" : "") +
+        '" data-book="' + b.code + '">' + esc(b.name) + "</span>";
+    });
+    bookbarEl.innerHTML = h;
+  }
+
+  /* 快捷詞按**當前書作用域**取（後端已按書算好 Top N）。
+     換書後快捷詞跟著換——不會出現「選了漢書，頭一排全是漢書裡查不到的人」。 */
+  function renderQuick() {
+    if (!IDX) return;
+    var q = IDX.quick || {};
+    var h = (q.persons || []).map(function (p) {
+      return '<span data-name="' + esc(p.name) + '">' + esc(p.name) +
+        '<b class="qn">' + (p.n || 0).toLocaleString() + "</b></span>";
+    }).join("");
+    h += '<i class="sep"></i>';
+    h += (q.places || []).map(function (p) {
+      return '<span class="land" data-name="' + esc(p.name) + '">' + esc(p.name) +
+        '<b class="qn">' + (p.n || 0).toLocaleString() + "</b></span>";
+    }).join("");
+    quickEl.innerHTML = h;
+  }
+
+  function indexGrid(items) {
+    var h = '<div class="grid">';
+    items.forEach(function (p) {
+      h += '<div class="item" data-name="' + esc(p.name) + '" title="' +
+        esc(p.summary || "") + '"><span class="n">' + esc(p.name) +
+        '</span><span class="c">' + statText(p.n, p.c) + "</span></div>";
+    });
+    return h + "</div>";
+  }
+
+  function sortLabel() {
+    return sortMode === "c" ? "按提及篇數排序" : "按提及次數排序";
+  }
+  /* 排序切換只在前端重排，不重新請求——資料已經在 IDX 裡了。 */
+  function resort(items) {
+    return items.slice().sort(function (a, b) {
+      var ka = sortMode === "c" ? (a.c || 0) : (a.n || 0);
+      var kb = sortMode === "c" ? (b.c || 0) : (b.n || 0);
+      return kb - ka || (b.n || 0) - (a.n || 0);
+    });
+  }
+
+  function renderPersonsIndex() {
+    var items = resort(((IDX || {}).persons || {}).items || []);
+    var h = '<div class="group-title">人物索引 <span class="count">' +
+      items.length.toLocaleString() + ' 人 · <span class="sort-toggle" ' +
+      'role="button" tabindex="0">' + sortLabel() + '</span> · 懸停看簡介</span></div>';
+    h += indexGrid(items);
+    out.innerHTML = h;
+  }
+
+  function renderPlacesIndex() {
+    var items = resort(((IDX || {}).places || {}).items || []);
+    var groups = {};
+    items.forEach(function (p) {
+      (groups[p.kind] = groups[p.kind] || []).push(p);
+    });
+    var h = "";
+    PLACE_KIND_ORDER.forEach(function (k) {
+      var one = groups[k];
+      if (!one || !one.length) return;
+      h += '<div class="group-title">' + esc((one[0].kindLabel) || k) +
+        ' <span class="count">' + one.length.toLocaleString() + " 個</span></div>";
+      h += indexGrid(one);
+    });
+    out.innerHTML = h;
+  }
+
+  /* 篇目一覽：書 → 類別 → 篇。
+     為什麼書內還要按類別分：史記 130 篇一路平鋪下去，找「項羽本紀」要滾很久；
+     本紀/世家/列傳/表/書/載記 是原書自己的分卷方式，沿用它最省力。 */
+  var CAT_ORDER = ["本紀", "世家", "列傳", "表", "書", "載記", "其他"];
+
+  function chapterRow(c) {
+    // 篇主可能列了五六個（五帝本紀那種），標籤欄放不下——只留前三
+    var tags = "";
+    (c.mainPersons || []).slice(0, 3).forEach(function (n) {
+      tags += '<span class="tag">' + esc(n) + "</span>";
+    });
+    if ((c.topPlaces || []).length) {
+      tags += '<span class="tag">地：' + esc(c.topPlaces.join("、")) + "</span>";
+    }
+    return '<div class="chap-row" data-chapter="' + esc(c.id) + '">' +
+      '<span class="n">' + esc(c.title) +
+      (c.category ? '<span class="cat">' + esc(c.category) + "</span>" : "") +
+      tags + '</span><span class="meta">' +
+      (c.charCount || 0).toLocaleString() + " 字 · " +
+      (c.sentenceCount || 0) + " 句</span></div>";
+  }
+
+  function renderChaptersIndex() {
+    var items = (((IDX || {}).chapters) || {}).items || [];
+    var byBook = {};
+    items.forEach(function (c) {
+      (byBook[c.book] = byBook[c.book] || []).push(c);
+    });
+    var h = "";
+    BOOKS.forEach(function (b) {
+      var one = byBook[b.code];
+      if (!one || !one.length) return;
+      h += '<div class="book-title">' + esc(b.name) +
+        '<span class="count">' + one.length + " 篇</span></div>";
+      var byCat = {};
+      one.forEach(function (c) {
+        (byCat[c.category || "其他"] = byCat[c.category || "其他"] || []).push(c);
+      });
+      CAT_ORDER.forEach(function (cat) {
+        var cs = byCat[cat];
+        if (!cs || !cs.length) return;
+        h += '<div class="group-title">' + esc(cat) +
+          ' <span class="count">' + cs.length + " 篇</span></div>";
+        h += '<div class="card">' + cs.map(chapterRow).join("") + "</div>";
+      });
+    });
+    out.innerHTML = h;
+  }
+
+  function renderCurrentTab() {
+    if (currentTab === "persons") renderPersonsIndex();
+    else if (currentTab === "places") renderPlacesIndex();
+    else if (currentTab === "chapters") renderChaptersIndex();
+  }
+
+  function switchTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll(".tabs span").forEach(function (el) {
+      el.classList.toggle("on", el.getAttribute("data-tab") === tab);
+    });
+    if (tab === "search") {
+      if (lastQuery) search(lastQuery);
+      else search("劉邦");
+      return;
+    }
+    if (!IDX) { loadIndex(renderCurrentTab); return; }
+    renderCurrentTab();
+  }
+
+  /* 輸入框候選：靜態版一直有，新版補索引頁時漏了。
+     共 3815 個 option（2240 人 + 1575 地），全量塞進 datalist 瀏覽器扛得住，
+     而且換書時它跟著索引一起換——比另開一個 /api/names 端點省事。 */
+  function fillDatalist() {
+    var dl = document.getElementById("names");
+    if (!dl) return;
+    var h = "";
+    (((IDX || {}).persons || {}).items || []).forEach(function (p) {
+      h += '<option value="' + esc(p.name) + '">' +
+        esc((p.dynasty || "") + (p.title ? " · " + p.title : "")) + "</option>";
+    });
+    (((IDX || {}).places || {}).items || []).forEach(function (p) {
+      h += '<option value="' + esc(p.name) + '">' +
+        esc("地名 · " + (p.kindLabel || p.kind)) + "</option>";
+    });
+    dl.innerHTML = h;
+  }
+
+  function loadIndex(cb) {
+    request("/api/index?book=" + encodeURIComponent(scopeBook) +
+            "&sort=" + sortMode).then(function (d) {
+      IDX = d;
+      renderQuick();
+      fillDatalist();
+      cb && cb();
+    }).catch(showErr);
+  }
+
+  bookbarEl.addEventListener("click", function (ev) {
+    var bk = ev.target.closest ? ev.target.closest(".bk[data-book]") : null;
+    if (!bk) return;
+    var code = bk.getAttribute("data-book");
+    if (code === scopeBook) return;
+    scopeBook = code;
+    renderBookbar();
+    // 換書後快捷詞要跟著換；索引頁也要重取（計數是按書算的）
+    if (currentTab === "search") loadIndex();
+    else loadIndex(renderCurrentTab);
+  });
+
+  quickEl.addEventListener("click", function (ev) {
+    var sp = ev.target.closest ? ev.target.closest("span[data-name]") : null;
+    if (!sp) return;
+    switchTab("search");
+    qEl.value = sp.getAttribute("data-name");
+    search(qEl.value);
+  });
+
+  document.querySelectorAll(".tabs span").forEach(function (el) {
+    el.addEventListener("click", function () {
+      switchTab(el.getAttribute("data-tab"));
+    });
+  });
+
   function search(query) {
     query = (query || "").trim();
     if (!query) return;
@@ -628,6 +997,26 @@
     if (ev.key === "Enter") search(ev.target.value);
   });
   out.addEventListener("click", function (ev) {
+    // 索引面板：點條目 = 拿這個名字去檢索（人物/地名都走同一個入口）
+    var it = ev.target.closest ? ev.target.closest(".item[data-name]") : null;
+    if (it) {
+      qEl.value = it.getAttribute("data-name");
+      search(qEl.value);
+      return;
+    }
+    // 篇目一覽：點篇目 = 開原文層
+    var cr = ev.target.closest ? ev.target.closest(".chap-row[data-chapter]") : null;
+    if (cr) {
+      openChapter(cr.getAttribute("data-chapter"), null).catch(showErr);
+      return;
+    }
+    // 索引分組標題上的排序開關（篇數 ⇄ 次數）
+    var tg = ev.target.closest ? ev.target.closest(".sort-toggle") : null;
+    if (tg) {
+      sortMode = sortMode === "c" ? "n" : "c";
+      renderCurrentTab();
+      return;
+    }
     var row = ev.target.closest ? ev.target.closest(".row[data-pid]") : null;
     if (row) { renderPerson(row.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
     // 關係卡片的三個旋鈕（一跳 / 二跳 / 只看有證據）
@@ -663,8 +1052,13 @@
     document.getElementById("sub").textContent =
       "史記 · 漢書 · 後漢書 · 三國志 · 晉書　—　" +
       s.persons.toLocaleString() + " 人 / " + s.sentences.toLocaleString() + " 句 / " +
-      s.mentions.toLocaleString() + " 處命中";
+      s.mentions.toLocaleString() + " 處命中" +
+      (OFF ? "　·　離線快照（只讀）" : "");
   }).catch(function () { /* 統計拿不到就算了，不擋主流程 */ });
+
+  renderBookbar();
+  // 索引資料後台取，不擋首屏檢索（約 2 秒，取完快捷詞才出現）
+  loadIndex();
 
   if (location.hash) applyHash();
   else search("劉邦");
