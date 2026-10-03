@@ -1475,6 +1475,54 @@ def test_place_search() -> None:
     check("place_aliases 不變量 n == Σ byBook", not bad,
           "不符 {} 條，例 {}".format(len(bad), bad[:2]))
 
+    # ⚠️ 下面兩條是 2026-10-03 獨立審查補的（P1-1 / P1-3）。它們守的兩個壞
+    #    **都不報錯**，所以只能靠不變量把它們釘死。
+    #
+    # P1-1：寫法集合原來只來自 places[].aliases（pipeline 登的），
+    # 而**語料實際用過的 61 種寫法**（河閒 96 / 雒 89 / 關内 41…）從沒登進去。
+    # 症狀一：`search_places('河閒')` 返回 0（正名「河間」能搜到，但那 96 處記在
+    #         surface='河閒' 上，用戶按語料寫法找不到）。
+    # 症狀二：只統計「登過的寫法」→ 60 個地名 Σ n ≠ COUNT(place_mentions)。
+    with db.connect() as c:
+        miss_w = c.execute(
+            "SELECT COUNT(*) FROM (SELECT DISTINCT m.place_id, m.surface "
+            "FROM place_mentions m WHERE m.surface <> '' "
+            "AND NOT EXISTS (SELECT 1 FROM place_aliases a "
+            "WHERE a.place_id = m.place_id AND a.w = m.surface))").fetchone()[0]
+        sum_bad = c.execute(
+            "SELECT COUNT(*) FROM (SELECT p.id FROM places p "
+            "WHERE (SELECT COUNT(*) FROM place_mentions m WHERE m.place_id = p.id) <> "
+            "      (SELECT COALESCE(SUM(n), 0) FROM place_aliases a "
+            "       WHERE a.place_id = p.id))").fetchone()[0]
+        dup = c.execute(
+            "SELECT COUNT(*) FROM (SELECT place_id, w FROM place_aliases "
+            "GROUP BY place_id, w HAVING COUNT(*) > 1)").fetchone()[0]
+    check("語料用過的每一種寫法都在別名表裡（檢索不失明·P1-1）",
+          miss_w == 0, "漏 {} 種".format(miss_w))
+    check("Σ alias.n == COUNT(place_mentions)（口徑一致·P1-1）",
+          sum_bad == 0, "{} 個地名對不齊".format(sum_bad))
+    # P1-3：沒有複合主鍵時 INSERT OR REPLACE 退化成 INSERT，重灌就出重复行，
+    # 而 place_alias_list / offSearchPlaces 都只會**静静返回重复条目**。
+    check("place_aliases 無重複行（P1-3）", dup == 0, "{} 組重複".format(dup))
+    # 主鍵要**真插一次**才算數：光查列名是自說自話（寫個 PRIMARY KEY 在別的列上
+    # 也會「有列名」）。斷言自己造的資料必須自己收走 → 整段放事務裡 ROLLBACK。
+    idem = None
+    try:
+        with db.connect() as c:
+            c.execute("BEGIN")
+            row = c.execute(
+                "SELECT place_id, w, n, by_book FROM place_aliases LIMIT 1").fetchone()
+            before = c.execute("SELECT COUNT(*) FROM place_aliases").fetchone()[0]
+            c.execute("INSERT OR REPLACE INTO place_aliases "
+                      "(place_id, seq, w, n, by_book) VALUES (?,?,?,?,?)",
+                      (row[0], 99, row[1], row[2], row[3]))
+            after = c.execute("SELECT COUNT(*) FROM place_aliases").fetchone()[0]
+            c.execute("ROLLBACK")
+        idem = (after == before)
+    except Exception as e:                                  # noqa: BLE001
+        idem = "例外：{}".format(e)
+    check("重灌同一條寫法不產生重複行（主鍵真生效·P1-3）", idem is True, str(idem))
+
     # ---- db 層 ----
     # 簡體檢索：這是建表的原因，也是最典型的「以前 0 條」的那條路
     simp = db.search_places("邯郸", 30)
@@ -1485,6 +1533,15 @@ def test_place_search() -> None:
     check("繁體正名也搜得到，且與簡體同一條",
           bool(trad) and trad[0]["id"] == simp[0]["id"] if simp and trad else False,
           str([(x["id"], x["trad_name"]) for x in trad[:2]]))
+    # ⚠️ **語料寫法**也要能搜到（P1-1 用戶可見的症狀）。「河閒」96 處、
+    #    「雒」89 處這類寫法只存在於 place_mentions.surface，別名表漏了它們
+    #    → 檢索失明，而且**一點錯都不報**。
+    #    別寫死字串數量（那是「當前數據的偶然」），只斷「這幾個確實能搜到」。
+    for w, why in (("河閒", "異體 96 處"), ("關内", "簡体内混字 41 處"),
+                   ("雒", "單字異體 89 處")):
+        got = db.search_places(w, 30)
+        check("語料寫法「{}」搜得到地名（{}）".format(w, why), bool(got),
+              str([(x["trad_name"], x["n"]) for x in got[:2]]))
     check("檢索結果帶命中數 / 類型說明 / 分書（前端三處都要用）",
           bool(simp) and all(
               simp[0].get("n", 0) > 0 and simp[0].get("kindLabel")
@@ -1531,11 +1588,15 @@ def test_place_search() -> None:
               m.get("uid") and m.get("chapter_id") and m.get("text") is not None
               and isinstance(m.get("s"), int) and isinstance(m.get("e"), int)
               and m.get("surface") for m in ms[:50]))
+    # ⚠️ 后两条必须自带 bool(ms) 守卫（2026-10-03 审查 P0-2）。
+    #    all() 作用在**空列表**上返回 True：把 place_mentions 改成恒返 []，
+    #    这两条照样 OK —— 断言等于废了。上面那条有守卫，这两条当时忘了。
     check("mentions 的 s < e（命中位置合法）",
-          all(m["s"] < m["e"] for m in ms[:200]))
+          bool(ms) and all(m["s"] < m["e"] for m in ms[:200]))
     check("mentions 按篇排序（前端靠順序分篇，不二次分組）",
-          all(ms[i]["chapter_id"] <= ms[i + 1]["chapter_id"]
-              for i in range(len(ms) - 1)))
+          bool(ms) and len(ms) > 1
+          and all(ms[i]["chapter_id"] <= ms[i + 1]["chapter_id"]
+                  for i in range(len(ms) - 1)))
     check("limit 生效（單字地名開口就是上千處，沒 limit 會頂爆頁面）",
           len(db.place_mentions(simp[0]["id"], 3)) == 3 if simp else False)
 
@@ -1619,6 +1680,53 @@ def test_place_search() -> None:
             check("dist 記錄的地名命中數與庫一致（不是空殼）",
                   int(got.get("place_mentions", 0)) == want_pm,
                   "{} vs {}".format(got.get("place_mentions"), want_pm))
+            # ⚠️ --check 必須對 plalias / plbook **各自**敏感（P1-2）。
+            #    只比 place_mentions 的話，這兩塊可以獨立地壞掉而判成「同步」：
+            #      plalias 空 → 離線版輸「邯郸」零命中（pmen 完好，計數不變）
+            #      plbook 空 → 詳情頁「見於哪些書」空白（pmen 完好，計數不變）
+            #    這是實測出來的：把 plalias 清空後 export_static.py --check 報「✓ 同步」。
+            check("dist 記錄了地名寫法數與分書對數（--check 才有判據·P1-2）",
+                  "place_aliases" in got and "place_books" in got
+                  and int(got.get("place_aliases", 0)) > 0
+                  and int(got.get("place_books", 0)) > 0,
+                  "got={}".format({k: got.get(k) for k in
+                                   ("place_mentions", "place_aliases", "place_books")}))
+            # 真打一次 --check：把 plalias 的计数 +1（快照里那块比库里多一条），
+            # 判它**必须**报过期。改完还原 —— 断在「--check 真的会对它敏感」这一层。
+            try:
+                r0 = subprocess.run([PY, os.path.join(ROOT, "app", "tools",
+                                                      "export_static.py"), "--check"],
+                                    cwd=ROOT, capture_output=True,
+                                    text=True, encoding="utf-8", errors="replace")
+                with open(dist, encoding="utf-8") as fh:
+                    txt2 = fh.read()
+                # 把 counts 里 place_aliases 的数字 +1，制造「快照比库多一条」
+                m2 = re.search(r'"counts":\{([^}]*)\}', txt2)
+                seg = m2.group(0)
+                n0 = int(re.search(r'"place_aliases":(\d+)', seg).group(1))
+                seg2 = seg.replace('"place_aliases":{}'.format(n0),
+                                   '"place_aliases":{}'.format(n0 + 1), 1)
+                with open(dist + ".bak", "w", encoding="utf-8") as fh:
+                    fh.write(txt2)
+                with open(dist, "w", encoding="utf-8") as fh:
+                    fh.write(txt2.replace(seg, seg2, 1))
+                r1 = subprocess.run([PY, os.path.join(ROOT, "app", "tools",
+                                                      "export_static.py"), "--check"],
+                                    cwd=ROOT, capture_output=True,
+                                    text=True, encoding="utf-8", errors="replace")
+            finally:
+                # ⚠️ 還原必須放 finally，且不能只收「我建的檔」——
+                #    崩在中間的話 dist/data.js 会停在被改坏的狀態（還能打開，最難發現）。
+                if os.path.exists(dist + ".bak"):
+                    if os.path.exists(dist):
+                        os.remove(dist)
+                    os.rename(dist + ".bak", dist)
+            check("--check 對地名寫法數敏感（P1-2：plalias 少一條就報過期）",
+                  r1.returncode != 0 and "place_aliases" in (r1.stdout or ""),
+                  "rc={} out={}".format(r1.returncode, (r1.stdout or "").strip()[:90]))
+            check("--check 對乾淨快照判同步（別一律報過期·P1-2）",
+                  r0.returncode == 0,
+                  "rc={} out={}".format(r0.returncode, (r0.stdout or "").strip()[:90]))
         else:
             check("dist/data.js 存在", False, dist)
     finally:

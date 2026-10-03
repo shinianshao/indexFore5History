@@ -121,8 +121,37 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok("地名条目不带 data-name（別又落回人物檢索那條路）",
     out.querySelectorAll(".item[data-name]").length === 0,
     "实得 " + out.querySelectorAll(".item[data-name]").length);
+  // ⚠️ 必须在**点之前**量：下面点开详情页后 #out 就不是索引页了，
+  //    到那时再量 group-title 只会得到 0（分组标题是索引页才有的）。
   const groups = out.querySelectorAll(".group-title").length;
   ok("地名按類型分組（不止一組）", groups > 1, "實得 " + groups + " 組");
+  /* ⚠️ 这里要**真的点一条**（2026-10-03 审查 P0-1）。
+     地名有**两条**点击分派：索引页的 `.item[data-place]` 与检索结果的
+     `.row[data-place]`。此前只有后者有测试覆盖（【12】从检索页点进去），
+     于是把前者的 `if (pit) {...}` 整段删掉，全套测试照样全绿——
+     症状是「在地名索引里点条目 → hash 停在索引态、命中 0 条、零报错」。
+     两条分派必须各有一条断言，它们是**不同的代码路径**。 */
+  {
+    const pit = out.querySelector(".item[data-place]");
+    const wantName = pit ? pit.getAttribute("data-place") : "";
+    if (pit) click(pit);
+    /* 等地名页独有的东西。别等 `.person-head .name`（索引页卡片头也有）。 */
+    const gotIdxPlace = await waitFor(
+      () => out.querySelectorAll(".sent[data-place]").length > 0, 20000);
+    const idxName = out.querySelector(".person-head .name");
+    ok("地名索引里点条目 → 進地名詳情頁（.item[data-place] 分派有覆盖·P0-1）",
+      gotIdxPlace && !!idxName && wantName
+      && (window.location.hash || "").indexOf("#/place/" + wantName) === 0,
+      "实得「" + (idxName ? idxName.textContent : "") + "」hash="
+      + window.location.hash);
+    /* P0-3：分篇标题**要有篇名**。原来只断过「有 .chapter-title」，
+       而 chapter 字段被删掉时标题会退化成「 · 2 處」——仍然「有」，断言照样绿。
+       所以判据必须是「去掉次数后还剩字」。 */
+    const ct0 = out.querySelector(".chapter-title");
+    const ct0t = ((ct0 || {}).textContent || "").replace(/^[\s·0-9]+處$/, "").trim();
+    ok("地名詳情分篇標題有篇名（chapter 欄位沒丟·P0-3）",
+      !!ct0 && ct0t.length > 0, "实得「" + ((ct0 || {}).textContent || "") + "」");
+  }
 
   click(tab("chapters"));
   await sleep(300);
@@ -456,6 +485,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok("詳情頁渲染出命中句（點句可進原文層）", pSents > 0, "实得 " + pSents);
   ok("命中句帶原文層入口 data-chapter + data-uid",
     !!out.querySelector(".sent[data-chapter][data-uid]"));
+  // P0-3 的同款判据（【3】那条守的是「从索引页进来」这条路径）：
+  // 分篇标题去掉次数后必须还剩篇名，否则 chapter 字段被丢掉时看不出来。
+  const ctP = out.querySelector(".chapter-title");
+  const ctPt = ((ctP || {}).textContent || "").replace(/^[\s·0-9]+處$/, "").trim();
+  ok("分篇標題有篇名（檢索→詳情這條路徑上也是·P0-3）",
+    !!ctP && ctPt.length > 0, "实得「" + ((ctP || {}).textContent || "") + "」");
 
   // 進原文層：「只看相關段落」在地名頁也要能開（作用域是地名不是人物）
   const ps = out.querySelector(".sent[data-chapter]");

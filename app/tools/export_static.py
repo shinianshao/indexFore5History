@@ -377,6 +377,13 @@ def build() -> dict:
             # 地名命中另記一份：它與人物命中不同表（place_mentions），
             # 少了它 --check 對「地名側被砍掉一半」這種壞**完全無感**。
             "place_mentions": sum(len(v) for v in pmen.values()),
+            # ⚠️ 地名三塊**各有各的計數**，別以為 place_mentions 夠用（審查 P1-2）。
+            #    事實上三塊可以各自獨立地壞掉而總命中數不變：
+            #      plalias 空 → 離線版輸「邯郸」零命中（檢索失明，pmen 完好）
+            #      plbook 空 → 詳情頁「見於哪些書」空白
+            #    而 --check 原來只看 place_mentions → 這兩種壞**判成同步**。
+            "place_aliases": sum(len(v) for v in plalias.values()),
+            "place_books": sum(len(v) for v in plbook.values()),
         },
         "stats": stats,
         "books": books,
@@ -501,7 +508,7 @@ def report(data: dict, out_dir: str) -> None:
         data["gen"], data.pop("_sec", "?"),
         " ".join("{}{}s".format(k, v) for k, v in data.pop("_steps", []))))
     for k in ("sentences", "chapters", "persons", "places", "mentions", "relations",
-              "place_mentions"):
+              "place_mentions", "place_aliases", "place_books"):
         print("  {:<16} {:>7,}".format(k, data["counts"][k]))
     print("  ── 體積 ──")
     # ⚠️ 按**字節**算，不是字符數：中文一個字 1 字符但 3 字節，
@@ -607,10 +614,20 @@ def check(out_dir: str) -> int:
             "aliases": c.execute("SELECT COUNT(*) FROM aliases").fetchone()[0],
             "place_mentions": c.execute(
                 "SELECT COUNT(*) FROM place_mentions").fetchone()[0],
+            # 地名三塊**各比各的**（為什麼不能只看 place_mentions 見 build() 處注釋）。
+            # plalias 對表行數（導出不丟）；plbook 是「地×書」對數，
+            # 導出時會丟掉句已棄用的那幾行 → 只可能 ≤。
+            "place_aliases": c.execute(
+                "SELECT COUNT(*) FROM place_aliases").fetchone()[0],
+            "place_books": c.execute(
+                "SELECT COUNT(*) FROM (SELECT m.place_id, c.book_id "
+                "FROM place_mentions m JOIN sentences s ON s.uid = m.sentence_uid "
+                "JOIN chapters c ON c.id = s.chapter_id "
+                "GROUP BY m.place_id, c.book_id)").fetchone()[0],
         }
     # 命中數口徑：導出時會丟掉「句已被棄用」的懸空命中，所以只可能 ≤ 庫裡的數
     bad = [k for k in new
-           if k not in ("mentions", "relations", "place_mentions")
+           if k not in ("mentions", "relations", "place_mentions", "place_books")
            and old.get(k) != new[k]]
     if old.get("mentions", 0) > new["mentions"]:
         bad.append("mentions")
@@ -618,18 +635,22 @@ def check(out_dir: str) -> int:
         bad.append("relations")
     if old.get("place_mentions", 0) > new["place_mentions"]:
         bad.append("place_mentions")
-    # ⚠️ 键**不存在**也要报过期，不能只比大小：地名三块（pmen/plalias/plbook）
-    # 是 2026-10-03 才加的，老快照里压根没有这个计数 → 只比大小会判成「同步」，
+    if old.get("place_books", 0) > new["place_books"]:
+        bad.append("place_books")
+    # ⚠️ 键**不存在**也要报过期，不能只比大小：地名三塊（pmen/plalias/plbook）
+    # 是 2026-10-03 才加的，老快照里压根没有这几个计数 → 只比大小会判成「同步」，
     # 而离线版的地名其实是死的。宁可多报一次重导。
-    if "place_mentions" not in old:
-        bad.append("place_mentions(缺键·快照早於地名命中)")
+    for k in ("place_mentions", "place_aliases", "place_books"):
+        if k not in old:
+            bad.append("{}(缺键·快照早於地名側)".format(k))
     if bad:
         print("× 快照過期：{}".format(
             ", ".join("{} {}→{}".format(k, old.get(k), new[k]) for k in bad)))
         print("  重導：python app/tools/export_static.py")
         return 1
-    print("✓ 快照與庫同步（{} 句 / {} 命中）".format(
-        new["sentences"], old.get("mentions")))
+    print("✓ 快照與庫同步（{} 句 / {} 命中 / {} 地名命中 / {} 地名寫法）".format(
+        new["sentences"], old.get("mentions"), old.get("place_mentions"),
+        old.get("place_aliases")))
     return 0
 
 

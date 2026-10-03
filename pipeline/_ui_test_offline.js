@@ -122,6 +122,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
      写成 `.item` 也能过（人物条目混在里面），但那样这条断言就废了。 */
   ok("地名索引有条目", out.querySelectorAll(".item[data-place]").length > 0,
     "实得 " + out.querySelectorAll(".item[data-place]").length);
+  /* ⚠️ 必须**真的点一条**（2026-10-03 审查 P0-1）。地名有**两条**点击分派：
+     索引页的 `.item[data-place]` 与检索结果的 `.row[data-place]`。
+     【7】只覆盖了后者，于是把前者的 `if (pit) {...}` 删掉全套测试照样全绿
+     —— 症状是「离線版在地名索引里点条目 → 掉到人物搜索 → 空」，零报错。
+     两条是**不同的代码路径**，各得一条断言。 */
+  {
+    const pit = out.querySelector(".item[data-place]");
+    const wantId = pit ? pit.getAttribute("data-place") : "";
+    if (pit) click(pit);
+    /* 等地名页独有的东西。别等 `.person-head .name`（索引页卡片头也有）。 */
+    const gotPit = await waitFor(
+      () => out.querySelectorAll(".sent[data-place]").length > 0, 60000);
+    ok("離線版地名索引里点條目 → 進詳情頁（.item[data-place] 分派有覆盖·P0-1）",
+      gotPit && !!wantId
+      && (window.location.hash || "").indexOf("#/place/" + wantId) === 0,
+      "hash=" + window.location.hash + " id=" + wantId);
+    /* P0-3：分篇标题**要有篇名**。`chapter` 字段被丢掉时标题退化成「 · 2 處」，
+       「有 .chapter-title」照样成立 → 判据必须是「去掉次数后还剩字」。 */
+    const ct0 = out.querySelector(".chapter-title");
+    const ct0t = ((ct0 || {}).textContent || "").replace(/^[\s·0-9]+處$/, "").trim();
+    ok("離線版地名詳情分篇標題有篇名（chapter 欄位沒丟·P0-3）",
+      !!ct0 && ct0t.length > 0, "实得「" + ((ct0 || {}).textContent || "") + "」");
+  }
   click(tab("chapters"));
   await sleep(400);
   const chapRows = out.querySelectorAll(".chap-row[data-chapter]").length;

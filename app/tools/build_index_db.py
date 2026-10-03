@@ -172,7 +172,12 @@ CREATE TABLE IF NOT EXISTS place_aliases (
   seq      INTEGER,
   w        TEXT,          -- 異體寫法（可能是簡體、也可能是異寫）
   n        INTEGER,       -- 該寫法在語料裡的命中次數
-  by_book  TEXT           -- JSON: {書號: 次數}
+  by_book  TEXT,          -- JSON: {書號: 次數}
+  -- ⚠️ 複合主鍵是**必需**的，不是nice-to-have（2026-10-03 審查 P1-3）：
+  --    沒有主鍵時 `INSERT OR REPLACE` **退化成普通 INSERT**，重跑兩遍就出重複行，
+  --    而 `place_alias_list` / `offSearchPlaces` 都會靜靜返回重複條目。
+  --    判据是「注入重复灌一次，看条数翻倍」——不报错，只多一倍。
+  PRIMARY KEY (place_id, w)
 );
 CREATE INDEX IF NOT EXISTS ix_palias_place ON place_aliases(place_id);
 CREATE INDEX IF NOT EXISTS ix_palias_w ON place_aliases(w);
@@ -425,6 +430,18 @@ def main():
             if b:
                 bk_by_form.setdefault(key, {})
                 bk_by_form[key][b] = bk_by_form[key].get(b, 0) + 1
+        # ⚠️ 語料裡**實際用過**的寫法必須併進來（2026-10-03 審查 P1-1）。
+        #    漏这一步的後果有兩個，且**都不報錯**：
+        #      ① 檢索失明——`河閒` 96 處、`雒` 89 處、`關内` 41 處……共 61 種寫法
+        #         從沒進過 places[].aliases，於是 place_aliases 裡沒有它們，
+        #         `search_places('河閒')` 返回 0（正名「河間」能搜到，但那 96 處
+        #         記在 surface='河閒' 上，用戶按語料寫法找不到）。
+        #      ② Σ n 對不齊——只統計「登過的寫法」，所以 60 個地名
+        #         COUNT(place_mentions) != SUM(alias.n)（pl_hejian_jun 342 vs 246）。
+        #    順序：正名 → aliases 原序 → 語料實測（按次數降序，只為可讀性）。
+        for w, _n in sorted(n_by_form.items(), key=lambda kv: -kv[1]):
+            if w and w not in forms:
+                forms.append(w)
         for i, w in enumerate(f for f in forms if f):
             palias.append((pid, i, w, n_by_form.get(w, 0),
                            json.dumps(bk_by_form.get(w, {}), ensure_ascii=False)))
