@@ -356,11 +356,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     ((gotBadge || {}).textContent || "").indexOf("項羽") > 0,
     "实得「" + ((gotBadge || {}).textContent || "") + "」");
   const ovbar = out.querySelector(".ovbar");
-  ok("顶部提示「已記錄 N 條糾錯，重建後生效」（不让人以为已改）",
-    ovbar && ovbar.textContent.indexOf("重建後生效") > 0,
+  /* ⚠️ 断言的是「待重建」而不是「已記錄」：表里的行永远 active（revoke 只改状态），
+     「是否已生效」是后端 db.override_states **算出来**的（applied 字段）。
+     算错的话顶栏 N 永不归零 —— 界面一直骗你「重建後生效」，重建完还是这句。 */
+  ok("顶部提示「有 N 條糾錯待重建」（不让人以为已改）",
+    ovbar && ovbar.textContent.indexOf("糾錯待重建") > 0,
     "实得「" + ((ovbar || {}).textContent || "") + "」");
+  ok("徽章此刻**不带** ✓（还没重建，别显示成已生效）",
+    gotBadge && (gotBadge.textContent || "").indexOf("✓") < 0,
+    "实得「" + ((gotBadge || {}).textContent || "") + "」");
   ok("徽章带撤銷出口（改错了能反悔）",
     !!out.querySelector('.flag-badge button[data-act="unflag"]'));
+  /* 重建状态必须能在**人物页**看得见。原文层的 #edstat 在原文层头上，
+     没开原文层时从人物页点重建就是 30 秒静默等待 —— 这条守的就是它。 */
+  ok("顶栏留了 .ovtxt 給重建狀態（人物页按重建不静默）",
+    !!(ovbar && ovbar.querySelector(".ovtxt")));
+  ok("顶栏有「重建」按钮（纠错就地生效，不用跑去原文层）",
+    !!out.querySelector('.ovbar button[data-act="ovrebuild"]'));
 
   const unflag = out.querySelector('.flag-badge button[data-act="unflag"]');
   if (unflag) click(unflag);

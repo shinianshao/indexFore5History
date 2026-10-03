@@ -283,10 +283,14 @@ def api_overrides(uid: str = Query("", description="只看某句的纠错")):
         items = [r for r in items if r["uid"] == uid]
     # pid 翻成正名：界面上「已標錯 → 項羽」比「→ p_xiangyu」有用得多
     names = db.person_names([r["to"] for r in items] + [r["from"] for r in items])
-    for r in items:
+    # ⚠️ 一定要带上「是否已生效」：表里的行永远 active，重建完也不会消失。
+    #    不算的话顶栏的 N 永不归零，会一直骗你「重建后生效」。
+    for r, applied in zip(items, db.override_states(items)):
         r["toName"] = names.get(r["to"], "")
         r["fromName"] = names.get(r["from"], "")
-    return {"items": items, "count": len(items)}
+        r["applied"] = applied
+    pending = sum(1 for r in items if not r["applied"])
+    return {"items": items, "count": len(items), "pending": pending}
 
 
 @app.post("/api/override")
@@ -321,8 +325,14 @@ def api_override(body: dict = Body(...)):
         args += ["--new", new_pid]
     if body.get("note"):
         args += ["--note", str(body["note"])[:120]]
-    _run_overrides(*args)
+    out = _run_overrides(*args)
+    # ⚠️ `overrides.py` 在 Excel 占着表时会改写 `.new.xlsx` 并**照样返回 0**。
+    #    不把这句警告透出去，界面就回「已记录」——其实那行还没进你的权威源。
+    warn = ""
+    if "⚠️" in out:
+        warn = out.split("⚠️", 1)[1].strip().splitlines()[0][:160]
     return {"ok": True, "uid": uid, "nth": nth, "action": action,
+            "warning": warn,
             "message": "已记录（本句第 {} 条命中），重建后生效".format(nth)}
 
 

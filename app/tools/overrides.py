@@ -165,6 +165,13 @@ def _read_rows():
     return out
 
 
+def _int_or_none(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def active_rows() -> list:
     """生效中的糾錯行（對外接口，網頁「標錯」入口用）。
 
@@ -174,9 +181,11 @@ def active_rows() -> list:
     """
     out = []
     for r in _read_rows():
+        # s / e 強制成整數：Excel 裡手改過的單元格讀回來可能是 17.0，
+        # 前端拿它拼 key（uid|s|e|surface）就與庫裡對不上，**徽章會靜默消失**。
         out.append({
             "uid": str(r.get("uid") or "").strip(),
-            "s": r.get("s"), "e": r.get("e"),
+            "s": _int_or_none(r.get("s")), "e": _int_or_none(r.get("e")),
             "surface": r.get("surface"), "nth": r.get("nth"),
             "from": r.get("原pid") or "",
             "to": str(r.get("应归(newPid)") or "").strip(),

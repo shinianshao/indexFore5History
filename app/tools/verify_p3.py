@@ -1294,6 +1294,32 @@ def test_override_api() -> None:
     check("定位不到時返回 None（不是亂指一條）",
           db.mention_nth(a["uid"], a["s"], a["e"], "絕無此人", "p_liubang") is None)
 
+    # ---- override_states：算「這條糾錯是否已經生效」----
+    # 為什麼要斷它：表裡的行永遠 active（revoke 只改狀態），所以生效與否
+    # **只能算出來**。不算的後果是頂欄 N 永不歸零（界面騙人）＋改歸生效後
+    # 別人的頁面也掛「已標錯」徽章。純函數，無寫入副作用。
+    hit = {"uid": a["uid"], "s": a["s"], "e": a["e"], "surface": a["surface"]}
+    st_list = db.override_states([
+        dict(hit, action="drop"),                       # 命中還在 → 未生效
+        dict(hit, action="reassign", to="p_liubang"),  # 已歸他 → 生效
+        dict(hit, action="reassign", to="p_xiangyu"),  # 還在劉邦名下 → 未生效
+        dict(hit, action="keep"),                       # 不改數據 → 永不生效
+    ])
+    check("override_states：drop 有命中→False / reassign 已是 to→True / "
+          "reassign 不是 to→False / keep→False",
+          st_list == [False, True, False, False], str(st_list))
+    check("override_states：庫裡查無此處算已生效（句邊界變過，原位置無從複核）",
+          db.override_states([dict(hit, surface="絕無此人", action="drop")]) == [True])
+    # ⚠️ s/e 從 xlsx 讀回來可能是 17.0（Excel 裡手改過）。不歸一化成 int，
+    #    前端拼的 key 就對不上 → **徽章靜默消失**，不報錯。
+    check("override_states：s/e 給 float 也算同一處（xlsx 讀回 17.0 的坑）",
+          db.override_states([dict(hit, s=float(a["s"]), e=float(a["e"]),
+                                action="reassign", to="p_liubang")]) == [True]
+          and db.override_states([dict(hit, s=float(a["s"]), e=float(a["e"]),
+                                       action="drop")]) == [False])
+    check("override_states：空行不炸（回等長的 False）",
+          db.override_states([]) == [] and db.override_states([{}]) == [False])
+
     port = _free_port()
     env = dict(os.environ, PORT=str(port), PYTHONIOENCODING="utf-8")
     proc = subprocess.Popen([PY, os.path.join(ROOT, "app", "server", "main.py")],
@@ -1361,6 +1387,12 @@ def test_override_api() -> None:
         check("pid 翻成正名（界面要寫「→ 項羽」不是「→ p_xiangyu」）",
               bool(to_row) and to_row[0].get("toName") == "項羽",
               str(to_row[0].get("toName")) if to_row else "—")
+        # 剛寫進表、還沒套用 → 兩條都算「待重建」。不算的話頂欄 N 永不歸零。
+        check("列表帶 applied 且此刻兩條都未生效（重建前）",
+              all(r.get("applied") is False for r in rows)
+              and lb.get("pending") == len(rows),
+              "applied={} pending={}".format(
+                  [r.get("applied") for r in rows], lb.get("pending")))
 
         dry = _apply_dry()
         check("apply（預演）認得這兩條：改歸 1 / 棄用 1",

@@ -609,6 +609,61 @@ def mention_nth(uid: str, s: Any, e: Any, surface: str,
     return None
 
 
+def _as_int(v) -> Optional[int]:
+    """xlsx 单元格可能是 `17` 也可能是 `17.0`（Excel 里手改过就会变 float）。
+
+    不统一的话，前端拼的 key（`uid|s|e|surface`）与库里对不上，
+    **徽章会静默消失**——不报错，只是看不见。
+    """
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def override_states(rows: List[Dict[str, Any]]) -> List[bool]:
+    """每条纠错**是否已经体现在库里**（与 `rows` 同序）。
+
+    为什么要算
+    ----------
+    `overrides.xlsx` 里的行永远 `active`（revoke 只改状态、不删行，为了留痕），
+    所以「已生效」和「待重建」在表里长得一模一样。不算的话后果有两个：
+
+    1. 顶栏永远写「已記錄 N 條糾錯，重建後生效」，**N 永不归零**——
+       界面在骗人，而且会反复诱导你按重建（重建完还是这句）。
+    2. 改归生效之后，那条命中已经属于**别人**了，于是这个人的页面也会挂出
+       「已標錯 → 某人」的徽章，看着像还没做。
+
+    判据就是拿行去问库（一次查完，别一条一条问）：
+      `drop`     → 这处命中已经不在了
+      `reassign` → 这处命中已经归到 `to` 那个人
+      `keep`     → 不改数据，永远算「待重建」（它只是个标记）
+    """
+    uids = sorted({str(r.get("uid") or "").strip() for r in rows} - {""})
+    hit: Dict[Any, str] = {}
+    if uids:
+        ph = ",".join("?" * len(uids))
+        with connect() as conn:
+            for uid, s, e, surface, pid in conn.execute(
+                    "SELECT sentence_uid, s, e, surface, person_id FROM mentions "
+                    "WHERE sentence_uid IN ({})".format(ph), uids):
+                hit[(uid, s, e, surface)] = pid
+    out = []
+    for r in rows:
+        key = (str(r.get("uid") or "").strip(), _as_int(r.get("s")),
+               _as_int(r.get("e")), r.get("surface"))
+        pid = hit.get(key)
+        action = str(r.get("action") or "").strip()
+        if action == "drop":
+            out.append(pid is None)
+        elif action == "reassign":
+            out.append(pid is not None
+                       and pid == str(r.get("to") or "").strip())
+        else:
+            out.append(False)
+    return out
+
+
 def person_names(pids) -> Dict[str, str]:
     """pid → 正名，**一次查完**而不是 N+1。
 

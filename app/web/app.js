@@ -390,7 +390,9 @@
      自己算必然改到別人頭上，而且不報錯。
      離線快照沒有服務端可寫，一律不給這顆按鈕。 */
   var ovMap = {};          // "uid|s|e|surface" → 糾錯行
-  var ovCount = 0;
+  var ovPending = 0;       // 還沒重建生效的糾錯條數
+  var ovMsg = "";          // 重建狀態文字（要跨重渲染存活，見 ovStatus）
+  var ovMsgFor = "";       // 這條狀態屬於哪個 pid
   var fixTimer = null;
 
   function ovKeyOf(uid, s, e, surface) {
@@ -401,12 +403,30 @@
     // 拿不到就算了：糾錯是附加資訊，不能因為它失敗就整個人打不開
     return request("/api/overrides").catch(function () { return { items: [] }; });
   }
+  /* 徽章要分「待重建 / 已生效」兩種樣子。
+     ⚠️ 表裡的行永遠 active（revoke 只改狀態），所以「已生效」是**算出來的**
+     （`db.override_states` 拿行去問庫）。不算的話：重建完頂欄還是那句
+     「重建後生效」，而且改歸生效後那處命中已經屬於別人，別人的頁面上也會
+     掛出這句——看著像還沒做。 */
   function flagBadge(ov) {
     var txt = (ov.action === "drop")
       ? "已標錯：這處不作數"
       : ("已標錯 → " + (ov.toName || ov.to || "？"));
-    return "<span class=\"flag-badge\">" + esc(txt) +
-      "<button data-act=\"unflag\">撤銷</button></span>";
+    if (ov.applied) txt += " ✓";
+    return "<span class=\"flag-badge\"" +
+      (ov.applied ? " title=\"重建已生效\"" : " title=\"待重建生效\"") + ">" +
+      esc(txt) + "<button data-act=\"unflag\">撤銷</button></span>";
+  }
+  /* 重建狀態也得在**人物頁**看得見——原文層的 `#edstat` 在原文層頭上，
+     沒開原文層時按了重建就是 30 秒靜默等待。
+     ⚠️ 狀態文字要**記在變數裡**，不能只寫進 DOM：重建完成後人物頁會重渲染，
+     只寫 DOM 的話這句「重建完成」跟著舊節點一起沒了（此時 pending 歸零，
+     條子本身也會被收走）。ovMsgFor 記這條消息屬於哪個 pid，免得竄到別人的頁面上。 */
+  function ovStatus(msg, pid) {
+    ovMsg = msg || "";
+    ovMsgFor = pid || "";
+    var el = out.querySelector(".ovbar .ovtxt");
+    if (el) el.textContent = ovMsg;
   }
 
   function renderPerson(pid) {
@@ -416,11 +436,13 @@
     ]).then(function (rs) {
       var d = rs[0];
       var p = d.profile;
+      // 換人就把上一個人的重建狀態丟掉，免得回來時看到一句過期的「重建完成」
+      if (ovMsgFor && ovMsgFor !== pid) { ovMsg = ""; ovMsgFor = ""; }
       ovMap = {};
       (rs[1].items || []).forEach(function (r) {
         ovMap[ovKeyOf(r.uid, r.s, r.e, r.surface)] = r;
       });
-      ovCount = (rs[1].items || []).length;
+      ovPending = rs[1].pending || 0;
       // 記住這個人的命中 uid —— 原文層的「只看相關段落」靠它。
       // ⚠️ mentions 有 limit（默認 200），**只覆蓋前 N 條**。所以篩選是
       // 「本頁已加載的命中」，不是全集；命中太多時人物頁本身也只顯示前 N，
@@ -443,10 +465,17 @@
         }).join("") + "</div>";
       }
       html += "</div>";
-      // 有糾錯在生效前排隊 → 說清楚「重建後才生效」，別讓人以為已經改了
-      if (ovCount) {
-        html += "<div class=\"ovbar\">已記錄 " + ovCount + " 條糾錯，重建後生效" +
-          (OFF ? "" : "<button data-act=\"ovrebuild\">重建</button>") + "</div>";
+      // 頂欄：只在**還沒生效**的糾錯存在時掛（生效了就不該再催你重建）。
+      // 掛了就帶一塊 .ovtxt 給重建狀態用——否則人物頁點了重建，
+      // 狀態只發給原文層的 #edstat，那層沒開就是 30 秒靜默。
+      // ovMsg 非空時也保留這條：重建完成 pending 歸零、條子被收走，
+      // 那一瞬間的「重建完成」得留得住。
+      if (ovPending || (ovMsg && ovMsgFor === pid)) {
+        html += "<div class=\"ovbar\">" +
+          (ovPending ? "有 " + ovPending + " 條糾錯待重建" : "") +
+          "<span class=\"ovtxt\">" + esc(ovMsg) + "</span>" +
+          (OFF || !ovPending ? "" : "<button data-act=\"ovrebuild\">重建</button>") +
+          "</div>";
       }
 
       // 命中按篇分組
@@ -555,8 +584,13 @@
       action: action
     };
     if (newPid) { body.new = newPid; }
-    requestPost("/api/override", body).then(function () {
-      renderPerson(currentPid);        // 重渲染：徽章與計數都由服務端那份決定
+    requestPost("/api/override", body).then(function (r) {
+      // 重渲染：徽章與計數都由服務端那份決定
+      return renderPerson(currentPid).then(function () {
+        // ⚠️ overrides.py 在 Excel 被別人占著（.new.xlsx 已寫、退出碼還是 0）時
+        // 會回 warning。不顯示的話介面說「已記錄」而權威源裡根本沒有。
+        ovStatus(r.warning ? "⚠️ " + r.warning : "已記錄，重建後生效", currentPid);
+      });
     }).catch(function (e) {
       var alt = box.querySelector(".fix-hint");
       if (alt) { alt.textContent = "　失敗：" + ((e && e.message) || e); }
@@ -740,22 +774,30 @@
     }
   });
 
+  /* 重建狀態要同時落到**兩個地方**：原文層頭上的 #edstat（句級編輯那套）
+     與人物頁的 .ovbar（糾錯那套）。重建入口有兩個，兩邊都可能點，
+     只寫一個的話從另一個入口點就是 30 秒靜默等待。 */
+  function rebuildStatus(msg) {
+    syncEdstat(msg);
+    ovStatus(msg, currentPid);
+  }
+
   /* 重建約 40 秒，後台跑、前端輪詢；跑完自動重開原文層 */
   function pollRebuild() {
     return request("/api/rebuild/status").then(function (s) {
       if (s.running) {
         var last = (s.log && s.log.length) ? s.log[s.log.length - 1] : "";
-        syncEdstat("重建中…" + String(last).slice(0, 24));
+        rebuildStatus("重建中…" + String(last).slice(0, 24));
         return new Promise(function (r) { setTimeout(r, 1500); }).then(pollRebuild);
       }
       if (s.ok === false) {
-        syncEdstat("重建失敗，看服務端日誌");
+        rebuildStatus("重建失敗，看服務端日誌");
         btnRebuild.disabled = false;
         return;
       }
       pending = {};
       btnRebuild.disabled = false;
-      syncEdstat("重建完成");
+      rebuildStatus("重建完成");
       if (readerCid) openChapter(readerCid);
       // 糾錯/編輯生效後當前頁是舊的（命中還按舊歸屬顯示），要重取一次
       if (typeof onRebuilt === "function") { var f = onRebuilt; onRebuilt = null; f(); }
@@ -765,9 +807,9 @@
   function startRebuild() {
     if (btnRebuild.disabled) return;
     btnRebuild.disabled = true;
-    syncEdstat("正在啟動重建…");
+    rebuildStatus("正在啟動重建…");
     requestPost("/api/rebuild", {}).then(pollRebuild).catch(function (e) {
-      syncEdstat("重建失敗：" + ((e && e.message) || e));
+      rebuildStatus("重建失敗：" + ((e && e.message) || e));
       btnRebuild.disabled = false;
     });
   }
