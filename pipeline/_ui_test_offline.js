@@ -16,9 +16,10 @@
      4. 人物详情：命中按篇分组
      5. 关系卡能出（离线层自己造的 {nodes,edges} 形状对得上）
      6. 全文检索（无 SQLite、无 FTS，纯内存扫）能出结果
-     7. 原文层能开，句子有内容
-     8. **只读**：没有拆分/併下句/棄用按钮，重建按钮隐藏
-     9. 无 JS 报错（含误用 fetch 的 ReferenceError）
+     7. 地名检索与详情（**简体搜得到 / 点得进 / 命中句在**）——离线版以前是死的
+     8. 原文层能开，句子有内容
+     9. **只读**：没有拆分/併下句/棄用按钮，重建按钮隐藏
+    10. 无 JS 报错（含误用 fetch 的 ReferenceError）
 
    用法（依赖 jsdom，装在隔离目录里，不污染本工程）：
      1) 导出：python app/tools/export_static.py
@@ -116,7 +117,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok("人物索引有条目", allPersons > 0, "实得 " + allPersons);
   click(tab("places"));
   await sleep(400);
-  ok("地名索引有条目", out.querySelectorAll(".item[data-name]").length > 0);
+  /* ⚠️ 选择器是 `.item[data-place]` 不是 `.item[data-name]`：
+     2026-10-03 起地名条目直接进详情页（不再绕人物搜索，那才是「点不動」的根因）。
+     写成 `.item` 也能过（人物条目混在里面），但那样这条断言就废了。 */
+  ok("地名索引有条目", out.querySelectorAll(".item[data-place]").length > 0,
+    "实得 " + out.querySelectorAll(".item[data-place]").length);
   click(tab("chapters"));
   await sleep(400);
   const chapRows = out.querySelectorAll(".chap-row[data-chapter]").length;
@@ -204,14 +209,90 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // 切回人物模式：它会**再跑一次 search()**（异步）。必须等它落定再点下一个标签页，
   // 否则上一次渲染会落在下一次渲染之后，把刚点开的页顶掉。
   // ⚠️ 这是**测试自己的排序问题**，不是页面的 bug——页面的 hash 守卫已经挡住了
-  // hashchange 那条路径（联机版 29/29 就是证据）。连续 click 之间一定要 await。
+  // hashchange 那条路径（联机版就是证据）。连续 click 之间一定要 await。
   click([...doc.querySelectorAll(".modes span")]
     .find((el) => el.getAttribute("data-mode") === "person"));
+  /* ⚠️ 原来这里等的是「查不到」三个字（那时「鴻門」人物地名都搜不到）。
+     2026-10-03 加了地名檢索之后，「鴻門」**本身就是一個地名**（關隘，26 處），
+     页面正确地渲染出地名卡 → 永远等不到那三个字 → 假失败。
+     教训与本文件开头那条同源：**别把「当前数据的偶然」写进等待条件**。
+     判据应该是「渲染已落定」：有结果行或空态都算。 */
   const settled = await waitFor(
-    () => (out.textContent || "").indexOf("查不到") >= 0, 30000);
-  ok("切回人物模式后那次异步检索落定了", settled);
+    () => out.querySelectorAll(".row[data-pid], .row[data-place], .empty").length > 0,
+    30000);
+  ok("切回人物模式后那次异步检索落定了", settled,
+    "out=" + String(out.innerHTML).slice(0, 80));
+  ok("「鴻門」在人物模式下落成**地名卡**（它本就是關隘，不該是空態）",
+    out.querySelectorAll(".row[data-place]").length > 0,
+    "地 " + out.querySelectorAll(".row[data-place]").length
+    + " / 人 " + out.querySelectorAll(".row[data-pid]").length);
 
-  console.log("\n【7】原文层 + 只读");
+  console.log("\n【7】地名檢索與詳情（離線）");
+  /* 这一块守的是**分发形态**：dist/ 是「双击 index.html 就能发给人」的产物，
+     而它跟联机版共用同一份 app.js。此前离线版**能列地名、点不动**——
+     `export_static.py` 只导了 places 主表，`place_mentions` 一点痕迹都没有，
+     点了掉到人物搜索上 → 空。这种坏在联机测试里**永远看不到**。
+     ⚠️ 这里同样不注入 fetch：只要 app.js 还在打 /api/*，就报 ReferenceError。 */
+  // 先关掉原文层：【7】前面开过，不关的话下面「点句 → 原文层」会假通过
+  if (doc.getElementById("reader").classList.contains("on")) {
+    const cb0 = doc.querySelector('.reader-head button[data-act="close"]');
+    if (cb0) click(cb0);
+    await sleep(300);
+  }
+  // 简体：places.name 与 trad_name 逐行相同，简体名只在 plalias 里。
+  // 漏导 plalias 的症状就是这一条——输「邯郸」零命中。
+  /* ⚠️ 必须先**清屏**再等：上一块（【6】全文检索）切回人物模式时搜的是「鴻門」，
+     而「鴻門」本身就是關隘 → 屏幕上留着一行 `.row[data-place]`。
+     于是「等 .row[data-place] 出现」立刻成立，**量到的是上一屏的残留**——
+     这条断言就成了恒真，注入 plalias 故障时它照样绿（实测踩过）。
+     判据要写死「这一行里是邯郸」，而不是「有一行地名」。 */
+  out.innerHTML = "";
+  q.value = "邯郸";
+  click(doc.getElementById("btn"));
+  const gotLand = await waitFor(() => {
+    const rows = [...out.querySelectorAll(".row[data-place]")];
+    return rows.length > 0 && rows.some((r) => (r.textContent || "").indexOf("邯鄲") >= 0);
+  }, 60000);
+  ok("離線版輸簡體「邯郸」搜得到地名（plalias 進了快照）", gotLand,
+    "out=" + String(out.innerHTML).slice(0, 100));
+  const lrow = [...out.querySelectorAll(".row[data-place]")]
+    .find((r) => (r.textContent || "").indexOf("邯鄲") >= 0);
+  ok("地名行的名字是繁體正名（不是把簡體原樣回顯）",
+    !!lrow && !!lrow.querySelector(".name")
+    && lrow.querySelector(".name").textContent.indexOf("邯鄲") === 0
+    && lrow.querySelector(".name").textContent.indexOf("邯郸") < 0,
+    "实得「" + (lrow ? lrow.textContent : "") + "」");
+  if (lrow) click(lrow);
+  /* ⚠️ 等 `.sent[data-place]`（地名页独有），别等 `.person-head .name`——
+     检索结果页也有那个类，条件会立刻成立，断言全读到检索页。 */
+  const gotLandPage = await waitFor(
+    () => out.querySelectorAll(".sent[data-place]").length > 0, 60000);
+  const lname = out.querySelector(".person-head .name");
+  ok("離線版點地名 → 進詳情頁（不是人物檢索）", gotLandPage
+    && lname && (lname.textContent || "").indexOf("邯鄲") === 0,
+    "实得「" + (lname ? lname.textContent : "") + "」");
+  ok("離線版地名詳情有命中句（pmen 進了快照）",
+    out.querySelectorAll(".sent[data-chapter]").length > 0,
+    "实得 " + out.querySelectorAll(".sent[data-chapter]").length + " 句");
+  ok("離線版地名詳情有寫法清單（异體在 plalias）",
+    !!out.querySelector(".alias-tag")
+    && out.textContent.indexOf("邯郸") > 0);
+  ok("離線版地名詳情有「見於哪些書」（plbook 進了快照）",
+    !!out.querySelector(".alias-note"));
+  const lsent = out.querySelector(".sent[data-chapter]");
+  if (lsent) click(lsent);
+  const gotLandReader = await waitFor(
+    () => doc.getElementById("reader").classList.contains("on"), 60000);
+  ok("離線版地名命中句 → 能進原文層", gotLandReader);
+  ok("地名頁的「只看相關段落」也在（scope 別只認人物 pid）",
+    doc.getElementById("btnHits") && !doc.getElementById("btnHits").hidden,
+    "按钮=" + (doc.getElementById("btnHits")
+      ? (doc.getElementById("btnHits").hidden ? "hidden" : "可见") : "找不到"));
+  const cb1 = doc.querySelector('.reader-head button[data-act="close"]');
+  if (cb1) click(cb1);
+  await sleep(300);
+
+  console.log("\n【8】原文层 + 只读");
   click(tab("chapters"));
   const gotChaps = await waitFor(
     () => out.querySelectorAll(".chap-row[data-chapter]").length > 0, 60000);
@@ -388,7 +469,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok("標了「獨立賬本，不計入正文命中」",
     /獨立賬本|獨立帳本/.test(doc.body.textContent));
 
-  console.log("\n【8】无 JS 报错");
+  console.log("\n【9】无 JS 报错");
   ok("全程无 JS 报错（误用 fetch 会在这里红）", errs.length === 0,
     errs.slice(0, 4).join(" | "));
 

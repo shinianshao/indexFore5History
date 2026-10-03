@@ -16,11 +16,14 @@
 
   var mode = "person";                    // person | fts
   var currentPid = null;
+  // 地名頁的當前地名。與 currentPid **分開兩個變數**，別複用：
+  // 人物頁有「關係圖節點 → 跳另一個人」這類互相跳轉，一個字段頂兩個用會跳錯頁。
+  var currentPlace = null;
   var lastQuery = "";
   // 原文層狀態。聲明放在這裡（而不是用它的函數附近），
   // 因為 renderPerson 在上面就會寫 hitUids —— 分散聲明只靠 var 提升才不出錯，
   // 順序一變就變成 undefined。
-  var readerState = { sents: [], pid: null, hitsOnly: false, hitUids: null,
+  var readerState = { sents: [], scope: null, hitsOnly: false, hitUids: null,
                       targetUid: null };
 
   /* ---------- 離線快照（dist/）----------
@@ -99,6 +102,59 @@
   /* 檢索與全文：離線沒有 SQLite 也沒有 FTS——直接掃。
      9.6 萬句在內存裡做 indexOf 是毫秒級，比分詞建索引划算得多，
      而且跟線上 FTS 的「按字切分 + 短語」在效果上等價（都是連續子串）。 */
+  /* ---------- 地名（離線）----------
+     形狀必須與聯機 `db.place_payload` **逐字一致**（同源同形是離線/聯機一致性的
+     前提，見 MEMORY「響應體組裝放 db 層」）。壓縮格式：
+       D.pla[pid]  = [繁名, 簡名, 類, 類說明, 時代, 簡介]
+       D.plalias   = {pid: [[寫法, 次數, {書: 次}], …]}
+       D.pmen      = {pid: [[句下標, surface, s, e, tier], …]}   ← 句序指 D.sents 下標
+       D.plbook[pid] = [{id: 書號, name: 書名, n: 次數}, …]
+     ⚠️ 與 `offPerson` 一致：**mentions 不截斷**。人物側給全（曹操 2064 處），
+     地名側也給全（單字「江」上千處）——「只多不少」是這裡的刻意差異，
+     截一半反而會讓離線版比聯機版少，變成另一種分叉。 */
+  function offPlace(pid) {
+    var p = D.pla[pid];
+    if (!p) return null;
+    return {
+      profile: { id: pid, trad_name: p[0], name: p[1], kind: p[2],
+                 kindLabel: p[3], era: p[4], summary: p[5] },
+      mentions: (D.pmen[pid] || []).map(function (m) {
+        var s = D.sents[m[0]];
+        if (!s) return null;          // 句被棄用後從 sents 消失，命中就懸空了
+        return { chapter: CHAPT[s[1]] || "", chapter_id: s[1], uid: s[0],
+                 text: s[2], surface: m[1], s: m[2], e: m[3], tier: m[4] };
+      }).filter(Boolean),
+      books: D.plbook[pid] || [],
+      aliases: (D.plalias[pid] || []).map(function (a) {
+        return { w: a[0], n: a[1], byBook: a[2] || {} };
+      })
+    };
+  }
+
+  /* 地名檢索：正名 / 簡名 / 異體寫法（異體是簡體能搜到的關鍵——
+     places 主表的 name 與 trad_name 逐行相同，只比它們等於簡體輸入失明）。 */
+  function offSearchPlaces(q, limit) {
+    var got = [];
+    for (var pid in D.pla) {
+      var p = D.pla[pid];
+      var hit = p[0].indexOf(q) >= 0 || p[1].indexOf(q) >= 0;
+      if (!hit) {
+        var al = D.plalias[pid] || [];
+        for (var i = 0; !hit && i < al.length; i++) {
+          if (al[i][0].indexOf(q) >= 0) hit = true;
+        }
+      }
+      if (hit) {
+        got.push({ id: pid, trad_name: p[0], name: p[1], kind: p[2],
+                   kindLabel: p[3], era: p[4], summary: p[5],
+                   n: (D.pmen[pid] || []).length,
+                   books: (D.plbook[pid] || []).slice(0, 3) });
+      }
+    }
+    got.sort(function (a, b) { return b.n - a.n; });
+    return got.slice(0, limit);
+  }
+
   function offFts(q, limit) {
     var got = [];
     for (var i = 0; i < D.sents.length && got.length < limit; i++) {
@@ -124,7 +180,10 @@
       }
     });
     got.sort(function (a, b) { return b.n - a.n; });
-    return { query: q, items: got.slice(0, limit) };
+    // ⚠️ 形狀與聯機 `/api/search` 一致：{query, items, places}。
+    // 少給 places 的話離線版搜地名就一條不出，而聯機版有——兩邊悄悄分叉。
+    return { query: q, items: got.slice(0, limit),
+             places: offSearchPlaces(q, limit) };
   }
 
   function offlineGet(path) {
@@ -145,6 +204,14 @@
       var d = offPerson(pid);
       return d ? Promise.resolve(d)
                : Promise.reject(new Error("查無此人：" + pid));
+    }
+    // ⚠️ 必须排在 `person/` 之后无关（路由不同名），但**别漏**：
+    //    漏了的话离线版点地名条会掉到最后的 reject，点任何地名都报「離線版沒有這個接口」。
+    if ((m = u.match(/^place\/([^/?]+)/))) {
+      var plid = decodeURIComponent(m[1]);
+      var pd = offPlace(plid);
+      return pd ? Promise.resolve(pd)
+                : Promise.reject(new Error("查無此地：" + plid));
     }
     if ((m = u.match(/^chapter\/([^/?]+)/))) {
       var cid = decodeURIComponent(m[1]);
@@ -201,32 +268,59 @@
   }
 
   /* ---------- 渲染：結果列表 ---------- */
-  function renderResults(items, query) {
-    if (!items.length) {
+  /* ---------- 渲染：檢索結果（人物 + 地名）----------
+     ⚠️ 两个数组**分开渲染**，不要合并成一张表：
+       人物之间要消歧（同名異人），地名没有这个问题（实测无重名），
+       混在一起那套「序號徽章 + 見於哪本書」的逻辑会误导地名。 */
+  function renderResults(items, query, places) {
+    places = places || [];
+    if (!items.length && !places.length) {
       out.innerHTML = "<div class=\"empty\">查不到「" + esc(query) + "」</div>";
       return;
     }
-    var many = items.length > 1;
-    var html = "<div class=\"card\"><div class=\"person-head\">" +
-      "<span class=\"name\">「" + esc(query) + "」</span>" +
-      "<span class=\"dyn\">共 " + items.length + " 人</span></div>";
-    /* 同名異人消歧：給序號徽章，並標出各自**主要見於哪幾本書**——
-       同名往往各屬一書（張溫：後漢書一人、三國志一人），
-       光看朝代與頭銜分不出來，分書是最好用的判據。 */
-    items.forEach(function (p, i) {
-      var idx = many ? "<span class=\"dup-idx\">" + (i + 1) + "</span>" : "";
-      var bk = (p.books && p.books.length)
-        ? "見於 " + p.books.map(function (b) { return esc(b.name); }).join(" · ")
-        : "";
-      html += "<div class=\"row\" data-pid=\"" + esc(p.id) + "\">" +
-        "<span class=\"name\">" + idx + esc(p.trad_name) +
-        (p.name && p.name !== p.trad_name ? "（" + esc(p.name) + "）" : "") + "</span>" +
-        "<span class=\"meta\">" + esc(p.dynasty || "") +
-        (p.title ? " · " + esc(p.title) : "") + " · " + p.n + " 處" +
-        (bk ? "　<span class=\"books\">" + bk + "</span>" : "") + "</span></div>";
-    });
-    out.innerHTML = html + "</div>";
-    hint.textContent = many
+    var html = "";
+    if (items.length) {
+      var many = items.length > 1;
+      html += "<div class=\"card\"><div class=\"person-head\">" +
+        "<span class=\"name\">「" + esc(query) + "」</span>" +
+        "<span class=\"dyn\">共 " + items.length + " 人</span></div>";
+      /* 同名異人消歧：給序號徽章，並標出各自**主要見於哪幾本書**——
+         同名往往各屬一書（張溫：後漢書一人、三國志一人），
+         光看朝代與頭銜分不出來，分書是最好用的判據。 */
+      items.forEach(function (p, i) {
+        var idx = many ? "<span class=\"dup-idx\">" + (i + 1) + "</span>" : "";
+        var bk = (p.books && p.books.length)
+          ? "見於 " + p.books.map(function (b) { return esc(b.name); }).join(" · ")
+          : "";
+        html += "<div class=\"row\" data-pid=\"" + esc(p.id) + "\">" +
+          "<span class=\"name\">" + idx + esc(p.trad_name) +
+          (p.name && p.name !== p.trad_name ? "（" + esc(p.name) + "）" : "") + "</span>" +
+          "<span class=\"meta\">" + esc(p.dynasty || "") +
+          (p.title ? " · " + esc(p.title) : "") + " · " + p.n + " 處" +
+          (bk ? "　<span class=\"books\">" + bk + "</span>" : "") + "</span></div>";
+      });
+      html += "</div>";
+    }
+    if (places.length) {
+      html += "<div class=\"card\"><div class=\"person-head\">" +
+        "<span class=\"name\">「" + esc(query) + "」</span>" +
+        "<span class=\"dyn\">共 " + places.length + " 地</span></div>";
+      places.forEach(function (p) {
+        var bk = (p.books && p.books.length)
+          ? "見於 " + p.books.map(function (b) { return esc(b.name); }).join(" · ")
+          : "";
+        html += "<div class=\"row land\" data-place=\"" + esc(p.id) + "\">" +
+          "<span class=\"name\">" + esc(p.trad_name) +
+          (p.era ? "<span class=\"land-kind\">" + esc(p.era) + "</span>" : "") +
+          "</span>" +
+          "<span class=\"meta\">" + esc(p.kindLabel || p.kind || "") +
+          " · " + count(p.n) + " 處" +
+          (bk ? "　<span class=\"books\">" + bk + "</span>" : "") + "</span></div>";
+      });
+      html += "</div>";
+    }
+    out.innerHTML = html;
+    hint.textContent = items.length > 1
       ? "同名異人 " + items.length + " 位：先看「見於」哪本書，再點進去分開看命中。"
       : "";
   }
@@ -527,6 +621,71 @@
     });
   }
 
+  /* ---------- 渲染：地名詳情 ----------
+     ⚠️ 刻意與 `renderPerson` **同構**（同樣的分篇標題 / 命中標色 / 點句進原文層），
+     因為兩邊的 payload 形狀是一樣的（`db.place_payload` 照 `db.person_payload`
+     的結構寫）。寫第二套渲染不是省事，是**多一處會悄悄分叉的地方**。
+     地名側沒有的：稱謂表（人物特有）、關係圖（人物特有）、注文（裴注只跟人）。 */
+  function renderPlace(plid) {
+    return request("/api/place/" + encodeURIComponent(plid)).then(function (d) {
+      var p = d.profile;
+      // 原文層的「只看相關段落」靠它（與人物頁同一個機制）
+      var uids = {};
+      (d.mentions || []).forEach(function (m) { if (m.uid) uids[m.uid] = 1; });
+      readerState.hitUids = uids;
+      currentPid = null;
+      currentPlace = plid;
+
+      var html = "<div class=\"card\">" +
+        "<div class=\"person-head\"><span class=\"name\">" + esc(p.trad_name) + "</span>" +
+        "<span class=\"dyn\">" + esc(p.kindLabel || p.kind || "") +
+        (p.era ? " · " + esc(p.era) : "") + "</span></div>";
+      if (p.summary) html += "<p class=\"summary\">" + esc(p.summary) + "</p>";
+
+      /* 見於哪些書 —— 與人物的「分書收窄」同一份數據口徑。
+         ⚠️ 這裡顯示的是**全五書合計**，不隨當前書作用域變（與 aliasScopeN 同理：
+         離線版沒有服務端可問，數字必須由前端從 byBook 算）。 */
+      if ((d.books || []).length) {
+        html += "<div class=\"alias-note\">見於 " + d.books.map(function (b) {
+          return esc(b.name) + " " + count(b.n) + " 處";
+        }).join(" · ") + "</div>";
+      }
+      /* 寫法清單：**必須顯示**。places 主表的 name 與 trad_name 逐行相同，
+         簡體名藏在異體表裡；不列出來，用戶輸「邯郸」搜不到會以為此地不存在。 */
+      if ((d.aliases || []).length > 1) {
+        html += "<div class=\"group-title\">寫法 <span class=\"count\">" +
+          d.aliases.length + " 種</span></div><div class=\"card\"><div class=\"alias-note\">" +
+          d.aliases.map(function (a) {
+            return "<span class=\"alias-tag\">" + esc(a.w) +
+              (a.n ? "<b class=\"qn\">" + count(a.n) + "</b>" : "") + "</span>";
+          }).join("") + "</div></div>";
+      }
+      html += "</div>";
+
+      var groups = [], byId = {};
+      (d.mentions || []).forEach(function (m) {
+        var key = m.chapter_id;
+        if (!byId[key]) { byId[key] = { title: m.chapter, rows: [] }; groups.push(byId[key]); }
+        byId[key].rows.push(m);
+      });
+      if (!groups.length) {
+        html += "<div class=\"empty\">此地名在目前語料裡沒有命中。</div>";
+      }
+      groups.forEach(function (g) {
+        html += "<div class=\"chapter-title\">" + esc(g.title || "") +
+          " · " + g.rows.length + " 處</div>";
+        g.rows.forEach(function (m) {
+          html += "<div class=\"sent\" data-chapter=\"" + esc(m.chapter_id) +
+            "\" data-uid=\"" + esc(m.uid) + "\" data-place=\"" + esc(plid) + "\">" +
+            markSentence(m.text, m.surface, m.tier) + "</div>";
+        });
+      });
+
+      out.innerHTML = html;
+      hint.textContent = "";
+    });
+  }
+
   /* 標錯面板：不彈窗，就地展開一行——彈窗要管焦點與層級，
      而這裡只需要「輸入人名 → 點候選」兩下。 */
   function openFixBox(row) {
@@ -657,14 +816,17 @@
     return n;
   }
 
-  /* 與當前 pid 有命中的段落號集合。
+  /* 與當前作用域（人物或地名）有命中的段落號集合。
      ⚠️ 命中資訊**不從 /api/chapter 拿**（那会让 564 篇每篇都带上全部 marks，
-     payload 翻十几倍）。人物頁渲染時已經拿到這個人的 mentions（帶 uid），
+     payload 翻十几倍）。人物頁／地名頁渲染時已經拿到這個人的 mentions（帶 uid），
      在這裡把 uid 記進 readerState.hitUids，開篩選時才反查段落——
-     數據來源是同一份，沒有第二個真相。 */
+     數據來源是同一份，沒有第二個真相。
+     ⚠️ 字段叫 `scope` 不叫 `pid`：它**只當布爾用**（「有沒有篩選上下文」），
+     人物頁與地名頁都能往裡塞 id。叫 pid 卻存地名 id 是撒謊，
+     下次有人寫 `if (state.pid) 查人物表` 就會靜默查空。 */
   function hitParas() {
     var out = {};
-    if (!readerState.pid) return out;
+    if (!readerState.scope) return out;
     var uids = readerState.hitUids;
     (readerState.sents || []).forEach(function (s) {
       if (!uids) return;                    // 沒數據 → 不篩（寧可全顯示）
@@ -679,7 +841,7 @@
     var total = paraCount();
     jumpBox.hidden = total < JUMP_MIN;
     jumpTotal.textContent = total ? " / " + total + " 段" : "";
-    btnHits.hidden = !readerState.pid;
+    btnHits.hidden = !readerState.scope;
     btnHits.classList.toggle("on", !!readerState.hitsOnly);
     btnHits.textContent = readerState.hitsOnly ? "顯示全部段落" : "只看相關段落";
   }
@@ -857,13 +1019,13 @@
     "<button data-act=\"dead\">棄用</button>" +
     "</span>";
 
-  function openChapter(cid, uid, pid) {
+  function openChapter(cid, uid, scope) {
     readerCid = cid;
     return request("/api/chapter/" + encodeURIComponent(cid)).then(function (d) {
       readerTitle.textContent = (d.chapter && d.chapter.full_title) || cid;
       readerState.sents = d.sentences || [];
       readerState.targetUid = uid || null;
-      readerState.pid = pid || null;
+      readerState.scope = scope || null;
       readerState.hitsOnly = false;
       renderReader();
       reader.classList.add("on");
@@ -912,12 +1074,15 @@
   var lastWritten = null;
   function routeHash() {
     if (currentPid) return "#/person/" + currentPid;
+    // ⚠️ 地名路由排在 q 之前：currentPlace 與 lastQuery 可能同時有值
+    //    （從地名頁點快捷詞時），先判 pid 再判 place 最後才判 query。
+    if (currentPlace) return "#/place/" + currentPlace;
     if (lastQuery) return "#/q/" + encodeURIComponent(lastQuery) + "/" + mode;
     return "#/";
   }
   function syncBack() {
     var onReader = reader.classList.contains("on");
-    backBtn.hidden = !(history.length > 1 || currentPid || onReader);
+    backBtn.hidden = !(history.length > 1 || currentPid || currentPlace || onReader);
     backBtn.textContent = onReader ? "← 關閉原文" : "← 返回";
   }
   /* ⚠️ hash 的正規化：**守衛與路由解析必須吃同一份**，否則兩邊打架。
@@ -958,10 +1123,14 @@
     }
     lastWritten = null;
     // ⚠️ [^?#/]+：**不能讓查詢詞吞掉後面的 /person**（見 normHash 上方的坑 2）
-    var m = /^#\/(person|q)(?:\/([^?#/]+))?(?:\/(fts|person))?$/.exec(h);
-    if (!m) { currentPid = null; lastQuery = ""; return; }
+    //    `place` 與 `person` 同一組捕獲，改路由時**三處要同步**：
+    //    routeHash（寫）／applyHash（讀）／offlineGet（離線派發）。
+    var m = /^#\/(person|place|q)(?:\/([^?#/]+))?(?:\/(fts|person))?$/.exec(h);
+    if (!m) { currentPid = null; currentPlace = null; lastQuery = ""; return; }
     if (m[1] === "person" && m[2]) {
       renderPerson(decodeURIComponent(m[2])).then(syncBack).catch(showErr);
+    } else if (m[1] === "place" && m[2]) {
+      renderPlace(decodeURIComponent(m[2])).then(syncBack).catch(showErr);
     } else if (m[1] === "q" && m[2]) {
       var q = decodeURIComponent(m[2]);
       mode = m[3] || "person";
@@ -1275,13 +1444,20 @@
     return !!(b && b.era && p.eraRank < b.era[0]);
   }
 
-  function indexGrid(items) {
+  /* ⚠️ `isPlace` 決定條目帶 `data-name` 還是 `data-place`：
+     人物條目點了去檢索（同名異人要靠搜索消歧），地名條目**直接進詳情頁**——
+     地名無重名（實測 trad_name 無重複），沒必要繞一圈搜索。
+     以前兩者都帶 data-name，點地名會落到人物搜索上 → 空（這就是「地名點不動」的根因）。 */
+  function indexGrid(items, isPlace) {
     var h = '<div class="grid">';
     items.forEach(function (p) {
-      h += '<div class="item" data-name="' + esc(p.name) + '" title="' +
+      var attr = isPlace
+        ? 'data-place="' + esc(p.id) + '"'
+        : 'data-name="' + esc(p.name) + '"';
+      h += '<div class="item" ' + attr + ' title="' +
         esc(p.summary || "") + '"><span class="n">' + esc(p.name) +
-        (isFormerEra(p) ? '<i class="era-old" title="本書記載時代之前的' +
-         '人物（前朝）">前朝</i>' : "") +
+        (isPlace ? "" : (isFormerEra(p) ? '<i class="era-old" title="本書記載時代之前的' +
+         '人物（前朝）">前朝</i>' : "")) +
         '</span><span class="c">' + statText(p.n, p.c) + "</span></div>";
     });
     return h + "</div>";
@@ -1304,7 +1480,7 @@
     var h = '<div class="group-title">人物索引 <span class="count">' +
       items.length.toLocaleString() + ' 人 · <span class="sort-toggle" ' +
       'role="button" tabindex="0">' + sortLabel() + '</span> · 懸停看簡介</span></div>';
-    h += indexGrid(items);
+    h += indexGrid(items, false);
     out.innerHTML = h;
   }
 
@@ -1320,7 +1496,7 @@
       if (!one || !one.length) return;
       h += '<div class="group-title">' + esc((one[0].kindLabel) || k) +
         ' <span class="count">' + one.length.toLocaleString() + " 個</span></div>";
-      h += indexGrid(one);
+      h += indexGrid(one, true);
     });
     out.innerHTML = h;
   }
@@ -1453,12 +1629,15 @@
     if (!query) return;
     lastQuery = query;
     currentPid = null;
+    currentPlace = null;
     var url = mode === "fts"
       ? "/api/fts?q=" + encodeURIComponent(query)
       : "/api/search?q=" + encodeURIComponent(query);
     request(url).then(function (d) {
+      // ⚠️ fts 模式**不分人物/地名**（它就是全文檢索），別把 places 塞進去——
+      //    那會讓「全文」模式裡冒出一堆只有名字的地名行，語義不對。
       if (mode === "fts") renderFts(d.items || [], query);
-      else renderResults(d.items || [], query);
+      else renderResults(d.items || [], query, d.places || []);
       writeHash();
     }).catch(showErr);
   }
@@ -1477,7 +1656,19 @@
     if (ev.key === "Enter") search(ev.target.value);
   });
   out.addEventListener("click", function (ev) {
-    // 索引面板：點條目 = 拿這個名字去檢索（人物/地名都走同一個入口）
+    // 地名條目 → 直接進地名詳情頁（**必須排在人物條目之前**）
+    var pit = ev.target.closest ? ev.target.closest(".item[data-place]") : null;
+    if (pit) {
+      renderPlace(pit.getAttribute("data-place")).then(writeHash).catch(showErr);
+      return;
+    }
+    // 檢索結果裡的地名行（`.row[data-place]`）
+    var prow = ev.target.closest ? ev.target.closest(".row[data-place]") : null;
+    if (prow) {
+      renderPlace(prow.getAttribute("data-place")).then(writeHash).catch(showErr);
+      return;
+    }
+    // 索引面板：點人物條目 = 拿這個名字去檢索（同名異人靠搜索消歧）
     var it = ev.target.closest ? ev.target.closest(".item[data-name]") : null;
     if (it) {
       qEl.value = it.getAttribute("data-name");
@@ -1544,9 +1735,10 @@
     if (relRow) { renderPerson(relRow.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
     var s = ev.target.closest ? ev.target.closest(".sent[data-chapter]") : null;
     if (s) {
-      // 傳 currentPid：原文層才知道「只看相關段落」該留哪些段
+      // 傳作用域（人物**或**地名）：原文層才知道「只看相關段落」該留哪些段。
+      // ⚠️ 別只傳 currentPid——地名頁裡它是 null，篩選按鈕會跟著消失。
       openChapter(s.getAttribute("data-chapter"), s.getAttribute("data-uid"),
-                  currentPid).catch(showErr);
+                  currentPid || currentPlace).catch(showErr);
     }
   });
 

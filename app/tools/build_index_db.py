@@ -158,6 +158,25 @@ CREATE TABLE IF NOT EXISTS places (
   summary   TEXT
 );
 
+-- 地名異體（簡體 / 異寫）—— 2026-10-03 新增
+--   ⚠️ 為什麼必須有這張表：`pipeline/build_places.py` 把簡體與異寫放在
+--      book-data 的 `aliases` 裡（1575 個地名中 831 個有異形），但 places 主表
+--      **只有 name 一列且與 trad_name 逐行相同**（全表 0 行不同）。結果是
+--      輸「邯郸」搜不到「邯鄲」——`LIKE name` 與 `LIKE trad_name` 都只匹配繁体，
+--      簡體輸入整個地名庫都失明。
+--      這不是檢索邏輯的問題，是**建庫漏了一列**。
+--   權威源是 book-data.json 的 places[].aliases（人寫的 places.xlsx 也早有
+--      「别名(竖线分隔)」列，只是從沒灌進庫）。
+CREATE TABLE IF NOT EXISTS place_aliases (
+  place_id TEXT,
+  seq      INTEGER,
+  w        TEXT,          -- 異體寫法（可能是簡體、也可能是異寫）
+  n        INTEGER,       -- 該寫法在語料裡的命中次數
+  by_book  TEXT           -- JSON: {書號: 次數}
+);
+CREATE INDEX IF NOT EXISTS ix_palias_place ON place_aliases(place_id);
+CREATE INDEX IF NOT EXISTS ix_palias_w ON place_aliases(w);
+
 -- 人物关系 —— 见 docs/25（P6 设计审查后的定稿）
 --   ⚠️ 本表是**派生的**：权威源是 workbook/relations.xlsx，
 --      每次重建后必须由 `pipeline/relations.py apply` 重新灌入，否则数据全丢
@@ -373,6 +392,45 @@ def main():
         "INSERT OR REPLACE INTO places VALUES (?,?,?,?,?,?)",
         [(p["id"], p.get("tradName"), p.get("name"), p.get("kind"),
           p.get("era"), p.get("summary")) for p in d.get("places", [])])
+
+    # ── 地名異體表（檢索簡體 / 異寫用）────────────────────────────────
+    # ⚠️ 次數與分書**現算**而不是照抄 aliases：aliases 只是「登了哪些寫法」，
+    #    不帶次數（person_aliases 的 n 來自 annotate，place 側沒有那一步）。
+    #    語料裡實際用的是哪個寫法，只有 place_mentions.surface 知道。
+    #    「異體表列了但一次沒被用過」是正常狀態（例如『邯郸』這條只在簡體檢索時
+    #    才有意義，語料全繁體），別因此把 n=0 的行濾掉——那就白建這張表了。
+    prows_by_id: dict = {}
+    for uid, pid, surf in conn.execute(
+            "SELECT sentence_uid, place_id, surface FROM place_mentions"):
+        prows_by_id.setdefault(pid, []).append((uid, surf))
+    book_of: dict = {}
+    for uid, bid in conn.execute(
+            "SELECT s.uid, c.book_id FROM sentences s "
+            "JOIN chapters c ON c.id = s.chapter_id"):
+        book_of[uid] = bid
+    palias = []
+    for p in d.get("places", []):
+        pid = p["id"]
+        # 寫法順序：正名在前，其後按 aliases 原序去重（別排序，順序是 pipeline 的語義）
+        forms = [p.get("tradName") or ""]
+        for a in (p.get("aliases") or []):
+            if a and a not in forms:
+                forms.append(a)
+        n_by_form: dict = {}
+        bk_by_form: dict = {}
+        for uid, surf in prows_by_id.get(pid, []):
+            key = (surf or "").strip() or (p.get("tradName") or "")
+            n_by_form[key] = n_by_form.get(key, 0) + 1
+            b = book_of.get(uid)
+            if b:
+                bk_by_form.setdefault(key, {})
+                bk_by_form[key][b] = bk_by_form[key].get(b, 0) + 1
+        for i, w in enumerate(f for f in forms if f):
+            palias.append((pid, i, w, n_by_form.get(w, 0),
+                           json.dumps(bk_by_form.get(w, {}), ensure_ascii=False)))
+    conn.executemany(
+        "INSERT OR REPLACE INTO place_aliases (place_id, seq, w, n, by_book) "
+        "VALUES (?,?,?,?,?)", palias)
 
     # ── FTS5（不支持就跳过，不让它成为阻塞）────────────────────────────
     # ⚠️ 中文的关键坑：FTS5 默认 unicode61 分词器把**连续汉字当成一个 token**，

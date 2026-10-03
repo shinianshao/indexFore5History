@@ -138,9 +138,40 @@ def api_quick(book: str = Query("", description="书号，空=全部"),
 
 @app.get("/api/search")
 def api_search(q: str = Query(..., min_length=1, max_length=MAX_Q),
-               limit: int = Query(30)):
+               limit: int = Query(30),
+               kind: str = Query("all", description="all=人物+地名 person=只要人 place=只要地")):
+    """检索。**人物与地名一次返回**（`items` / `places` 两个数组）。
+
+    为什么合成一个端点而不是加 `/api/search/place`
+    ------------------------------------------------
+    用户的动作只有一个：**输入一个词**。「長安」既是地名也可能是人名（人名里
+    确实有「長安」），拆成两个端点就得让用户先选类别，而他已经用打字表达了
+    意图。分开返回、前端分两段显示，比让他先选省事。
+
+    ⚠️ 老的 `items`（人物）语义不变——离线版 `offSearch` 走的是自己那份实现，
+    两边都返回 `{query, items, places}`，前端渲染代码完全一致。
+    """
     limit = _check(q, limit)
-    return {"query": q, "items": db.search_persons(q, limit)}
+    want_place = kind in ("all", "place")
+    want_person = kind in ("all", "person")
+    return {"query": q,
+            "items": db.search_persons(q, limit) if want_person else [],
+            "places": db.search_places(q, limit) if want_place else []}
+
+
+@app.get("/api/place/{pid}")
+def api_place(pid: str, limit: int = Query(200)):
+    """地名详情。响应体在 db 层拼（`db.place_payload`），与离线导出共用一份。
+
+    以前**根本没有这个端点**：点地名条会落到 `search(name)` → 人物搜索 → 空
+    （实测「長安」0 条，而 places 里长安有 1346 处）。地名索引那一千多条
+    只能看不能进。
+    """
+    limit = max(1, min(int(limit), MAX_LIMIT))
+    data = db.place_payload(pid, limit)
+    if not data:
+        raise HTTPException(404, "查無此地：{}".format(pid))
+    return data
 
 
 @app.get("/api/fts")

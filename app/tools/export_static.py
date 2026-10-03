@@ -24,6 +24,21 @@ app/web/ 那套前端要靠 FastAPI 才有 /api/*，換台機器就得先裝依�
 2. 句子表不導出 `para_seq / seq / pos_key`：順序已經烤進陣列下標裡，前端只按順序顯示。
    三個字段 × 9.6 萬句 ≈ 2MB，省下來是白賺。
 
+地名側（2026-10-03）
+--------------------
+原來只導了 `places` 主表（`_places`）——**`place_mentions` 一點痕跡都沒有**，
+於是離線版能列地名、點不動（點了掉到人物搜索上，而地名永遠不在那裡 → 空）。
+現在導四塊，與人物側一一對應：
+
+    pla      主表（繁名/簡名/類型/類型說明/時代/簡介）—— 本來就有
+    pmen     命中       ← 對應 pm      點地名 → 看它出現在哪些句子
+    plalias  異體寫法   ← 對應稱謂表    **檢索簡體的唯一入口**
+    plbook   分書分佈   ← 對應 pbook    詳情頁「見於哪些書」
+
+`plalias` 尤其不能省：`places.name` 與 `trad_name` **逐行相同**（全表 0 行不同），
+簡體名只存在於 `place_aliases` 表裡。少了它，離線版輸「邯郸」零命中而聯機版 273 處。
+代價是快照 16.5MB → 21.6MB（+5.1MB），買的是兩邊不分歧。
+
 用法
 ----
     python app/tools/export_static.py            導出到 dist/
@@ -182,6 +197,73 @@ def _pbook() -> dict:
         return out
 
 
+# ------------------------------------------------------------------ 地名側
+#
+# 地名原來只導了 places 主表（`_places`），**place_mentions 一點痕跡都沒有**——
+# 離線版能列地名、點不動（點了掉到人物搜索上，而地名永遠不在那裡 → 空）。
+# 這三塊與人物側的 pm / 稱謂表 / pbook 一一對應，缺一塊就分叉：
+#   pmen   ← pm     命中（點地名 → 看它出現在哪些句子）
+#   plalias ← 稱謂表  異體寫法（**檢索簡體的唯一入口**）
+#   plbook ← pbook   分書分佈（詳情頁「見於哪些書」＋ 檢索結果裡的判據）
+
+def _pmentions(uid2i: dict) -> dict:
+    """地 → [[句下標, surface, s, e, tier], …]（句正文不重複存，按下標查 sents）。
+
+    ⚠️ 11.5 萬條，離線快照因此 +5.1MB（16.5 → 21.6MB）。這個體積是**買來的**：
+    沒有它，離線版的地名是死的（能列不能點），而聯機版是活的——
+    體積省下來買的是「兩邊不一致」。
+    """
+    out: dict = {}
+    with db.connect() as c:
+        sql = ("SELECT m.place_id, s.uid, m.surface, m.s, m.e, m.tier "
+               "FROM place_mentions m JOIN sentences s ON s.uid = m.sentence_uid "
+               "ORDER BY m.place_id, s.chapter_id, s.para_seq, s.seq")
+        for pid, uid, surf, s, e, tier in c.execute(sql):
+            i = uid2i.get(uid)
+            if i is None:          # 句被棄用後從 sentences 裡消失，命中就懸空了
+                continue
+            out.setdefault(pid, []).append(
+                [i, surf or "", s or 0, e or 0, tier or ""])
+    return out
+
+
+def _plalias() -> dict:
+    """地 → [[寫法, 次數, {書號: 次數}], …]（正名在前，順序同聯機 place_alias_list）。
+
+    ⚠️ 數據源是 **`place_aliases` 表**（不是 places 主表的 name，也不是 book-data 的
+    aliases）——只有這張表裡才有「異體寫法」，而 places.name 與 trad_name 逐行相同。
+    漏了這塊，離線版輸「邯郸」零命中而聯機版 273 處。
+    """
+    out: dict = {}
+    with db.connect() as c:
+        for pid, w, n, by_book in c.execute(
+                "SELECT place_id, w, n, by_book FROM place_aliases "
+                "ORDER BY place_id, seq"):
+            try:
+                bb = json.loads(by_book) if by_book else {}
+            except (TypeError, ValueError):
+                bb = {}
+            out.setdefault(pid, []).append([w, int(n or 0), bb])
+    return out
+
+
+def _plbook() -> dict:
+    """地 → [{id: 書號, name: 書名, n: 次數}, …]（按次數降序，與 db.place_books 同序）。"""
+    with db.connect() as c:
+        bname = {r[0]: r[1] for r in c.execute("SELECT code, name FROM books")}
+        rows: dict = {}
+        for pid, bid, n in c.execute(
+                "SELECT m.place_id, c.book_id, COUNT(*) FROM place_mentions m "
+                "JOIN sentences s ON s.uid = m.sentence_uid "
+                "JOIN chapters c ON c.id = s.chapter_id "
+                "GROUP BY m.place_id, c.book_id"):
+            rows.setdefault(pid, []).append(
+                {"id": bid, "name": bname.get(bid, bid), "n": n})
+    for pid in rows:
+        rows[pid].sort(key=lambda x: -x["n"])
+    return rows
+
+
 def _relations() -> dict:
     """有關係的人 → {"度數:min_conf": {nodes, edges}}（圖直接由 db 層算，不重寫 BFS）。"""
     pids = set()
@@ -263,6 +345,9 @@ def build() -> dict:
     pers = step("人物", _persons)
     pm = step("命中", _mentions, uid2i)
     pla = step("地名", _places)
+    pmen = step("地名命中", _pmentions, uid2i)
+    plalias = step("地名異體", _plalias)
+    plbook = step("地名分書", _plbook)
     pbook = step("分書分佈", _pbook)
     rel = step("關係圖", _relations)
     # ⚠️ 六份索引共用一次按書計數（db.all_counts），再按書收窄——
@@ -289,6 +374,9 @@ def build() -> dict:
             # 邊本身只有 99 條。計數要對得上庫，不然 --check 會天天報過期。
             "relations": n_rel,
             "aliases": sum(len(p[5]) for p in pers.values()),
+            # 地名命中另記一份：它與人物命中不同表（place_mentions），
+            # 少了它 --check 對「地名側被砍掉一半」這種壞**完全無感**。
+            "place_mentions": sum(len(v) for v in pmen.values()),
         },
         "stats": stats,
         "books": books,
@@ -297,6 +385,9 @@ def build() -> dict:
         "pers": pers,
         "pm": pm,
         "pla": pla,
+        "pmen": pmen,
+        "plalias": plalias,
+        "plbook": plbook,
         "pbook": pbook,
         "idx": idx,
         "rel": rel,
@@ -314,7 +405,10 @@ def build() -> dict:
 # ---------------------------------------------------------------- 落盤
 
 # 这几个键是大块，先写成**字符串**再由 JSON.parse 还原（见 dump_js 里的原因）
-BIG = ("sents", "chaps", "pers", "pm", "pla", "pbook", "idx", "rel", "notes")
+# ⚠️ 地名三块（pmen/plalias/plbook）**必须**在这里：漏一个不是报错，
+#    是离线版少一块数据（搜不到简体 / 点开没命中）——最难发现的那种坏。
+BIG = ("sents", "chaps", "pers", "pm", "pla", "pmen", "plalias", "plbook",
+       "pbook", "idx", "rel", "notes")
 
 
 def dump_js(data: dict) -> str:
@@ -354,6 +448,9 @@ def dump_js(data: dict) -> str:
             " *                       [全部寫法…], {書號: 次數}]\n"
             " *   pm[pid]    = [[句下標, 表面詞, s, e, tier], …]\n"
             " *   pla[pid]   = [繁名, 簡名, 類型, 類型說明, 時代, 簡介]\n"
+            " *   pmen[pid]  = [[句下標, 表面詞, s, e, tier], …]   ← 地名命中\n"
+            " *   plalias[pid] = [[寫法, 次數, {書號: 次數}], …]      ← 檢索簡體靠它\n"
+            " *   plbook[pid] = [{id: 書號, name: 書名, n: 次數}, …]\n"
             " *   pbook[pid] = [總次數, [[書號, 書名, 次數], …]]\n"
             " *   idx[書號]  = /api/index 的原樣響應（書號 \"\" = 全五書）\n"
             " *   rel[pid]   = {\"度數:min_conf\": {nodes, edges}}\n"
@@ -403,13 +500,14 @@ def report(data: dict, out_dir: str) -> None:
     print("  生成 {}（取數 {}s：{}）".format(
         data["gen"], data.pop("_sec", "?"),
         " ".join("{}{}s".format(k, v) for k, v in data.pop("_steps", []))))
-    for k in ("sentences", "chapters", "persons", "places", "mentions", "relations"):
-        print("  {:<10} {:>7,}".format(k, data["counts"][k]))
+    for k in ("sentences", "chapters", "persons", "places", "mentions", "relations",
+              "place_mentions"):
+        print("  {:<16} {:>7,}".format(k, data["counts"][k]))
     print("  ── 體積 ──")
     # ⚠️ 按**字節**算，不是字符數：中文一個字 1 字符但 3 字節，
     # 用 len(str) 會把體積低估到三分之一，看著像「還能再塞點」。
-    for k in ("sents", "idx", "pm", "pers", "pla", "rel", "chaps", "pbook", "stats",
-              "notes"):
+    for k in ("sents", "idx", "pm", "pers", "pla", "pmen", "plalias", "plbook",
+              "rel", "chaps", "pbook", "stats", "notes"):
         n = len(json.dumps(data.get(k), ensure_ascii=False,
                            separators=(",", ":")).encode("utf-8"))
         print("  {:<8} {:>6.1f} MB".format(k, n / 1048576.0))
@@ -507,13 +605,24 @@ def check(out_dir: str) -> int:
             "relations": c.execute(
                 "SELECT COUNT(*) FROM relations WHERE status='active'").fetchone()[0],
             "aliases": c.execute("SELECT COUNT(*) FROM aliases").fetchone()[0],
+            "place_mentions": c.execute(
+                "SELECT COUNT(*) FROM place_mentions").fetchone()[0],
         }
     # 命中數口徑：導出時會丟掉「句已被棄用」的懸空命中，所以只可能 ≤ 庫裡的數
-    bad = [k for k in new if k not in ("mentions", "relations") and old.get(k) != new[k]]
+    bad = [k for k in new
+           if k not in ("mentions", "relations", "place_mentions")
+           and old.get(k) != new[k]]
     if old.get("mentions", 0) > new["mentions"]:
         bad.append("mentions")
     if old.get("relations", 0) > new["relations"]:
         bad.append("relations")
+    if old.get("place_mentions", 0) > new["place_mentions"]:
+        bad.append("place_mentions")
+    # ⚠️ 键**不存在**也要报过期，不能只比大小：地名三块（pmen/plalias/plbook）
+    # 是 2026-10-03 才加的，老快照里压根没有这个计数 → 只比大小会判成「同步」，
+    # 而离线版的地名其实是死的。宁可多报一次重导。
+    if "place_mentions" not in old:
+        bad.append("place_mentions(缺键·快照早於地名命中)")
     if bad:
         print("× 快照過期：{}".format(
             ", ".join("{} {}→{}".format(k, old.get(k), new[k]) for k in bad)))

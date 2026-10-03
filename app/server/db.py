@@ -702,6 +702,160 @@ def full_text_search(q: str, limit: int = 50) -> List[Dict[str, Any]]:
                 "WHERE s.text LIKE ? LIMIT ?", (like, limit))]
 
 
+# ------------------------------------------------------------------ 地名侧
+#
+# 地名原来只有「一列名字 + 计数」：`/api/search` 只查 persons，点地名条会落到
+# 人物搜索上，而地名永远不在那儿 → **搜「長安」0 条**（places 里明明有 1346 处）。
+# 下面这几个函数把地名补成与人物同构的第二套入口。
+#
+# 为什么这么便宜：`place_mentions` 与 `mentions` 的结构**完全对称**
+# （`sentence_uid / {place_id,person_id} / surface / s / e / tier`），
+# 所以查询语句能照抄，不用另立一套口径。
+
+
+def search_places(q: str, limit: int = 30) -> List[Dict[str, Any]]:
+    """按正名 / 简体名 / 異體寫法檢索地名。
+
+    ⚠️ **別只 LIKE `places.name`**：那列與 `trad_name` 逐行相同（全表 0 行不同），
+    只查它等於「簡體輸入整個地名庫失明」——輸「邯郸」搜不到「邯鄲」。
+    異體寫法在 `place_aliases` 表裡（2026-10-03 新增，見 SCHEMA 註釋）。
+    這與人物側查 `aliases` 表是同一個道理，別寫成兩個口徑。
+
+    與 `search_persons` 的差別只有一點，是**故意的**：人物返回**全部**同名異人
+    交由前端消歧；地名實測無重名（`trad_name` 無重複），所以直接按命中數排序返回。
+    """
+    like = "%{}%".format(q)
+    sql = """
+        SELECT p.id, p.trad_name, p.name, p.kind, p.era, p.summary,
+               (SELECT COUNT(*) FROM place_mentions m
+                 WHERE m.place_id = p.id) AS n
+        FROM places p
+        WHERE p.trad_name LIKE ? OR p.name LIKE ?
+           OR p.id IN (SELECT place_id FROM place_aliases WHERE w LIKE ?)
+        ORDER BY n DESC LIMIT ?
+    """
+    with connect() as conn:
+        rows = [dict(r) for r in conn.execute(sql, (like, like, like, limit))]
+        if not rows:
+            return rows
+        pids = [r["id"] for r in rows]
+        # books 表的主键叫 `code` 不是 `id`（建库脚本里就是这么定的）
+        bname = {r[0]: r[1] for r in conn.execute("SELECT code, name FROM books")}
+        ph = ",".join("?" * len(pids))
+        dist: Dict[str, List] = {}
+        for pid, bid, n in conn.execute(
+                "SELECT m.place_id, c.book_id, COUNT(*) FROM place_mentions m "
+                "JOIN sentences s ON s.uid = m.sentence_uid "
+                "JOIN chapters c ON c.id = s.chapter_id "
+                "WHERE m.place_id IN ({}) "
+                "GROUP BY m.place_id, c.book_id".format(ph), pids):
+            dist.setdefault(pid, []).append((bid, n))
+        for r in rows:
+            top = sorted(dist.get(r["id"], []), key=lambda x: -x[1])[:3]
+            r["kindLabel"] = PLACE_KIND_LABEL.get(r["kind"] or "外", r["kind"] or "外")
+            r["books"] = [{"id": b, "name": bname.get(b, b), "n": n}
+                          for b, n in top]
+        return rows
+
+
+def place_alias_list(pid: str) -> List[Dict[str, Any]]:
+    """某地名的全部寫法（正名 + 異體），帶語料實際命中次數。
+
+    與 `place_payload` 一起給前端：詳情頁要能說清「這裡的『邯鄲』在語料裡也寫作
+    『邯郸』」，否則用戶輸入簡體沒命中會以為這個地名不存在。
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT w, n, by_book FROM place_aliases "
+            "WHERE place_id=? ORDER BY seq", (pid,)).fetchall()
+    out = []
+    for w, n, by_book in rows:
+        try:
+            bb = json.loads(by_book) if by_book else {}
+        except (TypeError, ValueError):
+            bb = {}
+        out.append({"w": w, "n": int(n or 0), "byBook": bb})
+    return out
+
+
+def place_profile(pid: str) -> Optional[Dict[str, Any]]:
+    """地名详情页的「档案」部分。查不到返回 None（由调用方翻成 404）。"""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id, trad_name, name, kind, era, summary "
+            "FROM places WHERE id=?", (pid,)).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    kind = out["kind"] or "外"
+    out["kind"] = kind
+    out["kindLabel"] = PLACE_KIND_LABEL.get(kind, kind)
+    out["era"] = out["era"] or ""
+    out["summary"] = out["summary"] or ""
+    return out
+
+
+def place_mentions(pid: str, limit: int = 200) -> List[Dict[str, Any]]:
+    """某地名的命中，**按篇分组**返回（与 `person_mentions` 同构）。
+
+    照抄人物侧是有意的：详情页的渲染代码（分篇标题 / 标命中 / 点句进原文层）
+    照着 `renderPerson` 写一遍就行，两边形状一致。
+
+    ⚠️ 单字地名（「江」「河」「淮」）一开口就是上千处，**必须**有 limit；
+    前端人物页的「只看相关段落」也依赖 mentions 带 uid，口径与人物页一致。
+    """
+    sql = """
+        SELECT c.full_title AS chapter, s.chapter_id, s.uid, s.text,
+               m.surface, m.s, m.e, m.tier
+        FROM place_mentions m
+        JOIN sentences s ON s.uid = m.sentence_uid
+        LEFT JOIN chapters c ON c.id = s.chapter_id
+        WHERE m.place_id = ?
+        ORDER BY s.chapter_id, s.para_seq, s.seq LIMIT ?
+    """
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(sql, (pid, limit))]
+
+
+def place_books(pid: str) -> List[Dict[str, Any]]:
+    """该地名在五书里的命中分布（详情页「見於哪些書」）。
+
+    ⚠️ 刻意**不带 `book` 参数**、`n` 给全量，原因同 `person_alias_list`：
+    「按当前书作用域变化」的数字一律由**前端**算（离线版没有服务端可问，
+    请求里带 book 也只会被离线路由当成查询串忽略），数据由后端给全。
+    """
+    with connect() as conn:
+        bname = {r[0]: r[1] for r in conn.execute("SELECT code, name FROM books")}
+        rows = [{"id": b, "name": bname.get(b, b), "n": n} for b, n in conn.execute(
+            "SELECT c.book_id, COUNT(*) FROM place_mentions m "
+            "JOIN sentences s ON s.uid = m.sentence_uid "
+            "JOIN chapters c ON c.id = s.chapter_id "
+            "WHERE m.place_id = ? GROUP BY c.book_id", (pid,))]
+    return sorted(rows, key=lambda x: -x["n"])
+
+
+def place_payload(pid: str, limit: int = 200) -> Optional[Dict[str, Any]]:
+    """`/api/place/{pid}` 的响应体（**联机端点与离线导出共用**，同 `person_payload`）。
+
+    把这一步放在 db 层而不是端点里，是为了让 `export_static.py` 能直接抄——
+    否则离线版就得把三块组装逻辑再写一遍，哪天改了一处另一处不知道，
+    **两边悄悄不一致且不报错**。
+    """
+    profile = place_profile(pid)
+    if not profile:
+        return None
+    return {
+        "profile": profile,
+        "mentions": place_mentions(pid, limit),
+        "books": place_books(pid),
+        # 寫法清單：讓詳情頁能說清「邯鄲也寫作邯郸」。少了它，用戶輸簡體沒命中
+        # 會以為這個地名不存在（而 places.name 與 trad_name 逐行相同，沒這份
+        # 資料就無從解釋）。
+        "aliases": place_alias_list(pid),
+    }
+
+
+
 def chapter_sentences(cid: str, limit: int = 500) -> List[Dict[str, Any]]:
     """取一篇的原文（句子序列）。用于「读全篇」。"""
     with connect() as conn:

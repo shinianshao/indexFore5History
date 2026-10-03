@@ -15,7 +15,8 @@
      9. 完整称谓表：分组 / ×N / 未用 / 泛称分色 / 换书后由 byBook 收窄
     10. 「前朝」小标记：断代史标、通史（史記）不标
     11. 网页「标错」入口：hover 出按钮 → 搜人名 → 点选写入 → 徽章 → 撤銷
-    12. 无 JS 报错
+    12. 地名检索与详情：输简体搜得到 → 点地名行进详情 → 点句进原文层
+    13. 无 JS 报错
 
    用法（依赖 jsdom，装在隔离目录里，不污染本工程）：
      1) 起服务：PORT=8811 python app/server/main.py
@@ -111,8 +112,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   click(tab("places"));
   await sleep(300);
-  const placeItems = out.querySelectorAll(".item[data-name]").length;
+  /* ⚠️ 这里原来写的是 `.item[data-name]`。2026-10-03 地名条目改带 `data-place`
+     （点地名直接进详情页，不再绕人物搜索——那才是「地名点不動」的根因），
+     所以选择器跟着换。**别把断言删掉**：写成 `.item` 的话人物条目也会被算进来，
+     数字照样 > 0，断言就废了。 */
+  const placeItems = out.querySelectorAll(".item[data-place]").length;
   ok("地名索引渲染出条目", placeItems > 0, "实得 " + placeItems);
+  ok("地名条目不带 data-name（別又落回人物檢索那條路）",
+    out.querySelectorAll(".item[data-name]").length === 0,
+    "实得 " + out.querySelectorAll(".item[data-name]").length);
   const groups = out.querySelectorAll(".group-title").length;
   ok("地名按類型分組（不止一組）", groups > 1, "實得 " + groups + " 組");
 
@@ -379,7 +387,104 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const gone = await waitFor(() => !out.querySelector(".flag-badge"), 20000);
   ok("撤銷 → 徽章消失", gone, "还剩 " + out.querySelectorAll(".flag-badge").length + " 个");
 
-  console.log("\n【12】控制台无异常");
+  console.log("\n【12】地名檢索與詳情頁");
+  /* 这一块是 2026-10-03 新加的。此前地名侧**根本没有入口**：
+     输「長安」0 条、点地名条掉到人物搜索上、输「邯郸」也 0 条
+     （places.name 与 trad_name 逐行相同，简体名只存在异体表里）。
+     三种坏**都不报错**——界面只是「搜不到」「点不动」，所以必须断。 */
+  /* ⚠️ 先把原文层关掉。【8】点篇目时打开过，一直没关：
+     不关的话下面「点句 → 原文层打开」会**假通过**（本来就开着），
+     而「只看相關段落」按鈕的可见性也会读到上一篇的殘留狀態。 */
+  if (doc.getElementById("reader").classList.contains("on")) {
+    const cb0 = doc.querySelector('.reader-head button[data-act="close"]');
+    if (cb0) click(cb0);
+    await sleep(300);
+  }
+  ok("原文層已關閉（下面兩條斷言的前提）",
+    !doc.getElementById("reader").classList.contains("on"));
+
+  // ⚠️ 检索靠**点按钮**触发（qEl 只绑了 keydown，没有 input 事件）。
+  //    直接赋值 q.value 再等，是等不到的。
+  click(bk(""));                             // 回到全部，免得上面停在三國志
+  await sleep(600);
+  /* ⚠️ 先清屏再等。上面【11】人物頁留着一堆命中行，而检索结果页与详情页
+     共用 #out —— 不清的话「等 .row[data-place] 出现」有可能量到残留。
+     判据写死「这一行里是邯鄲」，别只等「有一行地名」。 */
+  out.innerHTML = "";
+  q.value = "邯郸";                          // 简体：以前 0 条
+  click(doc.getElementById("btn"));
+  const gotPlaceRow = await waitFor(() => {
+    const rows = [...out.querySelectorAll(".row[data-place]")];
+    return rows.length > 0 && rows.some((r) => (r.textContent || "").indexOf("邯鄲") >= 0);
+  }, 20000);
+  ok("輸簡體「邯郸」搜得到地名（異體表是唯一出口）", gotPlaceRow,
+    "out=" + out.innerHTML.slice(0, 100));
+  const pRow = [...out.querySelectorAll(".row[data-place]")]
+    .find((r) => (r.textContent || "").indexOf("邯鄲") >= 0);
+  ok("地名行帶類別標記 .land-kind（與人物行分得開）",
+    !!(pRow && pRow.querySelector(".land-kind")),
+    "实得「" + (pRow ? pRow.textContent : "") + "」");
+  ok("地名段與人物段**分卡呈現**（同一個詞的兩類實體）",
+    out.querySelectorAll(".card").length >= 2
+    && out.textContent.indexOf("共") > 0);
+
+  // 点地名行 → 直接进详情页（不再绕搜索）
+  if (pRow) click(pRow);
+  /* ⚠️ 等待条件必须是**地名页独有**的东西，不能等 `.person-head .name`：
+     检索结果页也有这个类（`.person-head` 是共用的卡片头），条件立刻成立，
+     断言全读到**检索页**——详情页看起来「什么都不对」，而点击其实是好的。
+     教训与本文件开头第二条纪律同源：**等条件要等对东西**。
+     地名页独有：`.sent[data-place]`（命中行带地名 id）。 */
+  const gotPlace = await waitFor(
+    () => out.querySelectorAll(".sent[data-place]").length > 0, 20000);
+  const pName = out.querySelector(".person-head .name");
+  ok("点地名行 → 進地名詳情頁（不是人物搜索）", gotPlace
+    && pName && pName.textContent.indexOf("邯鄲") === 0,
+    "实得「" + (pName ? pName.textContent : "") + "」");
+  ok("詳情頁頭部帶類型說明（縣/郡/國…）",
+    !!(out.querySelector(".person-head .dyn")
+       && /縣|郡|國|山|川|關|湖|域|外/.test(
+         out.querySelector(".person-head .dyn").textContent)),
+    "实得「" + ((out.querySelector(".person-head .dyn") || {}).textContent || "")
+    + "」");
+  ok("詳情頁列出寫法（含「邯郸」異體，否則用戶以為此地不存在）",
+    out.textContent.indexOf("邯郸") > 0 && !!out.querySelector(".alias-tag"));
+  const bookNote = out.querySelector(".alias-note");
+  ok("詳情頁有「見於哪些書」（地名側的分書判據）", !!bookNote,
+    "实得「" + ((bookNote || {}).textContent || "") + "」");
+  const pSents = out.querySelectorAll(".sent[data-chapter]").length;
+  ok("詳情頁渲染出命中句（點句可進原文層）", pSents > 0, "实得 " + pSents);
+  ok("命中句帶原文層入口 data-chapter + data-uid",
+    !!out.querySelector(".sent[data-chapter][data-uid]"));
+
+  // 進原文層：「只看相關段落」在地名頁也要能開（作用域是地名不是人物）
+  const ps = out.querySelector(".sent[data-chapter]");
+  if (ps) click(ps);
+  const gotReader = await waitFor(
+    () => doc.getElementById("reader").classList.contains("on"), 20000);
+  ok("点地名命中句 → 開原文層", gotReader);
+  const btnHits = doc.getElementById("btnHits");
+  const hitsVisible = btnHits && !btnHits.hidden;
+  ok("原文層的「只看相關段落」在地名頁也在（別只認人物 pid）",
+    !!hitsVisible, "按钮=" + (btnHits ? (btnHits.hidden ? "hidden" : "可见")
+      : "找不到"));
+  if (hitsVisible && btnHits) {
+    click(btnHits);
+    await sleep(400);
+    ok("「只看相關段落」篩選後仍有段落（篩選沒把內容全濾掉）",
+      doc.querySelectorAll("#readerBody p").length > 0,
+      "实得 " + doc.querySelectorAll("#readerBody p").length + " 段");
+  }
+  const closeBtn = doc.querySelector('.reader-head button[data-act="close"]');
+  if (closeBtn) click(closeBtn);
+  await sleep(300);
+
+  // 路由：地名页有自己的 hash，刷新/后退能回来
+  ok("地名頁路由是 #/place/{id}（與人物頁分開）",
+    (window.location.hash || "").indexOf("#/place/") === 0,
+    "实得 " + window.location.hash);
+
+  console.log("\n【13】控制台无异常");
   ok("无 jsdomError", errs.length === 0, errs.slice(0, 2).join(" | "));
 
   console.log("\n=============== 索引四块 UI 测试：" + pass + " 通过 / " + fail +

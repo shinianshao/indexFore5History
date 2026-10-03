@@ -84,6 +84,17 @@
   }
   .row .books { color: var(--accent); opacity: .75; }
 
+  /* 地名行：與人物行**視覺上要分得開**。人物行左邊是頭銜·朝代，
+     地名行左邊是「縣/郡/國…」這類**地名類別**——同樣是 12px 小字，
+     不換色不看標記就分不出這條點進去是地名。 */
+  .land-kind {
+    display: inline-block; font-family: var(--sans); font-size: 11px;
+    color: var(--muted); border: 1px solid var(--border); border-radius: 4px;
+    padding: 0 4px; margin-left: 7px; white-space: nowrap; vertical-align: 2px;
+  }
+  /* 分篇標題裡的「N 處」：地名命中動輒上千，別讓它跟人物命中數混淆 */
+  .chapter-title .land-n { color: var(--muted); font-weight: 400; }
+
   .person-head { display: flex; align-items: baseline; gap: 12px; }
   .person-head .name { font-family: var(--serif); font-size: 22px; }
   .person-head .dyn { color: var(--muted); font-size: 13px; }

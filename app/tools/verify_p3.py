@@ -18,6 +18,8 @@
 5. **override 生效**：`reassign` 改對 pid、`drop` 讓命中消失——
    跑完自動 revoke 並重跑 annotate 復原
 6. **句級編輯**（P4）：拆句後前半**繼承 uid**、重放冪等、撤銷後還原
+7. **地名檢索與詳情**（2026-10-03）：簡體能搜、正名在首位、詳情端點四塊齊全、
+   離線導出也帶上地名三塊
 
 快照一律寫在**臨時庫**裡（monkeypatch `snapshot.SNAP_DB`），不污染真實歷史。
 
@@ -36,6 +38,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -1419,6 +1422,213 @@ def test_override_api() -> None:
             proc.kill()
 
 
+# ---------------------------------------------------------------- 17 地名检索与详情
+
+def test_place_search() -> None:
+    """地名检索 + 地名详情端点（2026-10-03）。
+
+    为什么单独立一条：地名侧以前**根本没有入口**——
+      ① `/api/search` 只查 persons，输「長安」0 条（places 里长安 1346 处）；
+      ② 没有任何 `/api/place/...` 端点，点地名条掉到人物搜索上 → 空；
+      ③ `places.name` 与 `trad_name` **逐行相同**（全表 0 行不同），
+         简体名只存在 book-data 的 aliases 里而从未灌进库 → 输「邯郸」也 0 条。
+
+    这三类坏**都不报错**：界面只是「搜不到」「点不动」。所以每条都断在
+    「会被打破的那一层」，端点层真打一次 HTTP。
+    """
+    print("\n[17] 地名檢索與詳情 · 端點閉環")
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                          # noqa: E402
+
+    idx = db.db_path()
+    if not os.path.exists(idx):
+        check("索引庫存在", False, idx)
+        return
+
+    # ---- 建庫層：place_aliases 表 ----
+    with db.connect() as c:
+        n_places = c.execute("SELECT COUNT(*) FROM places").fetchone()[0]
+        n_alias = c.execute("SELECT COUNT(*) FROM place_aliases").fetchone()[0]
+        covered = c.execute(
+            "SELECT COUNT(DISTINCT place_id) FROM place_aliases").fetchone()[0]
+        same = c.execute(
+            "SELECT COUNT(*) FROM places WHERE name = trad_name").fetchone()[0]
+        n_pm = c.execute("SELECT COUNT(*) FROM place_mentions").fetchone()[0]
+    check("place_aliases 表灌了數據", n_alias > 0, "{} 條".format(n_alias))
+    check("每個地名至少一條寫法（正名在首位）", covered == n_places,
+          "{}/{}".format(covered, n_places))
+    check("places.name 確實與 trad_name 逐行相同（所以異體表是唯一出口）",
+          same == n_places, "{}/{}".format(same, n_places))
+    check("地名命中表非空", n_pm > 100000, "{} 條".format(n_pm))
+
+    # 不變量：每條寫法的 n == Σ byBook。破了說明灌庫時兩邊口徑分叉了。
+    with db.connect() as c:
+        bad = []
+        for pid, w, n, bk in c.execute(
+                "SELECT place_id, w, n, by_book FROM place_aliases"):
+            try:
+                bb = json.loads(bk) if bk else {}
+            except (TypeError, ValueError):
+                bb = {}
+            if int(n or 0) != sum(int(v) for v in bb.values()):
+                bad.append((pid, w, n))
+    check("place_aliases 不變量 n == Σ byBook", not bad,
+          "不符 {} 條，例 {}".format(len(bad), bad[:2]))
+
+    # ---- db 層 ----
+    # 簡體檢索：這是建表的原因，也是最典型的「以前 0 條」的那條路
+    simp = db.search_places("邯郸", 30)
+    check("簡體能搜到地名（輸「邯郸」命中邯鄲）",
+          bool(simp) and simp[0]["trad_name"] == "邯鄲",
+          str([(x["trad_name"], x["n"]) for x in simp[:3]]))
+    trad = db.search_places("邯鄲", 30)
+    check("繁體正名也搜得到，且與簡體同一條",
+          bool(trad) and trad[0]["id"] == simp[0]["id"] if simp and trad else False,
+          str([(x["id"], x["trad_name"]) for x in trad[:2]]))
+    check("檢索結果帶命中數 / 類型說明 / 分書（前端三處都要用）",
+          bool(simp) and all(
+              simp[0].get("n", 0) > 0 and simp[0].get("kindLabel")
+              and isinstance(simp[0].get("books"), list)
+              and simp[0]["books"] and simp[0]["books"][0].get("name")))
+    check("檢索結果帶 id（點了要能進詳情）",
+          bool(simp) and bool(simp[0].get("id")), simp[0].get("id") if simp else "-")
+    # ⚠️ 檢索鏈路斷了就**立刻收工**，別讓後面 20 條一起 IndexError 炸掉。
+    #    斷言的價值在於「一眼看出哪壞了」；整段 traceback 會把這個性質蓋掉。
+    if not simp:
+        check("（後續斷言跳過：檢索鏈路已斷，無樣本可查）", False,
+              "search_places('邯郸') 空返回")
+        return
+    # 分書按次數降序：界面直接印「見於 X N 處」，序不對就误导
+    if simp:
+        bs = db.place_books(simp[0]["id"])
+        check("place_books 按次數降序且 n 為正",
+              bool(bs) and all(b["n"] > 0 for b in bs)
+              and [b["n"] for b in bs] == sorted((b["n"] for b in bs), reverse=True))
+        check("place_books 合計等於該地名命中總數",
+              sum(b["n"] for b in bs) == simp[0]["n"],
+              "{} vs {}".format(sum(b["n"] for b in bs), simp[0]["n"]))
+        al = db.place_alias_list(simp[0]["id"])
+        check("寫法清單首位是正名（不是異體）",
+              bool(al) and al[0]["w"] == simp[0]["trad_name"],
+              al[0]["w"] if al else "-")
+        check("寫法清單含簡體「邯郸」且不與正名重複",
+              any(a["w"] == "邯郸" for a in al)
+              and len({a["w"] for a in al}) == len(al))
+    check("查無此地返回 None（由端點翻成 404）",
+          db.place_payload("pl_絕無此地") is None)
+    pay = db.place_payload(simp[0]["id"], 200) if simp else None
+    check("place_payload 四塊齊全（profile/mentions/books/aliases）",
+          bool(pay) and set(pay) == {"profile", "mentions", "books", "aliases"}
+          and all(isinstance(pay[k], list) for k in ("mentions", "books", "aliases")))
+    check("profile 帶繁名 / 類型說明 / 時代 / 簡介（詳情頁頭部四樣）",
+          bool(pay) and all(pay["profile"].get(k) is not None
+                            for k in ("trad_name", "kindLabel", "era", "summary")))
+    # mentions 形狀與人物側同構 —— 前端 `renderPlace` 照 `renderPerson` 寫，
+    # 靠的就是這五個字段都在。少一個前端就渲染成 undefined 且不報錯。
+    ms = (pay or {}).get("mentions") or []
+    check("mentions 每條帶 uid/篇/正文/命中位置（前端標色與點句入原文層靠它）",
+          bool(ms) and all(
+              m.get("uid") and m.get("chapter_id") and m.get("text") is not None
+              and isinstance(m.get("s"), int) and isinstance(m.get("e"), int)
+              and m.get("surface") for m in ms[:50]))
+    check("mentions 的 s < e（命中位置合法）",
+          all(m["s"] < m["e"] for m in ms[:200]))
+    check("mentions 按篇排序（前端靠順序分篇，不二次分組）",
+          all(ms[i]["chapter_id"] <= ms[i + 1]["chapter_id"]
+              for i in range(len(ms) - 1)))
+    check("limit 生效（單字地名開口就是上千處，沒 limit 會頂爆頁面）",
+          len(db.place_mentions(simp[0]["id"], 3)) == 3 if simp else False)
+
+    port = _free_port()
+    env = dict(os.environ, PORT=str(port), PYTHONIOENCODING="utf-8")
+    proc = subprocess.Popen([PY, os.path.join(ROOT, "app", "server", "main.py")],
+                            cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    base = "http://127.0.0.1:{}/".format(port)
+    try:
+        up = False
+        for _ in range(40):
+            try:
+                urllib.request.urlopen(base + "health", timeout=1).read()
+                up = True
+                break
+            except Exception:                          # noqa: BLE001
+                time.sleep(0.3)
+        check("臨時服務起來了", up, base)
+        if not up:
+            return
+
+        # ⚠️ 端點層必須真打一次：只測 db 層的話，「端點忘了傳 places」這種壞
+        #    在單測裡一點痕跡都沒有，而界面表現是「地名檢索什麼都搜不到」。
+        st, rb = _http("GET", base + "api/search?q=" + urllib.parse.quote("邯郸"))
+        ps = rb.get("places") or []
+        check("/api/search 同時返回人物與地名兩段",
+              st == 200 and "items" in rb and "places" in rb
+              and bool(ps) and ps[0]["trad_name"] == "邯鄲",
+              "places={}".format([(x["trad_name"], x["n"]) for x in ps[:3]]))
+        check("/api/search 的人物段沒被地名污染", bool(rb.get("items")))
+        st, rb2 = _http("GET", base + "api/search?kind=place&q=" +
+                        urllib.parse.quote("邯郸"))
+        check("kind=place 只要地名（items 為空）",
+              st == 200 and rb2.get("items") == [] and bool(rb2.get("places")))
+        st, rb3 = _http("GET", base + "api/search?kind=person&q=" +
+                        urllib.parse.quote("邯郸"))
+        check("kind=person 只要人物（places 為空）",
+              st == 200 and rb3.get("places") == [])
+        st, rb4 = _http("GET", base + "api/search?q=" + urllib.parse.quote("項羽"))
+        check("人名照樣搜得到（地名側沒把人物段擠掉）",
+              st == 200 and any(x["trad_name"] == "項羽"
+                                for x in (rb4.get("items") or [])))
+
+        pid = ps[0]["id"] if ps else ""
+        st, pb = _http("GET", base + "api/place/" + urllib.parse.quote(pid))
+        check("/api/place/{id} 返回四塊（前端 renderPlace 的全部輸入）",
+              st == 200 and set(pb) == {"profile", "mentions", "books", "aliases"}
+              and bool(pb.get("mentions")),
+              "st={} keys={}".format(st, sorted(pb)))
+        check("詳情頁命中數與檢索條一致（兩處口徑不能分叉）",
+              bool(ps) and ps[0]["n"] == sum(b["n"] for b in pb["books"]),
+              "{} vs {}".format(ps[0]["n"] if ps else "-",
+                                sum(b["n"] for b in pb.get("books", []))))
+        st, pb2 = _http("GET", base + "api/place/" + pid + "?limit=3")
+        check("/api/place 的 limit 生效", st == 200 and len(pb2["mentions"]) == 3,
+              "實得 {}".format(len(pb2.get("mentions", []))))
+        st, _b = _http("GET", base + "api/place/" +
+                       urllib.parse.quote("pl_絕無此地"))
+        check("查無此地 → 404（不是 200 空頁）", st == 404, "實得 {}".format(st))
+
+        # 離線導出：地名三塊在不在。⚠️ 斷在「導出的 data.js 裡有沒有這些鍵」，
+        # 因為漏導的表現是離線版地名能列不能點——**不報錯**。
+        # ⚠️ 必須讀**整份**並匹配 `"pla":JSON.parse(` 這種真形狀：
+        #    別只讀文件頭——sents 一塊就 9.4MB，地名鍵排在它後面，
+        #    摳前 4MB 會把「明明導了」判成「缺」（第一版就這麼錯的）。
+        dist = os.path.join(ROOT, "dist", "data.js")
+        if os.path.exists(dist):
+            with open(dist, encoding="utf-8", errors="replace") as fh:
+                txt = fh.read()
+            missing = [k for k in ("pla", "pmen", "plalias", "plbook")
+                       if '"{}":JSON.parse('.format(k) not in txt]
+            check("dist/data.js 導出了地名四塊（漏一個離線地名就是死的）",
+                  not missing, "缺 {}".format(missing))
+            # 光有鍵不夠：得真有內容。pmen 空對象的話離線版地名一樣點不動。
+            m = re.search(r'"counts":\{([^}]*)\}', txt)
+            got = dict(re.findall(r'"(\w+)":(\d+)', m.group(1))) if m else {}
+            with db.connect() as c:
+                want_pm = c.execute(
+                    "SELECT COUNT(*) FROM place_mentions").fetchone()[0]
+            check("dist 記錄的地名命中數與庫一致（不是空殼）",
+                  int(got.get("place_mentions", 0)) == want_pm,
+                  "{} vs {}".format(got.get("place_mentions"), want_pm))
+        else:
+            check("dist/data.js 存在", False, dist)
+    finally:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:              # pragma: no cover
+            proc.kill()
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -1441,6 +1651,7 @@ def main() -> int:
         test_alias_ledger()
         test_era_marker()
         test_override_api()
+        test_place_search()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")
