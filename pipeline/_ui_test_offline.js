@@ -68,7 +68,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const quick = doc.getElementById("quick");
   const sub = doc.getElementById("sub");
 
-  async function waitFor(cond, timeout = 60000) {
+  /* ⚠️ 默認 60s 是給「資料要從磁碟讀」的寬限；離線快照全在記憶體裡，
+     正常是毫秒級。注入驗證（verify_p3_note_inject.sh）故意改壞前端，
+     每次等不到都吃滿 60s → 一輪注入要十幾分鐘。
+     所以真正的超時值一律走 BI_UI_TIMEOUT（環境變數）**優先於**傳進來的參數——
+     這樣 30 多處調用點不用逐個改，設了環境變數就全面生效。 */
+  const _envTO = Number(process.env.BI_UI_TIMEOUT || 0);
+  async function waitFor(cond, timeout) {
+    timeout = _envTO || timeout || 60000;
     for (let i = 0; i < timeout / 200; i++) {
       if (cond()) return true;
       await sleep(200);
@@ -381,7 +388,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
     if (n.size >= 40) { longChap = { node: cr, cid, n: n.size }; break; }
   }
-  ok("能找���一段 ≥40 段的長篇（跳段控件的前提）", !!longChap,
+  ok("能找一段 ≥40 段的長篇（跳段控件的前提）", !!longChap,
     longChap ? longChap.cid + " 有 " + longChap.n + " 段" : "沒有");
   if (longChap) {
     click(longChap.node);
@@ -481,11 +488,71 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     noteSum && noteSum.querySelector(".note-chip") &&
     /【裴[\d,]+】/.test(noteSum.textContent),
     "顯示「" + (noteSum ? noteSum.textContent.replace(/\s+/g, " ") : "") + "」");
-  ok("裴注區塊有篇級分布（讀全篇可點）",
-    out.querySelectorAll(".open-full[data-chapter]").length > 0,
-    "可讀全篇 " + out.querySelectorAll(".open-full[data-chapter]").length + " 處");
-  ok("裴注明細行可點（能跳原文）", out.querySelectorAll(".pei-line[data-chapter]").length > 0,
-    "明細 " + out.querySelectorAll(".pei-line[data-chapter]").length + " 條");
+  // ⚠️ 這兩條以前只斷「元素存在」（length > 0），而元素一直都在、點了沒反應——
+  //   斷言寫著「可點」卻沒有一次點擊，等於給假綠（審查 docs/34 P0-2）。
+  //   現在**真點開**並斷原文層真的起來了。
+  const openFuls = out.querySelectorAll(".open-full[data-chapter]");
+  ok("裴注區塊有篇級分布（讀全篇入口存在）", openFuls.length > 0,
+    "可讀全篇 " + openFuls.length + " 處");
+  const readerEl = doc.getElementById("reader");
+  /* ⚠️⚠️ 斷「狀態轉移」而不是斷終態，否則這條是**恆真**的。
+   *   上面【8】點篇目時把原文層打開了、**到這裡一直沒關**，
+   *   所以 `reader.classList.contains("on")` 在點擊前就已經是 true——
+   *   刪掉分派後這條斷言**照樣綠**（注入驗證親自抓出來的）。
+   *   判據必須是「點之前 off、點之後 on」：先 ensureClosed()，再斷它變 on。
+   *   這與「三段拼回原句」對indexOf 恆真是同一類錯。 */
+  const closeReader = async () => {
+    const cb = doc.querySelector('.reader-head button[data-act="close"]');
+    if (cb) click(cb);
+    await sleep(300);
+  };
+  const ensureClosed = async () => {
+    if (readerEl.classList.contains("on")) await closeReader();
+    return !readerEl.classList.contains("on");
+  };
+  if (openFuls.length) {
+    const wasClosed = await ensureClosed();
+    ok("（前提）點之前原文層是關著的", wasClosed,
+      "reader.on=" + readerEl.classList.contains("on"));
+    const wantCid = openFuls[0].getAttribute("data-chapter");
+    click(openFuls[0]);
+    const got = await waitFor(() => readerEl.classList.contains("on"), 60000);
+    const ps0 = doc.querySelectorAll("#readerBody p[data-uid]");
+    ok("點「讀全篇」**真的**打開原文層（不是死按鈕）", got && ps0.length > 0,
+      "reader.on=" + readerEl.classList.contains("on") + " / 句 " + ps0.length +
+      " / 要開的篇 " + wantCid);
+    await closeReader();
+  } else {
+    ok("點「讀全篇」**真的**打開原文層（不是死按鈕）", false, "找不到入口，無法驗");
+  }
+  const peiLines = out.querySelectorAll(".pei-line[data-chapter]");
+  ok("裴注明細行存在", peiLines.length > 0,
+    "明細 " + peiLines.length + " 條");
+  if (peiLines.length) {
+    const wasClosed2 = await ensureClosed();
+    ok("（前提）點明細行之前原文層是關著的", wasClosed2,
+      "reader.on=" + readerEl.classList.contains("on"));
+    const pl = peiLines[0];
+    const wantCid2 = pl.getAttribute("data-chapter");
+    const pseq = pl.getAttribute("data-pseq");
+    click(pl);
+    const got2 = await waitFor(() => readerEl.classList.contains("on"), 60000);
+    const ps2 = doc.querySelectorAll("#readerBody p[data-uid]");
+    ok("點注文明細行**真的**打開原文層（不是死按鈕）", got2 && ps2.length > 0,
+      "reader.on=" + readerEl.classList.contains("on") + " / 句 " + ps2.length +
+      " / 要開的篇 " + wantCid2 + " / 段號 " + pseq);
+    // 有 data-pseq 時應該定位到那一段（p.target 是 jumpToPara 落的標記）
+    if (pseq != null && got2) {
+      const hit = doc.querySelector("#readerBody p.target");
+      ok("明細行按段號定位到該段（p.target 落在那一段）",
+        !!hit && hit.getAttribute("data-para") === String(Number(pseq)),
+        "段號 " + pseq + " / target=" +
+        (hit ? hit.getAttribute("data-para") : "null"));
+    }
+    await closeReader();
+  } else {
+    ok("點注文明細行**真的**打開原文層（不是死按鈕）", false, "找不到明細行，無法驗");
+  }
   ok("裴注區塊有千分位（曹操 726 處）",
     /[\d],[\d]{3}/.test(doc.body.textContent),
     "页面上有千分位數字");

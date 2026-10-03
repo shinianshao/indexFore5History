@@ -519,6 +519,81 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     (window.location.hash || "").indexOf("#/place/") === 0,
     "实得 " + window.location.hash);
 
+  console.log("\n【12b】注文的兩個入口（聯機路徑）· docs/34 P0-2");
+  /* ⚠️ 這段與離線測試裡的【8】是**同一個功能的两条路徑**，不能只测一条：
+   *   離線走 offlineGet()，聯機走 fetch()→/api/chapter/{cid}。
+   *   只测離線的話，聯機那半壞了照樣全綠。
+   * 而且原来的斷言只斷「元素存在」（length > 0）——元素一直都在、點了沒反應，
+   * 寫著「可點」卻沒點過一次。這裡**真點開**並斷原文層真的起來。 */
+  window.location.hash = "#/q/邦";
+  await sleep(400);
+  q.value = "曹操";                       // 裴注最多的人（正文 1,823 / 裴注 726）
+  click(doc.getElementById("btn"));
+  await waitFor(() => out.querySelectorAll(".row[data-pid]").length > 0, 20000);
+  click(out.querySelector(".row[data-pid]"));
+  const gotNotes = await waitFor(
+    () => out.querySelectorAll(".note-sum").length > 0, 20000);
+  ok("人物頁有注文區塊（note-sum）", gotNotes);
+
+  const readerEl = doc.getElementById("reader");
+  /* ⚠️⚠️ 斷「狀態轉移」而不是斷終態——【8】點篇目時原文層就開了、**到這裡沒關過**，
+   *   那樣 `contains("on")` 點擊前就已是 true，刪掉分派也照样綠。
+   *   判據必須是「點之前 off、點之後 on」。與「三段拼回原句」對 indexOf 恆真同類。 */
+  const closeReader = async () => {
+    const cb = doc.querySelector('.reader-head button[data-act="close"]');
+    if (cb) click(cb);
+    await sleep(300);
+  };
+  const ensureClosed = async () => {
+    if (readerEl.classList.contains("on")) await closeReader();
+    return !readerEl.classList.contains("on");
+  };
+  const openFuls = out.querySelectorAll(".open-full[data-chapter]");
+  ok("注文章級分布有「讀全篇」入口", openFuls.length > 0,
+    "实得 " + openFuls.length + " 处");
+  if (openFuls.length) {
+    const wasClosed = await ensureClosed();
+    ok("（前提）聯機點之前原文層是關著的", wasClosed,
+      "reader.on=" + readerEl.classList.contains("on"));
+    const wantCid = openFuls[0].getAttribute("data-chapter");
+    click(openFuls[0]);
+    const got = await waitFor(() => readerEl.classList.contains("on"), 20000);
+    const n1 = doc.querySelectorAll("#readerBody p[data-uid]").length;
+    ok("聯機點「讀全篇」**真的**開原文層（不是死按鈕）", got && n1 > 0,
+      "reader.on=" + readerEl.classList.contains("on") + " / 句 " + n1 +
+      " / 篇 " + wantCid);
+    await closeReader();
+  } else {
+    ok("聯機點「讀全篇」**真的**開原文層（不是死按鈕）", false, "找不到入口");
+  }
+  const peiLines = out.querySelectorAll(".pei-line[data-chapter]");
+  ok("注文明細行存在", peiLines.length > 0, "实得 " + peiLines.length + " 条");
+  if (peiLines.length) {
+    const wasClosed2 = await ensureClosed();
+    ok("（前提）聯機點明細行之前原文層是關著的", wasClosed2,
+      "reader.on=" + readerEl.classList.contains("on"));
+    const pl = peiLines[0];
+    const pseq = pl.getAttribute("data-pseq");
+    const wantCid2 = pl.getAttribute("data-chapter");
+    click(pl);
+    const got2 = await waitFor(() => readerEl.classList.contains("on"), 20000);
+    const n2 = doc.querySelectorAll("#readerBody p[data-uid]").length;
+    ok("聯機點注文明細行**真的**開原文層（不是死按鈕）", got2 && n2 > 0,
+      "reader.on=" + readerEl.classList.contains("on") + " / 句 " + n2 +
+      " / 篇 " + wantCid2 + " / 段號 " + pseq);
+    // 有 data-pseq 時要定位到那一段（p.target 是 jumpToPara 落的標記）
+    if (pseq != null && got2) {
+      const hit = doc.querySelector("#readerBody p.target");
+      ok("聯機明細行按段號定位到該段",
+        !!hit && hit.getAttribute("data-para") === String(Number(pseq)),
+        "段號 " + pseq + " / target=" +
+        (hit ? hit.getAttribute("data-para") : "null"));
+    }
+    await closeReader();
+  } else {
+    ok("聯機點注文明細行**真的**開原文層（不是死按鈕）", false, "找不到明細行");
+  }
+
   console.log("\n【13】控制台无异常");
   ok("无 jsdomError", errs.length === 0, errs.slice(0, 2).join(" | "));
 

@@ -256,13 +256,52 @@
     owner: "篇主", chapter: "篇目", era: "時代", sentence: "句內",
     paragraph: "段內", related: "關聯", scoped: "限定", guess: "推斷"
   };
-  function markSentence(text, surface, tier) {
-    var i = String(text || "").indexOf(surface || "");
-    if (i < 0 || !surface) return esc(text);
+
+  /* 標色位置必須**用庫給的 s/e**，不能 indexOf。
+     為什麼：同一句裡同一個詞可能出現多次（「舜…堯…舜」），indexOf 恆落第一處，
+     會標到不相干的語境上。實測 182128 條命中裡 8379 條（4.6%）標錯位置。
+
+     ⚠️ 但**也不能只改成 text.slice(s, e)**：`s`/`e` 是 Python 算的**碼位**下標，
+     JS 的 slice 按 **UTF-16 碼元**——古籍裡有非 BMP 字（U+24CF9、U+23D40 這類
+     罕用異體字），一個字算兩個碼元，位置就整個偏了。實測會新造 63 條錯標。
+     所以三級回退，每一級都以「切出來的字串 === surface」為判據：
+       A. text.slice(s, e)          —— 快，覆蓋 182065/182128（99.97%）
+       B. Array.from(text) 按碼位切 —— 修那63 條非 BMP
+       C. indexOf(surface)          —— 最後兜底（s/e 缺失或兩級都不符時）
+     判據是**字串相等**不是「下標看著對」——錯了不報錯，只會悄悄標到別處。
+
+     ⚠️ 回傳的是**切好的三段字串**而不是下標：路徑 B 的下標是碼位，
+     交給調用方再 slice 就又變回碼元切了，等於沒修（還修了一個更難發現的版本）。 */
+  function hitSpan(text, surface, s, e) {
+    text = String(text || "");
+    surface = surface == null ? "" : String(surface);
+    if (!surface) return null;
+    var a = Number(s), b = Number(e);
+    var ok = (a === a && b === b && a >= 0 && b > a);
+    // A：快路徑。注意要先 Number()——前端拿到過字串 "99"，slice 會靜默截成 0
+    if (ok && b <= text.length && text.slice(a, b) === surface) {
+      return [text.slice(0, a), surface, text.slice(b)];
+    }
+    // B：按碼位切。Array.from 按碼位展開，不是碼元——正好對齊 Python 的下標
+    if (ok) {
+      var cp = Array.from(text);
+      if (b <= cp.length && cp.slice(a, b).join("") === surface) {
+        return [cp.slice(0, a).join(""), surface, cp.slice(b).join("")];
+      }
+    }
+    // C：兜底。老實說這是錯的（落第一處），但寧可標錯位置也不能不標。
+    //    真走到這裡說明 s/e 與 text 不同源，屬於要修的數據問題，不是前端能補的。
+    var i = text.indexOf(surface);
+    return i < 0 ? null : [text.slice(0, i), surface, text.slice(i + surface.length)];
+  }
+
+  function markSentence(text, surface, tier, s, e) {
+    var sp = hitSpan(text, surface, s, e);
+    if (!sp) return esc(text);
     var cls = (tier && tier !== "core") ? "guess" : "";
-    var html = esc(text.slice(0, i)) +
-      "<mark class=\"" + cls + "\">" + esc(surface) + "</mark>" +
-      esc(text.slice(i + surface.length));
+    var html = esc(sp[0]) +
+      "<mark class=\"" + cls + "\">" + esc(sp[1]) + "</mark>" +
+      esc(sp[2]);
     var note = TIER_NOTE[tier];
     return html + (note ? "<span class=\"tier-note\">？" + note + "</span>" : "");
   }
@@ -590,7 +629,7 @@
             "\" data-uid=\"" + esc(m.uid) +
             "\" data-s=\"" + esc(m.s) + "\" data-e=\"" + esc(m.e) +
             "\" data-surface=\"" + esc(m.surface) + "\" data-pid=\"" + esc(pid) + "\">" +
-            markSentence(m.text, m.surface, m.tier) +
+            markSentence(m.text, m.surface, m.tier, m.s, m.e) +
             (ov ? flagBadge(ov) : "") +
             // 沒有偏移（s/e 缺失）就別給按鈕：後端靠 (s, e, surface) 定位，
             // 給了也只能報 400，不如一開始就不出現
@@ -677,7 +716,7 @@
         g.rows.forEach(function (m) {
           html += "<div class=\"sent\" data-chapter=\"" + esc(m.chapter_id) +
             "\" data-uid=\"" + esc(m.uid) + "\" data-place=\"" + esc(plid) + "\">" +
-            markSentence(m.text, m.surface, m.tier) + "</div>";
+            markSentence(m.text, m.surface, m.tier, m.s, m.e) + "</div>";
         });
       });
 
@@ -1019,7 +1058,10 @@
     "<button data-act=\"dead\">棄用</button>" +
     "</span>";
 
-  function openChapter(cid, uid, scope) {
+  /* pseq = 直接跳到某一段（段號）。注文明細行用：它的 data-pseq 是**段號**
+     ——注意注文與正文的切分體系不同（MEMORY 紅線），所以**不能**拿它當 uid 定位，
+     只能按段號跳。段落不存在時別出錯，只是不跳（原文層照樣開）。 */
+  function openChapter(cid, uid, scope, pseq) {
     readerCid = cid;
     return request("/api/chapter/" + encodeURIComponent(cid)).then(function (d) {
       readerTitle.textContent = (d.chapter && d.chapter.full_title) || cid;
@@ -1029,6 +1071,7 @@
       readerState.hitsOnly = false;
       renderReader();
       reader.classList.add("on");
+      if (pseq != null) jumpToPara(Number(pseq));
       if (uid) {
         var el = readerBody.querySelector('p[data-uid="' + uid + '"]');
         if (el && el.scrollIntoView) el.scrollIntoView({ block: "center" });
@@ -1733,6 +1776,24 @@
     // 關係行：點進去看那個人
     var relRow = ev.target.closest ? ev.target.closest(".rel-row[data-pid]") : null;
     if (relRow) { renderPerson(relRow.getAttribute("data-pid")).then(writeHash).catch(showErr); return; }
+    // 注文（裴注 / 晉書舊史注）的兩個入口——**排在「點句子開原文」之前**。
+    // 這裡以前只渲染不接線：`.open-full` 與 `.pei-line` 都帶 data-chapter，
+    // 點了什麼都不發生（審查 docs/34 P0-2）。元素在、點不動，最典型的死按鈕。
+    // 兩個入口的差別在**要不要跳段**：讀全篇只開篇；明細行的 data-pseq 是段號。
+    // ⚠️ 注文的 pseq 是**段號**不是正文 uid（注文與正文切分體系不同，紅線），
+    //    所以別拿它去查 p[data-uid]——查不到還好，錯位就麻煩了。
+    var ofEl = ev.target.closest ? ev.target.closest(".open-full[data-chapter]") : null;
+    if (ofEl) {
+      openChapter(ofEl.getAttribute("data-chapter"), null, currentPid).catch(showErr);
+      return;
+    }
+    var plEl = ev.target.closest ? ev.target.closest(".pei-line[data-chapter]") : null;
+    if (plEl) {
+      var pseq = plEl.getAttribute("data-pseq");
+      openChapter(plEl.getAttribute("data-chapter"), null, currentPid,
+                  pseq == null ? null : Number(pseq)).catch(showErr);
+      return;
+    }
     var s = ev.target.closest ? ev.target.closest(".sent[data-chapter]") : null;
     if (s) {
       // 傳作用域（人物**或**地名）：原文層才知道「只看相關段落」該留哪些段。

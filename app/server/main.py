@@ -89,6 +89,14 @@ async def lifespan(app: FastAPI):
         # 而界面上**看不出任何异常**——所以要嚷出来。
         print("⚠️ BOOKINDEX_OVERRIDES 生效：纠错写入的是 {}".format(
             overrides.WORKBOOK))
+    else:
+        # ⚠️ 這一側更要喊。**不設**才是危險的那一侧：UI 測試點一次「寫入」就髒權威源，
+        #   而界面上**不報任何異常**。我自己踩過（手起 8811 跑 UI 測試忘了設沙盒變量，
+        #   overrides.xlsx 多出一行 dead 自檢行，還是逐行比對才發現的）。
+        #   日常服務走這條沒問題；**跑 UI 測試請另設 BOOKINDEX_OVERRIDES**。
+        print("· BOOKINDEX_OVERRIDES 未設：糾錯寫入權威源 {}".format(
+            overrides.WORKBOOK))
+        print("  （跑 UI 測試請另設沙盒，否則測試會髒權威源）")
     yield
 
 

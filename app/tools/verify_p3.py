@@ -1737,6 +1737,24 @@ def test_place_search() -> None:
             proc.kill()
 
 
+def test_mark_span() -> None:
+    """P0-甲：命中標色落點（2026-10-03 審查 docs/34）。
+
+    為什麼單獨一個函式而不是寫在 [17] 裡：它要餵**全量 18 萬條**給前端真碼跑，
+    約 15 秒，混在[17] 裡會讓那條也變慢（且沒有快速版可跑）。
+    快速版就是本文件：`python app/tools/verify_p3_mark.py`。
+    注入驗證：`bash app/tools/verify_p3_mark_inject.sh`。
+    """
+    print("\n[18] 命中標色落點 · 前端實碼（見 verify_p3_mark.py）")
+    here = os.path.dirname(os.path.abspath(__file__))
+    rc = subprocess.run([sys.executable, os.path.join(here, "verify_p3_mark.py")],
+                        capture_output=True, text=True, encoding="utf-8")
+    for line in (rc.stdout or "").splitlines():
+        print(line)
+    check("[18] 標色落點全對（前端三級回退）", rc.returncode == 0,
+          "verify_p3_mark rc={}".format(rc.returncode))
+
+
 def main() -> int:
     print("=== P3 斷言 · 新鏈路 ===")
     tmpdb = os.path.join(tempfile.gettempdir(), "bookindex-verify-snap.db")
@@ -1760,6 +1778,7 @@ def main() -> int:
         test_era_marker()
         test_override_api()
         test_place_search()
+        test_mark_span()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏
         snapshot.SNAP_DB = os.path.join(ROOT, "data", "index", "snapshots.db")

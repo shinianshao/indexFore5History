@@ -555,7 +555,16 @@ def _decode_alias_rows(rows) -> List[Dict[str, Any]]:
 
 def person_mentions(pid: str, tier: Optional[str] = None,
                     limit: int = 200) -> List[Dict[str, Any]]:
-    """某人的命中，**按篇分组**返回——这是详情页右侧的主体。"""
+    """某人的命中，**按篇分组**返回——这是详情页右侧的主体。
+
+    ⚠️ `m.s` / `m.e` 是 pipeline 用 Python 算的**Unicode 码位**下标
+    （不是字节、也不是 UTF-16 碼元），且 `text[s:e] == surface` 全量成立
+    （verify_p3_mark.py 每次都断这一条）。
+    前端**不能**用 `text.indexOf(surface)` 代替——同一句裡同一個詞多次出現時
+    會標到第一處（實測 8319/182128條標錯）；也**不能**直接 `text.slice(s,e)`
+    ——古籍含非 BMP 字（U+24CF9 等），JS 的碼元下標會偏（會新造 63 條錯）。
+    正確做法見 app/web/app.js 的 `hitSpan`（三級回退）。
+    """
     sql = """
         SELECT c.full_title AS chapter, s.chapter_id, s.uid, s.text,
                m.surface, m.s, m.e, m.tier
@@ -803,6 +812,9 @@ def place_mentions(pid: str, limit: int = 200) -> List[Dict[str, Any]]:
 
     ⚠️ 单字地名（「江」「河」「淮」）一开口就是上千处，**必须**有 limit；
     前端人物页的「只看相关段落」也依赖 mentions 带 uid，口径与人物页一致。
+
+    ⚠️ `m.s` / `m.e` 的语义（Python **碼位**下标、前端不能拿 indexOf 或
+    裸 slice 代替）見 `person_mentions` 的 docstring——兩側同一套，不要只改一邊。
     """
     sql = """
         SELECT c.full_title AS chapter, s.chapter_id, s.uid, s.text,
