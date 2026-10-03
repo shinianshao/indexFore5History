@@ -574,6 +574,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       "reader.on=" + readerEl.classList.contains("on"));
     const pl = peiLines[0];
     const pseq = pl.getAttribute("data-pseq");
+    // ⚠️ 同上：裹在 if (pseq != null) 裡的斷言，屬性不見了只會靜默不出現。
+    ok("明细行带 data-pseq（否则「按段号定位」那条会静默不执行）", pseq != null,
+      "data-pseq=" + pseq);
     const wantCid2 = pl.getAttribute("data-chapter");
     click(pl);
     const got2 = await waitFor(() => readerEl.classList.contains("on"), 20000);

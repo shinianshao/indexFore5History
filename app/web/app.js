@@ -259,7 +259,9 @@
 
   /* 標色位置必須**用庫給的 s/e**，不能 indexOf。
      為什麼：同一句裡同一個詞可能出現多次（「舜…堯…舜」），indexOf 恆落第一處，
-     會標到不相干的語境上。實測 182128 條命中裡 8379 條（4.6%）標錯位置。
+     會標到不相干的語境上。實測 182128 條命中裡 8319 條（4.6%）標錯位置。
+
+     （此數字由 app/tools/verify_p3_mark.py 每次全量重算，改動前先跑一次，別手抄。）
 
      ⚠️ 但**也不能只改成 text.slice(s, e)**：`s`/`e` 是 Python 算的**碼位**下標，
      JS 的 slice 按 **UTF-16 碼元**——古籍裡有非 BMP 字（U+24CF9、U+23D40 這類
@@ -405,7 +407,9 @@
       h += "<div class=\"card\">";
       items.slice(0, 8).forEach(function (it) {
         h += "<div class=\"pei-line\" data-chapter=\"" + esc(it.cid) + "\"" +
-          (it.pseq ? " data-pseq=\"" + esc(String(it.pseq)) + "\"" : "") +
+          // ⚠️ 用 != null 不能用真值判斷：源頭 annotate_pei.py 的預設值是 0，
+          //    pseq=0 會被真值判斷吃掉 → 屬性不出現 → 點擊只開篇不跳段（靜默）。
+          (it.pseq != null ? " data-pseq=\"" + esc(String(it.pseq)) + "\"" : "") +
           " title=\"" + esc(it.alias || "") + "\">" + esc(it.text) + "</div>";
       });
       h += "<div class=\"alias-note\">摘自" + esc(noteBook || "") +

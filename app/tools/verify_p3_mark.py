@@ -23,6 +23,14 @@ JS 的 `slice` 按 **UTF-16 碼元**。古籍裡有非 BMP 字（實測 U+24CF9 
 **原樣抽出來跑**（不重寫、不 mock），餵全量真命中，斷渲染出的 HTML 裡
 `<mark>` 的落點與位置。這樣改壞前端必紅。
 
+⚠️ 但**只斷函式本身還不夠**（2026-10-04 獨立審查 P1-1）。抽出來的函式是
+**本檔案自己帶著 s/e 呼叫**的，產品碼裡那兩個呼叫點（人物 `:632` / 地名 `:719`）
+有沒有真的把 `s/e` 餵進去，**這一層原本完全沒有人看**。
+實測：把兩處改回 `markSentence(m.text, m.surface, m.tier)`，
+本檔案 **7/7 全綠**、離線 UI **74/0 全綠**，而 8319 條錯標 100% 復活且不報錯——
+因為 `hitSpan` 收到 `undefined` 會**靜默落到路徑 C（indexOf）**，正好是修復前的行為。
+等於驗了引擎沒驗接線。所以下面加了一條靜態檢查守呼叫點。
+
 判據是「**mark 之前恰好 s 個字**」而不是「三段拼回原句」——
 後者對 indexOf **恆真**，會把 8319 條錯標判成 0 錯綠。
 而且要數**碼位**（Array.from）不是碼元（.length），否則走路徑 B 的那 63 條
@@ -42,12 +50,13 @@ JS 的 `slice` 按 **UTF-16 碼元**。古籍裡有非 BMP 字（實測 U+24CF9 
 """
 from __future__ import annotations
 
+import io
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
-import tempfile
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -72,7 +81,9 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 #    的搜索），注入會完全沒生效而斷言全綠——差一步就誤判「斷言沒用」。
 RUNNER = r"""
 const fs = require("fs");
-const src = fs.readFileSync(process.argv[2], "utf8");
+// ⚠️ 引數位置：本檔以 `node -e RUNNER <app.js>` 執行，所以 argv[1] 是 app.js；
+//    資料（18 萬條）走 stdin，不落盤。
+const src = fs.readFileSync(process.argv[1], "utf8");
 function cut(a, b) {
   const i = src.indexOf(a);
   if (i < 0) throw new Error("起點找不到: " + a);
@@ -87,16 +98,23 @@ const TIER_NOTE = { owner: "篇主", chapter: "篇目", era: "時代", sentence:
 const body = cut("  function hitSpan(", "  /* ---------- 渲染：結果列表 ---------- */");
 const mod = new Function("esc", "TIER_NOTE", body + "\nreturn { hitSpan, markSentence };")(esc, TIER_NOTE);
 
-const rows = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+const rows = JSON.parse(fs.readFileSync(0, "utf8"));
 const cpLen = (x) => Array.from(x).length;
-let bad = 0, nullSpan = 0, pathB = 0, pathC = 0;
+let bad = 0, nullSpan = 0, pathA = 0, pathB = 0, pathC = 0;
 const badSamples = [];
 for (const r of rows) {
+  // 路徑分佈：這裡**獨立複刻** hitSpan 三級的判據，不是複用它——
+  // 目的是讓 A/B/C 的分佈成為一個可對賬的數字（獨立複算：A=182065/B=63/C=0），
+  // 而不是「看起來有在走」。真偽由下面 bad==0 那條守，這段只負責分佈。
+  // ⚠️ 若 hitSpan 的判據改了，這段要同步——不同步的症狀是 pathA+pathB+pathC != n。
+  const cp = Array.from(r.text);
+  const a = Number(r.s), b = Number(r.e);
+  if (b <= r.text.length && r.text.slice(a, b) === r.surface) pathA++;
+  else if (b <= cp.length && cp.slice(a, b).join("") === r.surface) pathB++;
+  else pathC++;
+
   const sp = mod.hitSpan(r.text, r.surface, r.s, r.e);
   if (!sp) { nullSpan++; continue; }
-  // 三級回退各走了多少——路徑 B 必須 >0（否則就是「天真的 slice」在冒充修好的版本）
-  if (Array.from(r.text).length !== r.text.length) pathB++;   // 該句含非 BMP 字
-  if (cpLen(sp[0]) !== r.s) pathC++;
   const html = mod.markSentence(r.text, r.surface, r.tier, r.s, r.e);
   const m = html.match(/<mark class="[^"]*">([\s\S]*?)<\/mark>/);
   const good = m && m[1] === r.surface &&
@@ -104,8 +122,34 @@ for (const r of rows) {
   if (!good) { bad++; if (badSamples.length < 5) badSamples.push(r.uid); }
 }
 console.log(JSON.stringify({ n: rows.length, bad: bad, nullSpan: nullSpan,
-                             pathB: pathB, pathC: pathC, badSamples: badSamples }));
+                             pathA: pathA, pathB: pathB, pathC: pathC,
+                             badSamples: badSamples }));
 """
+
+
+APP_JS = os.path.join(ROOT, "app", "web", "app.js")
+
+# 產品碼裡 markSentence 的呼叫點：人物命中句與地名命中句各一處。
+# ⚠️ 為什麼要單獨斷它：下面的全量測試是**本檔案自己帶著 s/e 呼叫**抽出的函式，
+#    呼叫點漏傳時它照綠（實測 7/7 綠而 8319 條錯標復活）。這是「驗了引擎沒驗接線」。
+N_CALL_SITES = 2
+
+
+def check_call_sites() -> None:
+    """靜態掃 app.js：每個 markSentence 呼叫點都必須傳滿 5 個實參（含 s/e）。"""
+    src = io.open(APP_JS, encoding="utf-8").read()
+    calls = []
+    for m in re.finditer(r"markSentence\(([^()]*)\)", src):
+        # 函式定義行（`function markSentence(text, surface, tier, s, e)`）不是呼叫點
+        if src[:m.start()].rstrip().endswith("function"):
+            continue
+        calls.append(m.group(1))
+    bad = [c for c in calls if len([x for x in c.split(",") if x.strip()]) < 5]
+    # ⚠️ 判據必須先斷「找得到呼叫點」——re 找不到時 calls 是空列表，
+    #    `not bad` 對空列表恆真，那就又是「壞法不發聲」的假綠。
+    check("每個 markSentence 呼叫點都傳了 s/e（不是只驗函式本身）",
+          len(calls) >= N_CALL_SITES and not bad,
+          "共 {} 處呼叫（應 ≥{}），漏傳 {}".format(len(calls), N_CALL_SITES, len(bad)))
 
 
 def main() -> int:
@@ -148,24 +192,27 @@ def main() -> int:
     check("有含非 BMP 字的句子（B 路徑的前提）", len(nonbmp) > 0,
           "{} 條".format(len(nonbmp)))
 
-    # ---- 跑前端真碼 ----
-    tmp_js = os.path.join(tempfile.gettempdir(), "bi_verify_mark_runner.js")
-    tmp_js2 = os.path.join(tempfile.gettempdir(), "bi_verify_mark_data.json")
-    with open(tmp_js, "w", encoding="utf-8") as f:
-        f.write(RUNNER)
-    with open(tmp_js2, "w", encoding="utf-8") as f:
-        json.dump(rows, f, ensure_ascii=False)
+    # ---- 接線層：產品碼的呼叫點有沒有真的傳 s/e（P1-1） ----
+    check_call_sites()
 
+    # ---- 跑前端真碼 ----
+    # ⚠️ **不落盤**：runner 走 `node -e`（當作命令列參數，約 2–3KB，遠低於
+    #    Windows 命令列 32767 上限），18 萬條資料走 stdin。
+    #    原本寫到 tempfile.gettempdir()，那樣有兩個毛病：
+    #      (1) 某些機器上 tempfile 直接拋 `No usable temporary directory`
+    #          ——**極容易被誤讀成「斷言發現問題」**，其實是環境；
+    #      (2) 白白把 15MB JSON 寫一遍磁碟。
+    #    不落盤之後這兩個都消失，也不需要任何清理。
+    if len(RUNNER) > 30000:
+        check("runner 沒超出命令列長度上限", False, "{} 字元".format(len(RUNNER)))
+        return 1
     try:
-        p = subprocess.run([NODE, tmp_js, os.path.join(ROOT, "app", "web", "app.js"), tmp_js2],
+        p = subprocess.run([NODE, "-e", RUNNER, APP_JS],
+                           input=json.dumps(rows, ensure_ascii=False),
                            capture_output=True, text=True, encoding="utf-8")
-    finally:
-        for pth in (tmp_js, tmp_js2):
-            if os.path.exists(pth):
-                try:
-                    os.remove(pth)
-                except OSError:
-                    pass
+    except OSError as ex:
+        check("跑得動 node", False, "{}".format(ex))
+        return 1
 
     if p.returncode != 0:
         check("抽出 hitSpan/markSentence 並跑全量", False,
@@ -182,10 +229,16 @@ def main() -> int:
           "{}/{} 錯，樣例 {}".format(r["bad"], r["n"], r.get("badSamples")))
     check("每條都標得到（沒有落空成 null）", r["nullSpan"] == 0,
           "{} 條標不到".format(r["nullSpan"]))
+    # 路徑分佈（可對賬：獨立複算 A=182065 / B=63 / C=0）
     check("B 路徑（按碼位切）確實被走到過", r["pathB"] > 0,
-          "{} 條含非 BMP 字".format(r["pathB"]))
+          "A={} B={} C={}".format(r["pathA"], r["pathB"], r["pathC"]))
     check("C 路徑（indexOf 兜底）幾乎不走", r["pathC"] == 0,
           "{} 條落到兜底（s/e 與 text 不同源，要查數據）".format(r["pathC"]))
+    # ⚠️ 三路徑互斥且覆蓋全部：這條守的是「上面那段路徑判據與 hitSpan 沒走偏」
+    #    ——判據與实现不同步時，它會紅，而不是讓分佈數字悄悄騙人。
+    check("A/B/C 三路徑互斥且覆蓋全部",
+          r["pathA"] + r["pathB"] + r["pathC"] == r["n"],
+          "{}+{}+{} vs {}".format(r["pathA"], r["pathB"], r["pathC"], r["n"]))
 
     ok = sum(1 for _, v in CHECKS if v)
     print("\n  {}/{} 通過".format(ok, len(CHECKS)))

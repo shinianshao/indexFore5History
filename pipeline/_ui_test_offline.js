@@ -535,6 +535,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const pl = peiLines[0];
     const wantCid2 = pl.getAttribute("data-chapter");
     const pseq = pl.getAttribute("data-pseq");
+    // ⚠️ 這條必須單獨斷：下面「按段號定位」裹在 if (pseq != null) 裡，
+    //    屬性一旦不見，它只是**不出現**，測試總數不變、失败 0、綠。
+    ok("明細行帶 data-pseq（否則「按段號定位」那條會靜默不執行）", pseq != null,
+      "data-pseq=" + pseq + " / 章 " + wantCid2);
     click(pl);
     const got2 = await waitFor(() => readerEl.classList.contains("on"), 60000);
     const ps2 = doc.querySelectorAll("#readerBody p[data-uid]");
