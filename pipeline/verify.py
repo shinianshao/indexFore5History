@@ -215,6 +215,119 @@ def _newchain_cases():
     return out
 
 
+def _workbook_cases():
+    """句子工作簿的 uid 必须与库**同名同值**（2026-10-04 修掉的四参数分叉）。
+
+    `workbook/sentences-*.xlsx` 是被 gitignore 的派生视图，平时没人会去核对它，
+    所以 `build_workbook.py` 里那份 uid 算法被写成四参数（尾部多拼了原文）之后，
+    22,104 行与库**零命中**，静默错了好几轮——不报错、没人看、也不影响网页。
+
+    断言放在这里（而不是库里）：表只要在，uid 就必须逐条等于 `common.stable_uid`，
+    且库里真有这一句。另有静态一条守「源里不许再长出第二份算法」。
+    """
+    import glob as _glob
+    import io as _io
+
+    out = []
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    # 静态：build_workbook 只許 import common.stable_uid，不許再自帶一份 md5
+    try:
+        bw_src = _io.open(os.path.join(here, "build_workbook.py"),
+                          encoding="utf-8").read()
+    except OSError as ex:
+        out.append(("build_workbook 只許用 common.stable_uid", False, str(ex)))
+        bw_src = ""
+    if bw_src:
+        # 判據取 `import hashlib / def make_uid`（自己再實現一份就必須 import hashlib），
+        # 不能取 `md5(` —— 那是註釋裡也會出現的普通詞，會被自己的說明文字誤傷。
+        _reimpl = "import hashlib" in bw_src or "def make_uid" in bw_src
+        out.append(("build_workbook 不再自帶 uid 算法",
+                    (not _reimpl) and "stable_uid" in bw_src,
+                    "自帶={} / 用 common.stable_uid={}".format(
+                        _reimpl, "stable_uid" in bw_src)))
+
+    # ⚠ 排除 `.bak-` 備份：它是**刻意留下的舊檔**（覆蓋前留的退路，已被 gitignore），
+    #   拿它當斷言對象只會讓「修好了」看起來還紅著。
+    paths = sorted(p for p in _glob.glob(
+        os.path.join(ROOT, "workbook", "sentences-*.xlsx")) if ".bak-" not in p)
+    if not paths:
+        # 派生视图且被 gitignore：全新 clone 里没有它，跳过（不假装通过也不判失败）
+        out.append(("句子工作簿 uid 与库一致", True,
+                    "无 sentences-*.xlsx（未生成，重跑 build_workbook 才有），跳过"))
+        return out
+
+    sys.path.insert(0, here)
+    from common import stable_uid
+    try:
+        from openpyxl import load_workbook
+    except Exception as ex:                       # pragma: no cover
+        out.append(("句子工作簿 uid 与库一致", False, "缺 openpyxl：{}".format(ex)))
+        return out
+
+    db_path = os.path.join(ROOT, "data", "index", "index.db")
+    db_uids = set()
+    if os.path.exists(db_path):
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        try:
+            db_uids = {r[0] for r in conn.execute("SELECT uid FROM sentences")}
+        finally:
+            conn.close()
+
+    def _as_int(v):
+        """Excel 讀回來的整數可能是 `17.0`：拼 key 前必須歸一。
+
+        不歸一的後果是「靜默對不上」而不是報錯——踩過同一個坑：徽章消失。
+        """
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+        return v
+
+    for p in paths:
+        name = os.path.basename(p)
+        try:
+            wb = load_workbook(p)
+        except Exception as ex:
+            out.append(("句子工作簿 {} 能读开".format(name), False, str(ex)))
+            continue
+        if "句子" not in wb.sheetnames:
+            out.append(("句子工作簿 {} 有「句子」页".format(name), False,
+                        "页签：{}".format(wb.sheetnames)))
+            continue
+        rows = list(wb["句子"].iter_rows(values_only=True))
+        hdr = [str(h) for h in (rows[0] if rows else [])]
+        try:
+            iu = hdr.index("uid")
+            ic = hdr.index("篇(chapterId)")
+            ip = hdr.index("段序")
+            isq = hdr.index("句序")
+        except ValueError as ex:
+            out.append(("句子工作簿 {} 列名未改".format(name), False, str(ex)))
+            continue
+        n, bad_alg, not_in_db = 0, [], []
+        for r in rows[1:]:
+            if iu >= len(r) or not r[iu]:
+                continue
+            n += 1
+            u = str(r[iu]).strip()
+            # ⚠ 兩個桶都要獨立統計，不能用 elif：算法錯時「在庫裡」那條會被
+            #   整段跳過，變成一條永遠綠的假斷言（四參數那次正是如此）。
+            if u != stable_uid(r[ic], _as_int(r[ip]), _as_int(r[isq])):
+                bad_alg.append(u)
+            if db_uids and u not in db_uids:
+                not_in_db.append(u)
+        # ⚠ n > 0 不能省：表空了 `not bad_alg` 對空列表恆真，那就又是假綠
+        out.append(("句子工作簿 {} uid 算法 = common.stable_uid".format(name),
+                    n > 0 and not bad_alg,
+                    "{} 行，不一致 {} 条 {}".format(n, len(bad_alg), bad_alg[:3])))
+        out.append(("句子工作簿 {} uid 在库里都存在".format(name),
+                    n > 0 and bool(db_uids) and not not_in_db,
+                    "{} 行 / 库 {:,}，库里没有 {} 条 {}".format(
+                        n, len(db_uids), len(not_in_db), not_in_db[:3])))
+    return out
+
+
 def check():
     """回归断言：每条都对应一个曾经真实出错的场景。"""
     cases = []
@@ -1179,6 +1292,7 @@ def check():
                   not _bad_rej, "误收={}".format(_bad_rej)))
 
     cases.extend(_newchain_cases())
+    cases.extend(_workbook_cases())
 
     print("=" * 72)
     print("回归断言")

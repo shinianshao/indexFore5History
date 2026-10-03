@@ -12,9 +12,11 @@
 --------
 - **一行一个实体**，别名用 `|` 分隔放在同一格——编辑时不用上下翻。
 - `pinyin` 与 `in_<书>` 是**只读辅助列**：只用来排序和筛选，pipeline 不读它们。
-- `uid`（句子）是**稳定主键**，首次生成后必须固化在表里，之后不再重算。
-  ⚠️ 现在这版是「初版 uid」：`md5(篇|段序|句序|原文)` 前 12 位。
-  一旦 P1 落地，它就以 Excel 里写的为准，脚本不再重算——否则一改切分就全变。
+- `uid`（句子）是**稳定主键**，算法只有 `common.stable_uid` 一份：`md5(篇|段序|句序)` 前 12 位。
+  ⚠️ 早期这里另写了一份**四参数**版本（尾部多拼了原文），跟库里的 `sentence_uid`
+  **全表对不上**（实测 22,104 行 0 命中），已删。`pipeline/verify.py --check` 的
+  「句子工作簿 uid」一条守着：表只要在，就必须与库逐条一致。
+  一旦 P1 落地，uid 就以上游语料里写好的为准，本脚本不再重算——否则一改切分就全变。
 - 只读列用浅灰底纹标出来，避免误改。
 
 用法
@@ -26,7 +28,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import sys
@@ -44,6 +45,13 @@ except Exception:                                     # pragma: no cover
         return [s]
 
 sys.stdout.reconfigure(encoding="utf-8")
+
+# 句子 uid 的算法**全项目只有一份**：common.stable_uid（build / tag_uids /
+# build_index_db 三处共用）。这里绝不能另写一份——2026-10-04 之前正是这么干的
+# （多拼了原文变四参数），结果 workbook/sentences-sj.xlsx 的 22,104 行 uid
+# 与库**零命中**，而 xlsx 又是派生视图、没人会去核对，静静错了好几轮。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from common import stable_uid                                   # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "workbook"
@@ -134,12 +142,6 @@ def sheet_places(wb, places):
     return ws
 
 
-def make_uid(chapter_id, para, seq, text):
-    """初版稳定主键。生成一次后应固化在表里，不再重算。"""
-    raw = "{}|{}|{}|{}".format(chapter_id, para, seq, text)
-    return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
-
-
 def sheet_sentences(wb, sentences, chapters, books):
     ws = wb.create_sheet("句子")
     headers = ["uid", "位置键", "书", "篇(chapterId)", "篇名", "段序", "句序",
@@ -155,7 +157,7 @@ def sheet_sentences(wb, sentences, chapters, books):
             continue
         ch = chapters.get(cid, {})
         ws.append([
-            make_uid(cid, s.get("paraSeq"), s.get("seq"), s.get("text") or ""),
+            stable_uid(cid, s.get("paraSeq"), s.get("seq")),
             s.get("id") or "",
             BOOK_NAME.get(bk, bk),
             cid,
@@ -190,8 +192,10 @@ def sheet_readme(wb, what):
         ("  你直接改这一列不影响任何功能。", False),
         ("", False),
         ("关于 uid", True),
-        ("  句子表的 uid 是稳定主键（md5 前 12 位）。首次生成后必须固化在表里，", False),
-        ("  之后即使改动句子顺序/边界也不许重算——否则全部外键会失效。", False),
+        ("  句子表的 uid = md5(篇|段序|句序) 前 12 位，与库里的 sentence_uid 同名同值。", False),
+        ("  算法只有 common.stable_uid 一份，改它要同时改 build / tag_uids / build_index_db。", False),
+        ("  ⚠ 早期这表拼成了四参数（尾部多加了原文），与库零命中，2026-10-04 已修正。", False),
+        ("  首次生成后即固化在表里，之后改句子顺序/边界也不许重算——否则外键全失效。", False),
     ]
     for i, (txt, bold) in enumerate(lines, start=1):
         c = ws.cell(row=i, column=1, value=txt)
@@ -336,7 +340,15 @@ def main():
     ap.add_argument("--all-books", action="store_true", help="句子导出全部五书")
     ap.add_argument("--force", action="store_true",
                     help="即使检测到表格里有人工改动也强行重建（先自动备份）")
+    ap.add_argument("--only", default="all",
+                    help="只重建哪一份工作簿：persons / places / sentences / all（默认 all）。"
+                         "只想刷新句子表时用 --only sentences，"
+                         "免得顺手动到已经是权威源的 persons.xlsx。")
     a = ap.parse_args()
+    which = (a.only or "all").strip().lower()
+    if which not in ("all", "persons", "places", "sentences"):
+        ap.error("--only 只能是 persons / places / sentences / all")
+    sel = {"persons", "places", "sentences"} if which == "all" else {which}
 
     people = load_source_persons()
     places = json.loads(PLACES.read_text(encoding="utf-8"))["places"]
@@ -355,28 +367,33 @@ def main():
     outs = []
 
     # 人物 / 地名：先过「人工改动」闸门，再决定写到哪里（红线 1）
-    wb = Workbook(); wb.remove(wb.active)
-    sheet_readme(wb, "人物")
-    sheet_persons(wb, people, counts, bookmap)
-    t1 = OUT / "persons.xlsx"
-    w1, _ = resolve_target(t1, "人物", PERSON_HUMAN_FIELDS, people, "person", a.force)
-    _backup(t1, a.force)
-    wb.save(w1); outs.append((w1, len(people)))
+    if "persons" in sel:
+        wb = Workbook(); wb.remove(wb.active)
+        sheet_readme(wb, "人物")
+        sheet_persons(wb, people, counts, bookmap)
+        t1 = OUT / "persons.xlsx"
+        w1, _ = resolve_target(t1, "人物", PERSON_HUMAN_FIELDS, people,
+                               "person", a.force)
+        _backup(t1, a.force)
+        wb.save(w1); outs.append((w1, len(people)))
 
-    wb = Workbook(); wb.remove(wb.active)
-    sheet_readme(wb, "地名")
-    sheet_places(wb, places)
-    t2 = OUT / "places.xlsx"
-    w2, _ = resolve_target(t2, "地名", PLACE_HUMAN_FIELDS, places, "place", a.force)
-    _backup(t2, a.force)
-    wb.save(w2); outs.append((w2, len(places)))
+    if "places" in sel:
+        wb = Workbook(); wb.remove(wb.active)
+        sheet_readme(wb, "地名")
+        sheet_places(wb, places)
+        t2 = OUT / "places.xlsx"
+        w2, _ = resolve_target(t2, "地名", PLACE_HUMAN_FIELDS, places,
+                               "place", a.force)
+        _backup(t2, a.force)
+        wb.save(w2); outs.append((w2, len(places)))
 
     # 句子是纯派生视图（人不改它），可以无条件覆盖
-    wb = Workbook(); wb.remove(wb.active)
-    sheet_readme(wb, "句子")
-    _, n = sheet_sentences(wb, bd["sentences"], chapters, books)
-    tag = "all" if a.all_books else "-".join(sorted(books))
-    p3 = OUT / "sentences-{}.xlsx".format(tag); wb.save(p3); outs.append((p3, n))
+    if "sentences" in sel:
+        wb = Workbook(); wb.remove(wb.active)
+        sheet_readme(wb, "句子")
+        _, n = sheet_sentences(wb, bd["sentences"], chapters, books)
+        tag = "all" if a.all_books else "-".join(sorted(books))
+        p3 = OUT / "sentences-{}.xlsx".format(tag); wb.save(p3); outs.append((p3, n))
 
     for path, rows in outs:
         print("-> {}   {} 行".format(path, rows))
