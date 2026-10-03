@@ -67,6 +67,7 @@ app/web           ← 查询与编辑界面（FastAPI）
 | **P7-1** | pid 语义化（占位归零）/ 原文层跳段與段落篩選 / 裴注独立账本 | ✅ **已完成**（2026-10-02） |
 | **P7-2** | 人物页对齐静态版：完整称谓表 / 「前朝」标记 | ✅ **已完成**（2026-10-03） |
 | **P3-4** | 网页「标错」入口（UI 代写 `overrides.xlsx`） | ✅ **已完成**（2026-10-03，见下文） |
+| **P8-1** | 地名检索 + 地名详情页 + 离线补齐 | ✅ **已完成**（2026-10-03，见下文） |
 
 ### 界面上的两处小改动（2026-09-29）
 
@@ -97,6 +98,8 @@ python app/tools/rebuild.py
 | `app/tools/snapshot.py` | 快照与 diff：`dump` / `list` / `diff` / `drop`。独立库 `data/index/snapshots.db` |
 | `app/tools/overrides.py` | 单条纠错：`init` / `show` / `add` / `revoke` / `list` / `apply`。表在 `workbook/overrides.xlsx` |
 | `app/tools/verify_p3.py` | 新链路断言（条数以当次输出为准，只许升不许降） |
+| `app/tools/verify_p3_overrides.py` | 只跑 `[16]`（纠错入口），15 秒版 |
+| `app/tools/verify_p3_place.py` | 只跑 `[17]`（地名检索与详情），15 秒版 |
 
 两个要点（都是踩过才知道的）：
 
@@ -151,6 +154,37 @@ POST /api/override/revoke  {uid}                  撤销该句的全部纠错
 > UI 测试真的会点一次「标错」，而 revoke 是**改状态不删行**，打真实权威源就等于
 > 每次回归给 `workbook/overrides.xlsx` 多两行 dead 行。`run_all.sh` 已指向
 > `data/index/overrides.ui-test.xlsx`（已 gitignore），服务启动时会把这件事嚷出来。
+
+### P8-1 已交付什么（地名检索 + 详情页 + 离线）
+
+此前地名侧**能列不能点**：`/api/search` 只查 persons、没有任何 `/api/place/...` 端点、
+`export_static.py` 只导 places 主表（`place_mentions` 一点痕迹都没有）。
+
+**根因不是检索逻辑，是建库漏了一列**：`places.name` 与 `trad_name` **逐行相同**
+（全表 0 行不同），简体名一直只存在 book-data 的 `aliases` 里而从未灌进库
+→ 输「邯郸」零命中，**联机离线都一样**。新建 `place_aliases` 表（2464 条 / 覆盖
+全部 1575 个地名，次数与分书从 `place_mentions.surface` **现算**——`aliases` 不带次数）。
+修后：邯郸 → 邯鄲 273 处；長安 1346、成都 434、临淄 50、江陵 218。
+
+新增/变更：
+
+```
+GET /api/search?q=&kind=all|person|place     → {query, items, places}
+GET /api/place/{pid}?limit=                  → {profile, mentions, books, aliases}
+```
+
+- **索引条目直接进详情页**（`data-place`），不再绕人物搜索——地名实测无重名，
+  绕一圈只会撞上「人物搜索里没有这个地名」→ 空。
+- **`renderPlace` 与 `renderPerson` 刻意同构**（payload 同形）。写第二套渲染不是省事，
+  是多一处会悄悄分叉的地方。
+- 离线补 `pmen` / `plalias` / `plbook` 三块（data.js 16.5 → 19.1MB）。买的是两边不分歧。
+- `readerState.pid` 改名 **`scope`**：它**只当布爾用**（「有没有筛选上下文」），
+  人物页与地名页都往里塞 id。不改的话地名页的「只看相關段落」按钮直接消失。
+
+> ⚠️ **地名侧最贵的坑是「不报错」**：搜不到、点不动，界面都不提示。
+> 所以断言必须断在「会被打破的那一层」——`search_places` 不查 `place_aliases`
+> （db 层）、端点忘返 `places`（只有端点层能抓）、离线漏导 `plalias`（只有离线测试能抓）。
+> 端点层要**真打一次 HTTP**，db 层全绿不代表端点没漏字段。
 
 ### P6-2 已交付什么（关系抽取）
 
@@ -450,6 +484,7 @@ print('persons', len(d['persons']), 'places', len(d['places']), 'chapters', len(
 | 人物详情完整称谓表 | 2026-10-03 | `28bda38` |
 | 「前朝」小标记 | 2026-10-03 | `4cda891` |
 | **P3-4 网页「标错」入口** | 2026-10-03 | `841c32a`，见上文 P3-4 一节 |
+| **P8-1 地名检索 + 详情页 + 离线** | 2026-10-03 | `cc62e9e`，见上文 P8-1 一节 |
 
 关系抽取那批：裸帝号 **40 条已判**（36 accept / 2 reject），`docs/26` 只剩 7 条
 （1 条同名待你拍板 + 6 条库里没有这个人，要先补人）。
