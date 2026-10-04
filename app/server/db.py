@@ -399,23 +399,42 @@ def index_payload(book: str = "", sort: str = "c",
     }
 
 
-def person_payload(pid: str, limit: int = 200) -> Optional[Dict[str, Any]]:
+def person_payload(pid: str, limit: int = 200, book: Optional[str] = None,
+                   era: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """`/api/person/{pid}` 的响应体（同上：联机端点与离线导出共用）。
 
     查不到人返回 None，由调用方翻成 404 / 跳过。
+
+    ⚠️ `mentions` 是**被 limit 截断**的，所以它 `.length` 是「本次載入了幾條」，
+    **不是「這人有幾處」**——曾经前端直接拿它当命中数显示，于是
+    「正文命中 200 處」跟搜索卡的 2,064 處自相矛盾（docs/34 P0-3）。
+    真正的全量在 `mentionByBook`（按书的分布，五项之和 = 全量）。
     """
     profile = person_profile(pid)
     if not profile:
         return None
     return {
         "profile": profile,
-        "mentions": person_mentions(pid, None, limit),
+        "mentions": person_mentions(pid, None, limit, book=book, era=era),
         # 直接给图（{nodes, edges}），与前端 renderGraph 的契约一致
         "relations": relations_graph(pid, 1, limit=limit),
         # 注文（裴注 / 晉書舊史注）：**独立账本**，与上面的正文命中分开算。
         # 前端合计时要把注文分量标成【裴N】，不能混进 mentionCount。
         "notes": person_notes_payload(pid),
+        # 正文命中的**全量**分布（不受 limit / 篩選影響）。
+        # 前端拿它算「共 N 處」和每个筛选桶的条数——联机只给 200 条，
+        # 光靠 mentions 算不出来；离线同理吃这一份，两边口径才不会分叉。
+        "mentionByBook": mention_by_book(pid),
+        # 時代名（下標 = eraRank）。前端不再自己抄一份時代表。
+        "eraNames": ERA_NAMES,
     }
+
+
+# 時代序 → 名稱。與 pipeline/annotate.py::ERA_ORDER **必須逐字一致**，
+# app/ 不能 import pipeline/，只能抄這一份——verify_p3 [16] 用正則把兩邊對一遍。
+ERA_NAMES = ["上古", "夏", "商", "西周", "東周", "春秋",
+             "戰國", "秦", "秦末", "西漢", "新", "東漢",
+             "三國", "西晉", "東晉", "十六國"]
 
 
 def quick_words(book: str = "", np: int = 20, nl: int = 10) -> Dict[str, Any]:
@@ -553,8 +572,40 @@ def _decode_alias_rows(rows) -> List[Dict[str, Any]]:
     return out
 
 
+def book_codes() -> List[str]:
+    """库里真有的书号（按 code 排序）。端点校验 `?book=` 用它，别手写常量。"""
+    with connect() as conn:
+        return [r[0] for r in conn.execute("SELECT code FROM books ORDER BY code")]
+
+
+def _by_book(table: str, id_col: str, pid: str) -> Dict[str, int]:
+    """命中**按书分布**（全量，不受 limit / 篩選影響）。人物側與地名側共用。
+
+    五本书都给键（没命中就是 0）——前端要靠它渲染筛选桶，缺键会静默不显示。
+    """
+    with connect() as conn:
+        codes = [r[0] for r in conn.execute("SELECT code FROM books ORDER BY code")]
+        got = {r["b"]: r["n"] for r in conn.execute(
+            "SELECT c.book_id AS b, COUNT(*) AS n FROM {} m "
+            "JOIN sentences s ON s.uid = m.sentence_uid "
+            "JOIN chapters c ON c.id = s.chapter_id "
+            "WHERE m.{} = ? GROUP BY c.book_id".format(table, id_col), (pid,))}
+    return {c: int(got.get(c, 0)) for c in codes}
+
+
+def mention_by_book(pid: str) -> Dict[str, int]:
+    """某人的正文命中按书分布。语义见 `_by_book`。"""
+    return _by_book("mentions", "person_id", pid)
+
+
+def place_mention_by_book(pid: str) -> Dict[str, int]:
+    """某地名的命中按书分布。语义见 `_by_book`。"""
+    return _by_book("place_mentions", "place_id", pid)
+
+
 def person_mentions(pid: str, tier: Optional[str] = None,
-                    limit: int = 200) -> List[Dict[str, Any]]:
+                    limit: int = 200, book: Optional[str] = None,
+                    era: Optional[int] = None) -> List[Dict[str, Any]]:
     """某人的命中，**按篇分组**返回——这是详情页右侧的主体。
 
     ⚠️ `m.s` / `m.e` 是 pipeline 用 Python 算的**Unicode 码位**下标
@@ -567,7 +618,7 @@ def person_mentions(pid: str, tier: Optional[str] = None,
     """
     sql = """
         SELECT c.full_title AS chapter, s.chapter_id, s.uid, s.text,
-               m.surface, m.s, m.e, m.tier
+               m.surface, m.s, m.e, m.tier, c.book_id AS book
         FROM mentions m
         JOIN sentences s ON s.uid = m.sentence_uid
         LEFT JOIN chapters c ON c.id = s.chapter_id
@@ -577,6 +628,17 @@ def person_mentions(pid: str, tier: Optional[str] = None,
     if tier:
         sql += " AND m.tier = ?"
         args.append(tier)
+    if book:
+        sql += " AND c.book_id = ?"
+        args.append(book)
+    if era is not None:
+        # 時代篩選 = 「句子所在書的記載區間含這個時代」。
+        # ⚠️ 史記是通史（era_from IS NULL）→ **不屬於任何具體時代**，
+        #    它單獨佔「按書 = 史記」那一桶。若把 NULL 當成「含全部時代」，
+        #    每個時代桶都會被史記灌滿，篩選就失去意義。
+        sql += (" AND c.book_id IN (SELECT code FROM books "
+                "WHERE era_from IS NOT NULL AND era_from <= ? AND era_to >= ?)")
+        args += [era, era]
     sql += " ORDER BY s.chapter_id, s.para_seq, s.seq LIMIT ?"
     args.append(limit)
     with connect() as conn:
@@ -804,7 +866,8 @@ def place_profile(pid: str) -> Optional[Dict[str, Any]]:
     return out
 
 
-def place_mentions(pid: str, limit: int = 200) -> List[Dict[str, Any]]:
+def place_mentions(pid: str, limit: int = 200, book: Optional[str] = None,
+                   era: Optional[int] = None) -> List[Dict[str, Any]]:
     """某地名的命中，**按篇分组**返回（与 `person_mentions` 同构）。
 
     照抄人物侧是有意的：详情页的渲染代码（分篇标题 / 标命中 / 点句进原文层）
@@ -818,15 +881,25 @@ def place_mentions(pid: str, limit: int = 200) -> List[Dict[str, Any]]:
     """
     sql = """
         SELECT c.full_title AS chapter, s.chapter_id, s.uid, s.text,
-               m.surface, m.s, m.e, m.tier
+               m.surface, m.s, m.e, m.tier, c.book_id AS book
         FROM place_mentions m
         JOIN sentences s ON s.uid = m.sentence_uid
         LEFT JOIN chapters c ON c.id = s.chapter_id
         WHERE m.place_id = ?
-        ORDER BY s.chapter_id, s.para_seq, s.seq LIMIT ?
     """
+    args: List[Any] = [pid]
+    if book:
+        sql += " AND c.book_id = ?"
+        args.append(book)
+    if era is not None:
+        # 與 `person_mentions` 同一條規則（史記是通史，不屬任何具體時代）
+        sql += (" AND c.book_id IN (SELECT code FROM books "
+                "WHERE era_from IS NOT NULL AND era_from <= ? AND era_to >= ?)")
+        args += [era, era]
+    sql += " ORDER BY s.chapter_id, s.para_seq, s.seq LIMIT ?"
+    args.append(limit)
     with connect() as conn:
-        return [dict(r) for r in conn.execute(sql, (pid, limit))]
+        return [dict(r) for r in conn.execute(sql, args)]
 
 
 def place_books(pid: str) -> List[Dict[str, Any]]:
@@ -846,7 +919,8 @@ def place_books(pid: str) -> List[Dict[str, Any]]:
     return sorted(rows, key=lambda x: -x["n"])
 
 
-def place_payload(pid: str, limit: int = 200) -> Optional[Dict[str, Any]]:
+def place_payload(pid: str, limit: int = 200, book: Optional[str] = None,
+                  era: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """`/api/place/{pid}` 的响应体（**联机端点与离线导出共用**，同 `person_payload`）。
 
     把这一步放在 db 层而不是端点里，是为了让 `export_static.py` 能直接抄——
@@ -858,8 +932,12 @@ def place_payload(pid: str, limit: int = 200) -> Optional[Dict[str, Any]]:
         return None
     return {
         "profile": profile,
-        "mentions": place_mentions(pid, limit),
+        "mentions": place_mentions(pid, limit, book=book, era=era),
         "books": place_books(pid),
+        # 與人物側同名的兩個欄位（同源同形，`renderPlace` 與 `renderPerson`
+        # 共用同一段篩選/計數代碼）：全量分布 + 時代名。
+        "mentionByBook": place_mention_by_book(pid),
+        "eraNames": ERA_NAMES,
         # 寫法清單：讓詳情頁能說清「邯鄲也寫作邯郸」。少了它，用戶輸簡體沒命中
         # 會以為這個地名不存在（而 places.name 與 trad_name 逐行相同，沒這份
         # 資料就無從解釋）。

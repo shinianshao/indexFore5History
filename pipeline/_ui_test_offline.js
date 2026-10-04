@@ -218,6 +218,69 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok("人物页没有糾錯條（离线不加载 /api/overrides）",
     out.querySelectorAll(".ovbar").length === 0);
 
+  /* P0-丙（2026-10-04）：命中數口徑 + 篩選。
+     聯機 limit=200、離線給全量是**刻意差異**，但頁面不能把「本次載入了幾條」
+     當成「這人有幾處」——搜索卡說 2,064、人物頁說 200，兩個真數字挨在同一屏，
+     而且 200 緊挨著【裴726】，用戶會讀成「200 + 726」（docs/34 P0-3）。
+
+     離線這裡斷三件事：
+       ① 篩選條在（兩個 select.mf）；
+       ② 「共 N 處」取自全量分佈 mentionByBook，不是 mentions.length；
+       ③ 切到「按書：X」後，下拉裡寫的數 == 實際渲染的條數。
+          ⚠️ 這條專門守「緊湊陣列的書序」：pmbk 用 ORDER BY code（hhs 打頭），
+          常量 BOOKS 是成書先後（sj 打頭），還原錯位時**總和不變**，
+          只有「按書後對不上」會紅。 */
+  const mfbar = out.querySelector(".mfbar");
+  ok("人物页有命中筛选条（.mfbar）", !!mfbar);
+  const mfSel = mfbar ? mfbar.querySelectorAll("select.mf[data-mf]") : [];
+  ok("筛選條有「按書」和「按時代」兩個下拉", mfSel.length === 2,
+    "实得 " + mfSel.length + " 个");
+  const mfcount = mfbar ? mfbar.querySelector(".mfcount") : null;
+  const cntTxt = mfcount ? String(mfcount.textContent || "") : "";
+  const cntNum = Number((cntTxt.match(/[\d,]+/) || ["0"])[0].replace(/,/g, ""));
+  const shownRows = out.querySelectorAll(".sent[data-chapter]").length;
+  ok("「共 N 處」寫的是全量數（不是被截斷的 200）", cntNum > 200,
+    "实得「" + cntTxt + "」");
+  ok("離線「共 N 處」與實際渲染條數一致（全量就該對得上）",
+    cntNum > 0 && cntNum === shownRows,
+    "共 " + cntNum + " / 渲染 " + shownRows);
+
+  /* 按書篩選：下拉寫的數必須與篩完後真的渲染出來的數相等。 */
+  const bookSel = mfbar ? mfbar.querySelector('select.mf[data-mf="book"]') : null;
+  const bOpts = bookSel
+    ? [...bookSel.querySelectorAll("option")].filter((o) => o.value) : [];
+  ok("「按書」下拉裡有非零的書可選（0 處的書不列）", bOpts.length > 0,
+    "实得 " + bOpts.length + " 项");
+  if (bOpts.length) {
+    const opt = bOpts[0];
+    const labelN = Number((String(opt.textContent || "").match(/[\d,]+/) || ["0"])[0]
+      .replace(/,/g, ""));
+    bookSel.value = opt.value;
+    bookSel.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await waitFor(
+      () => out.querySelectorAll(".sent[data-chapter]").length !== shownRows, 30000);
+    const after = out.querySelectorAll(".sent[data-chapter]").length;
+    ok("切「按書」後真的換了一批命中（不是死下拉）", after > 0 && after !== shownRows,
+      "篩後 " + after + " / 篩前 " + shownRows);
+    ok("下拉寫的「N 處」與篩後渲染條數一致（書序錯位會在這紅）",
+      labelN > 0 && labelN === after,
+      "下拉 " + labelN + " / 渲染 " + after);
+    /* ⚠️ 篩選會整塊重渲染 out，前面抓的 mfbar 已經脫離文檔、讀到的是**舊文案**
+       （「等完要重新取元素」的同類坑）。這裡必須從 out 現取。 */
+    const cnt2 = out.querySelector(".mfbar .mfcount");
+    ok("篩選後「共 N 處」也跟著收窄（不是還掛著全量數）",
+      !!cnt2 && Number((String(cnt2.textContent || "").match(/[\d,]+/) || ["0"])[0]
+        .replace(/,/g, "")) === after,
+      cnt2 ? "实得「" + cnt2.textContent + "」/ 渲染 " + after : "无");
+    // 收尾：清掉篩選，別讓下一塊【5】關係卡在篩過的現場上跑
+    const clr = out.querySelector('button[data-act="mfclear"]');
+    if (clr) {
+      click(clr);
+      await waitFor(
+        () => out.querySelectorAll(".sent[data-chapter]").length === shownRows, 30000);
+    }
+  }
+
   console.log("\n【5】关系卡");
   const gotRel = await waitFor(() => !!doc.getElementById("relcard"), 60000);
   ok("关系卡渲染出来了", gotRel);

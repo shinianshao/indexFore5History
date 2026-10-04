@@ -140,6 +140,28 @@
   .alias-note { font-size: 12px; color: var(--muted); margin-top: 6px; }
   .summary { color: #6b6559; font-size: 14px; font-family: var(--serif); margin: 8px 0 0; }
 
+  /* 命中篩選條（按書 / 按時代）+ 「已顯示 N / 共 M」。
+     聯機 mentions 有 200 條上限，不說明就等于把 200 冒充成總數（docs/34 P0-3）。 */
+  .mfbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    margin: 14px 0 2px; padding: 8px 10px;
+    background: var(--accent-soft); border: 1px solid var(--border);
+    border-radius: 6px; font-size: 13px;
+  }
+  .mfbar select.mf {
+    font-family: inherit; font-size: 13px; padding: 3px 6px;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: #fff; color: var(--text); max-width: 100%;
+  }
+  .mfbar button.mf {
+    font-family: inherit; font-size: 12px; padding: 3px 8px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--muted);
+  }
+  .mfbar button.mf:hover { color: var(--accent); border-color: var(--accent); }
+  /* ⚠️ 這個數字是「本次載入了幾條 / 全量幾條」，與旁邊注文的【裴N】是兩本賬 */
+  .mfbar .mfcount { color: var(--muted); font-variant-numeric: tabular-nums; }
+
   .chapter-title {
     font-family: var(--serif); font-size: 15px; font-weight: 500;
     margin: 16px 0 6px; color: var(--text);

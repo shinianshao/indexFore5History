@@ -78,9 +78,16 @@
                  }) },
       mentions: (D.pm[pid] || []).map(function (m) {
         var s = D.sents[m[0]];
+        // book：篩選器與「共 N 處」都要認書（chaps[篇] = [全名, 書號, start, end)）
+        var bk = (D.chaps[s[1]] || [])[1] || "";
         return { chapter: CHAPT[s[1]] || "", chapter_id: s[1], uid: s[0],
-                 text: s[2], surface: m[1], s: m[2], e: m[3], tier: m[4] };
+                 text: s[2], surface: m[1], s: m[2], e: m[3], tier: m[4],
+                 book: bk };
       }),
+      // 全量分書分佈（聯機由 db.person_payload 給，離線由 export_static 的 pmbk 還原）。
+      // ⚠️ 兩邊**同形**：都是 {書號: 次數}，前端只寫一套計數代碼。
+      mentionByBook: mbkFromArray(D.pmbk && D.pmbk[pid]),
+      eraNames: D.eraNames || [],
       // 注文：離線版與聯機版**同源**（同一份 pei-data.json / js-note-data.json），
       // 形狀也一樣，所以 notesSection 一段代碼兩邊都能用。
       notes: offNotes(pid),
@@ -122,9 +129,12 @@
         var s = D.sents[m[0]];
         if (!s) return null;          // 句被棄用後從 sents 消失，命中就懸空了
         return { chapter: CHAPT[s[1]] || "", chapter_id: s[1], uid: s[0],
-                 text: s[2], surface: m[1], s: m[2], e: m[3], tier: m[4] };
+                 text: s[2], surface: m[1], s: m[2], e: m[3], tier: m[4],
+                 book: (D.chaps[s[1]] || [])[1] || "" };
       }).filter(Boolean),
       books: D.plbook[pid] || [],
+      mentionByBook: mbkFromArray(D.plbk && D.plbk[pid]),
+      eraNames: D.eraNames || [],
       aliases: (D.plalias[pid] || []).map(function (a) {
         return { w: a[0], n: a[1], byBook: a[2] || {} };
       })
@@ -567,8 +577,13 @@
   }
 
   function renderPerson(pid) {
+    resetMFilter("p:" + pid);
     return Promise.all([
-      request("/api/person/" + encodeURIComponent(pid)),
+      // ⚠️ 篩選要**帶在請求裡**讓服務端篩：客戶端只拿到 200 條，本地再篩
+      //    只是「從這 200 條裡挑」，用戶會以為「漢書只有 12 處」。
+      //    離線版忽略查詢串（路由是 `person/([^/?]+)`），所以那邊靠
+      //    `filterMentions` 本地篩全量——「只多不少」的快照正好篩得動。
+      request("/api/person/" + encodeURIComponent(pid) + mfQuery()),
       loadOverrides()
     ]).then(function (rs) {
       var d = rs[0];
@@ -584,8 +599,10 @@
       // ⚠️ mentions 有 limit（默認 200），**只覆蓋前 N 條**。所以篩選是
       // 「本頁已加載的命中」，不是全集；命中太多時人物頁本身也只顯示前 N，
       // 兩者口徑一致，不會出現「原文層說沒有、人物頁說有」的自相矛盾。
+      // ⚠️ 用**篩選後**的 rows：篩到漢書時「只看相關段落」也該只認漢書那些段。
+      var rows = filterMentions(d.mentions || []);
       var uids = {};
-      (d.mentions || []).forEach(function (m) { if (m.uid) uids[m.uid] = 1; });
+      rows.forEach(function (m) { if (m.uid) uids[m.uid] = 1; });
       readerState.hitUids = uids;
       var html = "<div class=\"card\">" +
         "<div class=\"person-head\"><span class=\"name\">" + esc(p.trad_name) + "</span>" +
@@ -616,8 +633,9 @@
       }
 
       // 命中按篇分組
+      html += mentionFilterBar(d, rows.length);
       var groups = [], byId = {};
-      (d.mentions || []).forEach(function (m) {
+      rows.forEach(function (m) {
         var key = m.chapter_id;        if (!byId[key]) { byId[key] = { title: m.chapter, rows: [] }; groups.push(byId[key]); }
         byId[key].rows.push(m);
       });
@@ -649,7 +667,11 @@
          寫成【裴N】/【舊注N】並列，絕不與正文的「N 處」相加。
          數據源是 pipeline 產的 pei-data.json / js-note-data.json（不入庫），
          經 db.person_notes_payload 傳過來，與聯機端點/離線導出共用一份。 */
-      html += notesSection(pid, d.notes || {}, (d.mentions || []).length);
+      // ⚠️ 這裡的「正文命中 N 處」**不能**用 mentions.length——那被 limit 截到
+      //    200，顯示出來就是「正文命中 200 處」，而搜索卡說 2,064 處，
+      //    兩個真數字挨在一起自相矛盾（docs/34 P0-3）。改用全量分佈算。
+      //    篩選生效時給篩選後的條數，與下面列表的口徑一致。
+      html += notesSection(pid, d.notes || {}, mbSelected(d));
 
       /* 關係：資料來自 workbook/relations.xlsx，後端已轉成 {nodes, edges}。
          圖 + 列表並存：**虛線＝無證據的推斷**，實線＝語料裡有原句可跳，
@@ -670,11 +692,14 @@
      的結構寫）。寫第二套渲染不是省事，是**多一處會悄悄分叉的地方**。
      地名側沒有的：稱謂表（人物特有）、關係圖（人物特有）、注文（裴注只跟人）。 */
   function renderPlace(plid) {
-    return request("/api/place/" + encodeURIComponent(plid)).then(function (d) {
+    resetMFilter("l:" + plid);
+    return request("/api/place/" + encodeURIComponent(plid) + mfQuery())
+      .then(function (d) {
       var p = d.profile;
       // 原文層的「只看相關段落」靠它（與人物頁同一個機制）
+      var rows = filterMentions(d.mentions || []);
       var uids = {};
-      (d.mentions || []).forEach(function (m) { if (m.uid) uids[m.uid] = 1; });
+      rows.forEach(function (m) { if (m.uid) uids[m.uid] = 1; });
       readerState.hitUids = uids;
       currentPid = null;
       currentPlace = plid;
@@ -706,7 +731,8 @@
       html += "</div>";
 
       var groups = [], byId = {};
-      (d.mentions || []).forEach(function (m) {
+      html += mentionFilterBar(d, rows.length);
+      rows.forEach(function (m) {
         var key = m.chapter_id;
         if (!byId[key]) { byId[key] = { title: m.chapter, rows: [] }; groups.push(byId[key]); }
         byId[key].rows.push(m);
@@ -1440,6 +1466,141 @@
   // 地名分組順序，與 pipeline/annotate_places.py 的 KIND_ORDER 一致
   var PLACE_KIND_ORDER = ["国", "郡", "县", "关", "山", "川", "湖", "域", "外"];
 
+  /* ---------- 命中篩選（按書 / 按時代）----------
+     聯機 `mentions` 有 200 條上限，離線給全量（docs/29 §六「只多不少」的刻意差異）。
+     兩個數挨在同一屏上就自相矛盾：搜索卡說 2,064 處、人物頁說 200 處，
+     而 200 緊挨著旁邊的【裴726】——用戶會讀成「200 + 726」（docs/34 P0-3）。
+
+     解法不是把上限調大，是三件事一起做：
+       ① 「共 N 處」永遠取**全量分佈** mentionByBook，不取 mentions.length；
+       ② 列表被截斷時明白寫「已顯示 200 / 共 2,064」，不截斷就不寫這行；
+       ③ 給篩選器，讓這 200 條花在用戶要看的那本書 / 那個時代上。
+
+     ⚠️ 時代桶由**前端**從 byBook + BOOKS[].era 推導：原始數據只有一份（後端給），
+        兩份前端跑同一段代碼。若讓後端把時代分佈也算出來，離線版就得再抄一遍
+        ——「離線路由忽略查詢串」意味著它根本問不到後端（MEMORY 的老坑）。
+     ⚠️ 時代篩選**不含史記**：它是通史（era = null），若當成「含全部時代」，
+        每個時代桶都會被它灌滿，篩選就失去意義。要看史記請用「按書」。 */
+  var mFilter = { who: "", book: "", era: "" };   // who = 當前實體 id（換人就重置）
+
+  /* ⚠️ 離線的 pmbk / plbk 是**緊湊陣列**（省體積），第 i 位屬於哪本書
+     由**導出時的順序**決定：`export_static.py` 用 `SELECT code FROM books
+     ORDER BY code`，也就是 hhs / hs / js / sgz / sj。
+     而常量 BOOKS 是**成書先後**順序（sj / hs / hhs / sgz / js）——兩者**不一樣**。
+     照 BOOKS 的下標還原會把漢書的數記到史記頭上，**總數卻一模一樣**
+     （求和對置換不變），所以不報錯、只是每本書的數全錯。
+     → 一律拿快照自己的 `books` 當尺；尺跟著數據走，任一端改順序都不會錯位。 */
+  function mbkCodes() {
+    if (OFF && D && D.books && D.books.length) {
+      return D.books.map(function (b) { return b[0]; });
+    }
+    return BOOKS.map(function (b) { return b.code; });
+  }
+  function mbkFromArray(arr) {
+    var o = {}, cs = mbkCodes();
+    if (!arr) return o;
+    for (var i = 0; i < cs.length && i < arr.length; i++) {
+      o[cs[i]] = Number(arr[i]) || 0;
+    }
+    return o;
+  }
+  function mbOf(d) { return (d && d.mentionByBook) || {}; }
+  function mbTotal(d) {
+    var m = mbOf(d), t = 0;
+    for (var k in m) { t += (Number(m[k]) || 0); }
+    return t;
+  }
+  function booksOfEra(e) {
+    return BOOKS.filter(function (b) {
+      return b.era && e >= b.era[0] && e <= b.era[1];
+    }).map(function (b) { return b.code; });
+  }
+  /** 當前篩選下的**全量**條數（不是本次載入了多少條）。 */
+  function mbSelected(d) {
+    var m = mbOf(d);
+    if (mFilter.book) return Number(m[mFilter.book]) || 0;
+    if (mFilter.era !== "") {
+      var n = 0;
+      booksOfEra(Number(mFilter.era)).forEach(function (c) {
+        n += (Number(m[c]) || 0);
+      });
+      return n;
+    }
+    return mbTotal(d);
+  }
+  /** 離線才用得上：聯機的 mentions 已被服務端篩過，本地再篩沒有意義。 */
+  function filterMentions(rows) {
+    if (!OFF) return rows;
+    if (mFilter.book) {
+      return rows.filter(function (m) { return m.book === mFilter.book; });
+    }
+    if (mFilter.era !== "") {
+      var cs = booksOfEra(Number(mFilter.era));
+      return rows.filter(function (m) { return cs.indexOf(m.book) >= 0; });
+    }
+    return rows;
+  }
+  function mentionFilterBar(d, shown) {
+    var m = mbOf(d), tot = mbTotal(d), sel = mbSelected(d);
+    var h = '<div class="mfbar">';
+    h += '<select class="mf" data-mf="book"><option value="">全五書（' +
+      tot.toLocaleString() + ' 處）</option>';
+    BOOKS.forEach(function (b) {
+      var n = Number(m[b.code]) || 0;
+      // 0 處的書不列：下拉裡躺著一排「0 處」只會讓人以為索引壞了
+      if (!n) return;
+      h += '<option value="' + b.code + '"' +
+        (mFilter.book === b.code ? " selected" : "") + '>按書：' + esc(b.name) +
+        '（' + n.toLocaleString() + ' 處）</option>';
+    });
+    h += "</select>";
+    var eras = (d && d.eraNames) || [];
+    h += '<select class="mf" data-mf="era"><option value="">全部時代</option>';
+    eras.forEach(function (nm, e) {
+      var n = 0;
+      booksOfEra(e).forEach(function (c) { n += (Number(m[c]) || 0); });
+      if (!n) return;
+      h += '<option value="' + e + '"' +
+        (String(mFilter.era) === String(e) ? " selected" : "") +
+        '>按時代：' + esc(nm) + '（' + n.toLocaleString() + ' 處）</option>';
+    });
+    h += "</select>";
+    // ⚠️ 只在**真的被截斷**時才寫這行：沒截斷還寫「已顯示 189 / 共 189」
+    //    是把一個真數字說得像被砍過，那也是騙人。
+    h += '<span class="mfcount">';
+    if (shown < sel) {
+      h += "已顯示 " + shown.toLocaleString() + " / 共 " + sel.toLocaleString() + " 處";
+    } else {
+      h += "共 " + sel.toLocaleString() + " 處";
+    }
+    h += "</span>";
+    if (mFilter.book || mFilter.era !== "") {
+      h += '<button class="mf" data-act="mfclear">清除篩選</button>';
+    }
+    h += "</div>";
+    return h;
+  }
+  function resetMFilter(who) {
+    if (mFilter.who !== who) { mFilter = { who: who, book: "", era: "" }; }
+  }
+  /** 篩選條件的查詢串（離線版會被路由忽略，那邊走本地篩）。 */
+  function mfQuery() {
+    if (mFilter.book) return "?book=" + encodeURIComponent(mFilter.book);
+    if (mFilter.era !== "") return "?era=" + encodeURIComponent(mFilter.era);
+    return "";
+  }
+  /** 篩選器被動了 → 重新渲染當前實體（聯機重新請求，離線本地篩）。 */
+  function onMFilterChange(kind, val) {
+    if (kind === "book") { mFilter.book = val; mFilter.era = ""; }
+    else { mFilter.era = val; mFilter.book = ""; }
+    var who = mFilter.who || "";
+    if (who.indexOf("p:") === 0) {
+      renderPerson(who.slice(2)).catch(showErr);
+    } else if (who.indexOf("l:") === 0) {
+      renderPlace(who.slice(2)).catch(showErr);
+    }
+  }
+
   var scopeBook = "";        // 空 = 全五書
   var currentTab = "search";
   var sortMode = "c";        // c = 篇數（默認），n = 次數
@@ -1702,7 +1863,20 @@
   qEl.addEventListener("keydown", function (ev) {
     if (ev.key === "Enter") search(ev.target.value);
   });
+  // 命中篩選器的下拉：必須單獨聽 change——click 委派只管得著按鈕，
+  // 而 `<select>` 選完不一定冒泡出可辨識的 click（有的瀏覽器根本不發）。
+  out.addEventListener("change", function (ev) {
+    var sel = ev.target.closest ? ev.target.closest("select.mf[data-mf]") : null;
+    if (!sel) return;
+    onMFilterChange(sel.getAttribute("data-mf"), sel.value);
+  });
   out.addEventListener("click", function (ev) {
+    // 「清除篩選」——排在最後會被當成別的東西（它可能落在卡片空白處），
+    // 所以這裡**第一個**認它。
+    if (ev.target.closest && ev.target.closest("button[data-act=\"mfclear\"]")) {
+      onMFilterChange("book", "");
+      return;
+    }
     // 地名條目 → 直接進地名詳情頁（**必須排在人物條目之前**）
     var pit = ev.target.closest ? ev.target.closest(".item[data-place]") : null;
     if (pit) {

@@ -73,6 +73,36 @@ def _check(q: str, limit: int) -> int:
     return max(1, min(int(limit), MAX_LIMIT))
 
 
+def _book_param(book: str) -> str | None:
+    """书号校验：空＝不筛，否则必须是库里真有的书号。
+
+    ⚠️ 不校验的话 `?book=zzz` 会返回 200 + 空列表——界面上就是「这人 0 處」，
+    而实际上只是参数打错了（docs/34 P1 反复出现的同一类坏：静默 200）。
+    """
+    book = (book or "").strip()
+    if not book:
+        return None
+    if book not in db.book_codes():
+        raise HTTPException(400, "未知書號：{}（可選 {}）".format(
+            book, " / ".join(db.book_codes())))
+    return book
+
+
+def _era_param(era: str) -> int | None:
+    """时代序校验：空＝不筛，否则必须是 0..len(ERA_NAMES)-1。"""
+    era = (era or "").strip()
+    if not era:
+        return None
+    try:
+        i = int(era)
+    except ValueError:
+        raise HTTPException(400, "時代序必須是整數：{}".format(era))
+    if not (0 <= i < len(db.ERA_NAMES)):
+        raise HTTPException(400, "時代序超出範圍：{}（0..{}）".format(
+            i, len(db.ERA_NAMES) - 1))
+    return i
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """启动即校验，快速失败——别等用户点搜索才发现库没建。
@@ -168,7 +198,8 @@ def api_search(q: str = Query(..., min_length=1, max_length=MAX_Q),
 
 
 @app.get("/api/place/{pid}")
-def api_place(pid: str, limit: int = Query(200)):
+def api_place(pid: str, limit: int = Query(200), book: str = Query(""),
+              era: str = Query("")):
     """地名详情。响应体在 db 层拼（`db.place_payload`），与离线导出共用一份。
 
     以前**根本没有这个端点**：点地名条会落到 `search(name)` → 人物搜索 → 空
@@ -176,7 +207,8 @@ def api_place(pid: str, limit: int = Query(200)):
     只能看不能进。
     """
     limit = max(1, min(int(limit), MAX_LIMIT))
-    data = db.place_payload(pid, limit)
+    data = db.place_payload(pid, limit,
+                            book=_book_param(book), era=_era_param(era))
     if not data:
         raise HTTPException(404, "查無此地：{}".format(pid))
     return data
@@ -190,10 +222,22 @@ def api_fts(q: str = Query(..., min_length=1, max_length=MAX_Q),
 
 
 @app.get("/api/person/{pid}")
-def api_person(pid: str, limit: int = Query(200)):
+def api_person(pid: str, limit: int = Query(200), book: str = Query(""),
+               era: str = Query("")):
+    """人物档案 + 命中（按篇分组）。
+
+    `book` / `era` 是**命中筛选**（docs/34 P0-3 的解法之一）：
+    联机的 `mentions` 有 200 条上限，不筛就只能看到前 200 条，
+    而界面上的「共 N 處」又是全量——两个数挨在一起自相矛盾。
+    筛选让用户能钻进某一本书 / 某一个时代，把这 200 条花在他要看的地方。
+
+    ⚠️ 筛选必须发生在**服务端**：客户端只拿到 200 条，本地再筛只是
+    「从这 200 条里挑」，用户会以为「漢書只有 12 處」——那比不筛更骗人。
+    """
     limit = max(1, min(int(limit), MAX_LIMIT))
     # 响应体同样在 db 层拼（db.person_payload），与离线导出共用一份
-    data = db.person_payload(pid, limit)
+    data = db.person_payload(pid, limit,
+                             book=_book_param(book), era=_era_param(era))
     if not data:
         raise HTTPException(404, "查无此人：{}".format(pid))
     return data

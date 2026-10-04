@@ -311,6 +311,92 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     num(chipText("漢王")) > 0 && num(chipText("漢王")) < 739,
     wideTxt + " → " + chipText("漢王"));
 
+  console.log("\n【9b】命中數口徑與篩選（聯機 · P0-丙）");
+  /* 聯機 /api/person 有 limit=200：人物頁只拿到 200 條，而搜索卡對同一個人
+     說 2,064 處。以前前端拿 `mentions.length` 當「正文命中 N 處」→ 顯示 200，
+     兩個真數字挨在同一屏，而且 200 緊挨著【裴726】，用戶會讀成「200 + 726」
+     （docs/34 P0-3）。現在三件事一起做：
+       ① 「共 N 處」永遠取全量分佈 mentionByBook，不取 mentions.length；
+       ② 被截斷時明白寫「已顯示 200 / 共 2,064 處」，不截斷就不寫這行；
+       ③ 篩選在**服務端**做——客戶端只有 200 條，本地再篩是「從 200 條裡挑」，
+          用戶會以為「漢書只有 12 處」。
+     ⚠️ 離線那邊是另一條路徑（本地篩全量），見 _ui_test_offline.js 的【4】。 */
+  const mfNum = (txt, re) => Number(
+    ((String(txt || "").match(re) || [])[1] || "0").replace(/,/g, ""));
+  window.location.hash = "#/q/邦";
+  await sleep(400);
+  window.location.hash = "#/person/p_liubang";
+  const gotMf = await waitFor(() => !!out.querySelector(".mfbar"), 25000);
+  ok("人物页有命中筛选条（.mfbar）", gotMf);
+  ok("筛选条有「按書」和「按時代」两个下拉",
+    out.querySelectorAll(".mfbar select.mf[data-mf]").length === 2,
+    "实得 " + out.querySelectorAll(".mfbar select.mf[data-mf]").length + " 个");
+  const mcTxt = (out.querySelector(".mfbar .mfcount") || {}).textContent || "";
+  const mShown = mfNum(mcTxt, /已顯示\s*([\d,]+)/);
+  const mTotal = mfNum(mcTxt, /共\s*([\d,]+)/);
+  ok("截断时写「已顯示 N / 共 M 處」（不再把 200 说成「共 200 處」）",
+    mShown > 0 && mTotal > mShown, "实得「" + mcTxt + "」");
+  const rowsNow = out.querySelectorAll(".sent[data-chapter]").length;
+  ok("「已顯示 N」与真的渲染条数一致", mShown === rowsNow && rowsNow === 200,
+    "写 " + mShown + " / 渲染 " + rowsNow);
+  ok("「共 M 處」是全書全量（明顯大於 200）", mTotal > 200, "实得 " + mTotal);
+
+  const bSel2 = out.querySelector('.mfbar select.mf[data-mf="book"]');
+  const bOpts2 = bSel2 ? [...bSel2.querySelectorAll("option")].filter((o) => o.value) : [];
+  ok("「按書」下拉有非零的书可选（0 處的書不列）", bOpts2.length > 0,
+    "实得 " + bOpts2.length + " 项");
+  if (bOpts2.length) {
+    bSel2.value = bOpts2[0].value;
+    bSel2.dispatchEvent(new window.Event("change", { bubbles: true }));
+    /* ⚠️ 等「共 N 處」變了：篩到史記（938）仍會被截到 200，
+       所以「已顯示」那行還在——不能用它當等待條件。 */
+    const gotB = await waitFor(
+      () => mfNum((out.querySelector(".mfbar .mfcount") || {}).textContent,
+        /共\s*([\d,]+)/) !== mTotal, 25000);
+    ok("切「按書」后重新取数（不是死下拉）", gotB);
+    const n2 = mfNum((out.querySelector(".mfbar .mfcount") || {}).textContent,
+      /共\s*([\d,]+)/);
+    const rows2 = out.querySelectorAll(".sent[data-chapter]").length;
+    ok("篩到某一本书后「共 N 處」收窄（服务端真的筛了，不是本地挑 200 条）",
+      n2 > 0 && n2 < mTotal, "共 " + n2 + " / 原 " + mTotal);
+    ok("篩後渲染条数 = min(200, 共 N)（截断口径自洽）",
+      rows2 > 0 && rows2 === Math.min(200, n2), "渲染 " + rows2 + " / 共 " + n2);
+    ok("篩選後掛著「清除篩選」按鈕",
+      !!out.querySelector('.mfbar button[data-act="mfclear"]'));
+    // 收尾：清掉書篩選再測時代（mfQuery 裡 book 優先於 era）
+    const clr2 = out.querySelector('.mfbar button[data-act="mfclear"]');
+    if (clr2) {
+      click(clr2);
+      await waitFor(
+        () => mfNum((out.querySelector(".mfbar .mfcount") || {}).textContent,
+          /共\s*([\d,]+)/) === mTotal, 25000);
+    }
+  }
+
+  const eSel2 = out.querySelector('.mfbar select.mf[data-mf="era"]');
+  const eOpts2 = eSel2 ? [...eSel2.querySelectorAll("option")].filter((o) => o.value) : [];
+  ok("「按時代」下拉有非零的时代可选（eraNames 到了前端）", eOpts2.length > 0,
+    "实得 " + eOpts2.length + " 项");
+  if (eOpts2.length) {
+    eSel2.value = eOpts2[0].value;
+    eSel2.dispatchEvent(new window.Event("change", { bubbles: true }));
+    const gotE = await waitFor(
+      () => mfNum((out.querySelector(".mfbar .mfcount") || {}).textContent,
+        /共\s*([\d,]+)/) !== mTotal, 25000);
+    ok("切「按時代」也重新取数（不是摆设）", gotE);
+    const n3 = mfNum((out.querySelector(".mfbar .mfcount") || {}).textContent,
+      /共\s*([\d,]+)/);
+    ok("按時代篩出的數小於全五書合計（時代桶真的起了作用）",
+      n3 > 0 && n3 < mTotal, "共 " + n3 + " / 原 " + mTotal);
+    const clr3 = out.querySelector('.mfbar button[data-act="mfclear"]');
+    if (clr3) {
+      click(clr3);
+      await waitFor(
+        () => mfNum((out.querySelector(".mfbar .mfcount") || {}).textContent,
+          /共\s*([\d,]+)/) === mTotal, 25000);
+    }
+  }
+
   console.log("\n【10】「前朝」小标记（断代史里的前朝人）");
   /* 选了断代史才标：人的 eraRank 落在该书记载区间之前（如《漢書》里的孔子）。
      两条不标：史記是通史没有区间；人没断出时代（169 人）也不标、不猜。 */
@@ -534,6 +620,15 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const gotNotes = await waitFor(
     () => out.querySelectorAll(".note-sum").length > 0, 20000);
   ok("人物頁有注文區塊（note-sum）", gotNotes);
+  /* P0-丙本體（補在【12b】，因為曹操的注文合計條必然存在，劉邦的不一定）：
+     合計條上「正文命中 N 處」**不能**取 mentions.length——那被 limit 截到 200，
+     顯示出來就是「正文命中 200 處」，而它旁邊緊挨著【裴726】，
+     用戶會讀成「200 + 726」（docs/34 P0-3）。必須是全量（曹操 1,823）。 */
+  const nsTxt = (out.querySelector(".note-sum") || {}).textContent || "";
+  const nsN = Number(((nsTxt.match(/正文命中\s*([\d,]+)/) || [])[1] || "0")
+    .replace(/,/g, ""));
+  ok("注文合計條的「正文命中 N 處」是全量（不是被 limit 截過的 200）",
+    nsN > 200, "实得「" + nsTxt.replace(/\s+/g, " ").trim() + "」");
 
   const readerEl = doc.getElementById("reader");
   /* ⚠️⚠️ 斷「狀態轉移」而不是斷終態——【8】點篇目時原文層就開了、**到這裡沒關過**，

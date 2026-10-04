@@ -161,6 +161,28 @@ def _mentions(uid2i: dict) -> dict:
     return out
 
 
+def _mbk(table: str, id_col: str, codes: list) -> dict:
+    """實體 → [各書命中數]（**全量**，順序同 `books`，與 db.mention_by_book 同義）。
+
+    為什麼要單獨導一份：`pm` / `pmen` 是離線的**全量**命中，但聯機那邊有
+    200 條上限，前端不能靠 `mentions.length` 當「共幾處」（docs/34 P0-3：
+    搜索卡說 2,064、人物頁說 200，兩個數挨在一起自相矛盾）。
+    篩選桶要顯示每桶多少條，離線也得有同一份分佈——而且要**跟聯機同形**，
+    不然「已顯示 200 / 共 N」這行在兩邊會悄悄長得不一樣。
+    """
+    with db.connect() as c:
+        out: dict = {}
+        for rid, bid, n in c.execute(
+                "SELECT m.{id}, c.book_id, COUNT(*) FROM {t} m "
+                "JOIN sentences s ON s.uid = m.sentence_uid "
+                "JOIN chapters c ON c.id = s.chapter_id "
+                "GROUP BY m.{id}, c.book_id".format(id=id_col, t=table)):
+            row = out.setdefault(rid, [0] * len(codes))
+            if bid in codes:
+                row[codes.index(bid)] += n
+        return out
+
+
 def _places() -> dict:
     """地 → [繁名, 簡名, 類型, 類型說明, 時代, 簡介]。"""
     out = {}
@@ -362,9 +384,17 @@ def build() -> dict:
     with db.connect() as c:
         books = [[r[0], r[1]] for r in c.execute(
             "SELECT code, name FROM books ORDER BY code")]
+    codes = [b[0] for b in books]
+
+    pmbk = step("人物分書全量", _mbk, "mentions", "person_id", codes)
+    plbk = step("地名分書全量", _mbk, "place_mentions", "place_id", codes)
 
     data = {
         "v": 1,
+        # 時代名（下標 = eraRank）。離線版也要顯示「按時代」篩選的選項，
+        # 與聯機 person_payload / place_payload 的 eraNames **同一份**——
+        # 前端不許自己再抄一份常量（ALIAS_KINDS 那類漂移踩過）。
+        "eraNames": db.ERA_NAMES,
         "gen": datetime.now().isoformat(timespec="seconds"),
         "counts": {
             "sentences": len(sents), "chapters": len(chaps),
@@ -396,6 +426,10 @@ def build() -> dict:
         "plalias": plalias,
         "plbook": plbook,
         "pbook": pbook,
+        # 命中**按書全量分佈**（篩選桶與「共 N 處」的數據源）。
+        # 與聯機 person_payload / place_payload 的 `mentionByBook` 同義同形。
+        "pmbk": pmbk,
+        "plbk": plbk,
         "idx": idx,
         "rel": rel,
         # 注文（裴注 / 晉書舊史注）：**獨立賬本**，離線版也要能顯示。
@@ -514,7 +548,7 @@ def report(data: dict, out_dir: str) -> None:
     # ⚠️ 按**字節**算，不是字符數：中文一個字 1 字符但 3 字節，
     # 用 len(str) 會把體積低估到三分之一，看著像「還能再塞點」。
     for k in ("sents", "idx", "pm", "pers", "pla", "pmen", "plalias", "plbook",
-              "rel", "chaps", "pbook", "stats", "notes"):
+              "rel", "chaps", "pbook", "pmbk", "plbk", "stats", "notes"):
         n = len(json.dumps(data.get(k), ensure_ascii=False,
                            separators=(",", ":")).encode("utf-8"))
         print("  {:<8} {:>6.1f} MB".format(k, n / 1048576.0))

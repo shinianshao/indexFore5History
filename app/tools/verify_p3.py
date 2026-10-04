@@ -1574,9 +1574,14 @@ def test_place_search() -> None:
     check("查無此地返回 None（由端點翻成 404）",
           db.place_payload("pl_絕無此地") is None)
     pay = db.place_payload(simp[0]["id"], 200) if simp else None
-    check("place_payload 四塊齊全（profile/mentions/books/aliases）",
-          bool(pay) and set(pay) == {"profile", "mentions", "books", "aliases"}
-          and all(isinstance(pay[k], list) for k in ("mentions", "books", "aliases")))
+    # ⚠️ 六塊：2026-10-04 加 mentionByBook / eraNames（P0-丙「共 N 處」的數據源）。
+    #    形狀一變這裡就得跟著改，不然是一條**假紅**。
+    check("place_payload 六塊齊全（profile/mentions/books/aliases/mentionByBook/eraNames）",
+          bool(pay) and set(pay) == {"profile", "mentions", "books", "aliases",
+                                     "mentionByBook", "eraNames"}
+          and all(isinstance(pay[k], list) for k in ("mentions", "books", "aliases"))
+          and isinstance(pay["mentionByBook"], dict)
+          and isinstance(pay["eraNames"], list))
     check("profile 帶繁名 / 類型說明 / 時代 / 簡介（詳情頁頭部四樣）",
           bool(pay) and all(pay["profile"].get(k) is not None
                             for k in ("trad_name", "kindLabel", "era", "summary")))
@@ -1643,8 +1648,9 @@ def test_place_search() -> None:
 
         pid = ps[0]["id"] if ps else ""
         st, pb = _http("GET", base + "api/place/" + urllib.parse.quote(pid))
-        check("/api/place/{id} 返回四塊（前端 renderPlace 的全部輸入）",
-              st == 200 and set(pb) == {"profile", "mentions", "books", "aliases"}
+        check("/api/place/{id} 返回六塊（前端 renderPlace 的全部輸入）",
+              st == 200 and set(pb) == {"profile", "mentions", "books", "aliases",
+                                        "mentionByBook", "eraNames"}
               and bool(pb.get("mentions")),
               "st={} keys={}".format(st, sorted(pb)))
         check("詳情頁命中數與檢索條一致（兩處口徑不能分叉）",
@@ -1737,6 +1743,186 @@ def test_place_search() -> None:
             proc.kill()
 
 
+def _start_server() -> tuple:
+    """起一個臨時服務（與 test_place_search 同套），返回 (proc, base)。"""
+    port = _free_port()
+    env = dict(os.environ, PORT=str(port), PYTHONIOENCODING="utf-8")
+    proc = subprocess.Popen([PY, os.path.join(ROOT, "app", "server", "main.py")],
+                            cwd=ROOT, env=env, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    base = "http://127.0.0.1:{}/".format(port)
+    up = False
+    for _ in range(40):
+        try:
+            urllib.request.urlopen(base + "health", timeout=1).read()
+            up = True
+            break
+        except Exception:                              # noqa: BLE001
+            time.sleep(0.3)
+    return proc, base, up
+
+
+def test_mention_filter() -> None:
+    """P0-丙：命中數口徑 + 篩選（2026-10-03 審查 docs/34，2026-10-04 落地）。
+
+    原來的壞：`person_payload` 把 mentions 截到 200，前端拿 `mentions.length`
+    當「正文命中 N 處」顯示 → 人物頁說 200、搜索卡說 2,064，兩個真數字
+    挨在同一屏上自相矛盾，而且 200 緊挨著【裴726】，用戶會讀成「200+726」。
+
+    本組斷言守三件事：
+      ① 「共 N 處」的數據源 mentionByBook **全量且逐條等於庫**；
+      ② 聯機**真的被截斷**（截斷是前提，不然「已顯示/共」那行根本不該出現）；
+      ③ 篩選在**服務端**生效（客戶端只有 200 條，本地篩是騙人）。
+    """
+    print("\n[19] 命中數口徑與篩選（P0-丙）")
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db                                          # noqa: E402
+    pid = "p_liubang"
+    with db.connect() as c:
+        truth = c.execute("SELECT COUNT(*) FROM mentions WHERE person_id=?",
+                          (pid,)).fetchone()[0]
+    by_book = db.mention_by_book(pid)
+    check("[19] mentionByBook 五個鍵都在（缺鍵＝篩選桶靜默不顯示）",
+          set(by_book) == set(db.book_codes()), "{}".format(sorted(by_book)))
+    check("[19] mentionByBook 之和 = 庫裡真值（不是被 limit 截過的數）",
+          sum(by_book.values()) == truth,
+          "{} vs {}".format(sum(by_book.values()), truth))
+    check("[19] 前端若再用 mentions.length 當總數，一定會露出馬腳",
+          truth > 200, "真值 {}（≤200 的話這條就該重選樣本人）".format(truth))
+
+    # ⚠️ 离线分书数组是**紧凑数组**，第 i 位属哪本书由导出顺序决定。
+    #    导出的书序是 `ORDER BY code`（hhs/hs/js/sgz/sj），常量 BOOKS 是成书先后
+    #    （sj/hs/hhs/sgz/js）——**不一样**。照 BOOKS 下标还原会把汉书数记到史记头上，
+    #    而**求和不变** → 总数对、每本书全错、不报错。所以必须双管：
+    #      ① 静态：尺只能来自快照自己的 books（`mbkCodes()` 里读 D.books）；
+    #      ② 数据：按快照 books 顺序还原后，**逐本书**等于库（不能只比总和）。
+    js = os.path.join(ROOT, "app", "web", "app.js")
+    try:
+        with open(js, encoding="utf-8") as fh:
+            appjs = fh.read()
+    except OSError:
+        appjs = ""
+    m_mbk = re.search(r"function mbkFromArray\(arr\)(.*?)\n  \}", appjs, re.S)
+    body = m_mbk.group(1) if m_mbk else ""
+    # ⚠️ 判據要斷「**不許碰 BOOKS**」而不是「不許寫 BOOKS[i]」——後者只擋住那一種
+    #    寫法，換個等價寫法（`BOOKS.map(...)`）就漏了，斷言等於白寫。
+    check("[19] 离线分书数组的尺来自快照 books（不是常量 BOOKS·否则数会张冠李戴）",
+          bool(body) and "mbkCodes()" in body and "BOOKS" not in body,
+          "body={}".format((body or "-").strip()[:60]))
+    m_mc = re.search(r"function mbkCodes\(\).*?D\.books", appjs, re.S)
+    check("[19] mbkCodes 离线分支确实读 D.books（静态守不住就只剩数据那条）",
+          bool(m_mc), (m_mc.group(0)[-36:] if m_mc else "没找到 D.books"))
+    # ⚠️ 驗接線（恆真斷言第七種：驗了引擎沒驗接線）。
+    #    mentionByBook 的數據對、篩選對，都**不代表它被用上了**：
+    #    `notesSection` 的第三個參數若改回 `(d.mentions||[]).length`，
+    #    「正文命中 200 處」立刻復活（那正是 P0-丙本體），而上面那 8 條一條都不紅。
+    ns_calls = re.findall(r"notesSection\([^\n]*?\)", appjs)
+    ns_bad = [s for s in ns_calls if "mentions" in s]
+    check("[19] 「正文命中 N 處」不能取 mentions.length（被 limit 截過·P0-丙本體）",
+          bool(ns_calls) and not ns_bad,
+          "呼叫 {} 處 / 壞的 {}".format(len(ns_calls), ns_bad[:1]))
+
+    # 接线：两条离线入口都得带上 mentionByBook（少了它筛选桶是空的，且不报错）
+    for fn, key in (("offPerson", "D.pmbk"), ("offPlace", "D.plbk")):
+        m_fn = re.search(r"function {}\(pid\)(.*?)\n  \}}".format(fn), appjs, re.S)
+        seg = m_fn.group(1) if m_fn else ""
+        check("[19] {} 帶著 mentionByBook（離線篩選桶的輸入·驗接線）".format(fn),
+              bool(seg) and "mentionByBook" in seg and key in seg)
+
+    # 離線快照側：pmbk 是緊湊陣列，按快照自己的 books 順序還原後**逐本**等於庫。
+    # ⚠️ 只比「總和」沒用——求和對置換不變，書序錯位時總數照樣對得上。
+    dist = os.path.join(ROOT, "dist", "data.js")
+    if os.path.exists(dist):
+        with open(dist, encoding="utf-8") as fh:
+            dtxt = fh.read()
+        m_b = re.search(r'"books":\[\[(.*?)\]\]', dtxt, re.S)
+        codes = re.findall(r'\["([a-z]+)","', m_b.group(0)) if m_b else []
+        i0 = dtxt.find('"pmbk":{')
+        m_p = (re.search(r'"p_liubang":\[([^\]]*)\]', dtxt[i0:i0 + 4000000])
+               if i0 >= 0 else None)
+        nums = [int(x) for x in m_p.group(1).split(",")] if m_p else []
+        got = dict(zip(codes, nums))
+        check("[19] 離線 pmbk 逐本等於庫（只比總和抓不到書序錯位）",
+              bool(codes) and len(nums) == len(codes) and got == by_book,
+              "{} vs {}".format(got, by_book))
+    else:
+        check("[19] dist/data.js 存在（離線分書數組無處可驗）", False, dist)
+
+    # 時代名：app/ 與 pipeline/ 各存一份，必須逐字一致（ALIAS_KINDS 同類漂移）
+    src = os.path.join(ROOT, "pipeline", "annotate.py")
+    try:
+        with open(src, encoding="utf-8") as fh:
+            txt = fh.read()
+        m = re.search(r"ERA_ORDER\s*=\s*\[(.*?)\]", txt, re.S)
+        want = re.findall(r'"([^"]+)"', m.group(1)) if m else []
+    except OSError:
+        want = []
+    check("[19] db.ERA_NAMES 與 pipeline/annotate.py 的 ERA_ORDER 逐字一致",
+          bool(want) and want == list(db.ERA_NAMES),
+          "pipeline {} vs app {}".format(len(want), len(db.ERA_NAMES)))
+
+    proc, base, up = _start_server()
+    try:
+        check("臨時服務起來了", up, base)
+        if not up:
+            return
+        st, d = _http("GET", base + "api/person/" + pid + "?limit=200")
+        got = d.get("mentionByBook") or {}
+        check("[19] /api/person 帶 mentionByBook 全量分佈",
+              st == 200 and sum(got.values()) == truth,
+              "st={} sum={} vs {}".format(st, sum(got.values()), truth))
+        check("[19] 聯機 mentions 確實被截到 200（「已顯示/共」那行的前提）",
+              len(d.get("mentions") or []) == 200 and len(d["mentions"]) < truth,
+              "實得 {} / 真值 {}".format(len(d.get("mentions") or []), truth))
+        check("[19] 每條命中帶 book（離線篩選與「見於哪本書」都靠它）",
+              bool(d["mentions"]) and all(m.get("book") for m in d["mentions"]),
+              "{}".format(sorted({m.get("book") for m in d["mentions"]})[:3]))
+
+        # 篩選：按書
+        st2, d2 = _http("GET", base + "api/person/" + pid + "?book=hs&limit=200")
+        ms2 = d2.get("mentions") or []
+        want_hs = min(200, by_book.get("hs", 0))
+        check("[19] ?book=hs 只回漢書的命中（篩在服務端，不是本地挑）",
+              st2 == 200 and bool(ms2)
+              and all(m.get("book") == "hs" for m in ms2)
+              and len(ms2) == want_hs,
+              "n={} 應 {} books={}".format(
+                  len(ms2), want_hs, sorted({m.get("book") for m in ms2})))
+        # 篩選：按時代（西漢 = 9，只有漢書的區間含它）
+        st3, d3 = _http("GET", base + "api/person/" + pid + "?era=9&limit=50")
+        ms3 = d3.get("mentions") or []
+        check("[19] ?era=9（西漢）只回區間含它的書",
+              st3 == 200 and bool(ms3)
+              and all(m.get("book") == "hs" for m in ms3),
+              "books={}".format(sorted({m.get("book") for m in ms3})))
+        # 史記是通史（era = NULL），不屬任何具體時代桶
+        st4, d4 = _http("GET", base + "api/person/" + pid + "?book=sj&era=9&limit=10")
+        check("[19] 史記（通史）不落進具體時代桶（否則每桶都被它灌滿）",
+              st4 == 200 and (d4.get("mentions") or []) == [],
+              "實得 {} 條".format(len(d4.get("mentions") or [])))
+        # 非法參數 → 400，不是「200 + 空列表」
+        st5, _b = _http("GET", base + "api/person/" + pid + "?book=zzz")
+        check("[19] 未知書號 → 400（不是 200 空頁·docs/34 的老毛病）",
+              st5 == 400, "實得 {}".format(st5))
+        st6, _b = _http("GET", base + "api/person/" + pid + "?era=99")
+        check("[19] 時代序越界 → 400", st6 == 400, "實得 {}".format(st6))
+        # 地名側同構
+        st7, p7 = _http("GET", base + "api/place/pl_changan?limit=5")
+        pb7 = p7.get("mentionByBook") or {}
+        with db.connect() as c:
+            pt = c.execute("SELECT COUNT(*) FROM place_mentions WHERE place_id=?",
+                           ("pl_changan",)).fetchone()[0]
+        check("[19] 地名側同構：mentionByBook 之和 = 庫裡真值",
+              st7 == 200 and pt > 0 and sum(pb7.values()) == pt,
+              "st={} {} vs {}".format(st7, sum(pb7.values()), pt))
+    finally:
+        proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:              # pragma: no cover
+            proc.kill()
+
+
 def test_mark_span() -> None:
     """P0-甲：命中標色落點（2026-10-03 審查 docs/34）。
 
@@ -1778,6 +1964,7 @@ def main() -> int:
         test_era_marker()
         test_override_api()
         test_place_search()
+        test_mention_filter()
         test_mark_span()
     finally:
         purge_test_rows()          # 自己造的测试行自己收走，别让权威源越跑越脏

@@ -33,6 +33,12 @@ dist/
 # 真正的防线是 pipeline/_clean_root_blat.py：**按内容 `blat` + git 跟踪状态双重判据**
 # 精确删除（默认预演、留名单、git 跟踪的一律不碰）。%TEMP% 故障是间歇性的，
 # 跑一次脚本即可，不必为它承担误伤风险。
+#
+# 清出来的东西**不删、而是 mv 到这里隔离**（2026-10-04）：本机 Python 的
+# `os.remove` 与 bash 的 `rm` 都会被挡（WinError 5 / safe-delete 护栏），
+# 只有 `mv` 走得通。隔离目录可逆，确认无用后再整体清掉。
+# ⚠️ 这是**目录名**规则不是字符类规则，不会误伤 `pipeline/_scratch` 那类名字。
+.tmp_probe/
 
 # 词典产物：唯一来源是 build_dict.py 的 PERSONS / CHAPTER_OWNERS
 # 与 build_places.py 的 PLACES —— Python 源码已入库，产物不必入库
