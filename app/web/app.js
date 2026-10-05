@@ -577,6 +577,9 @@
   }
 
   function renderPerson(pid) {
+    if (!isNavigatingBack && (currentPid !== pid || currentPlace || currentTab !== "search" || lastQuery)) {
+      pushNavState(currentNavState());
+    }
     resetMFilter("p:" + pid);
     return Promise.all([
       // ⚠️ 篩選要**帶在請求裡**讓服務端篩：客戶端只拿到 200 條，本地再篩
@@ -693,6 +696,9 @@
      的結構寫）。寫第二套渲染不是省事，是**多一處會悄悄分叉的地方**。
      地名側沒有的：稱謂表（人物特有）、關係圖（人物特有）、注文（裴注只跟人）。 */
   function renderPlace(plid) {
+    if (!isNavigatingBack && (currentPlace !== plid || currentPid || currentTab !== "search" || lastQuery)) {
+      pushNavState(currentNavState());
+    }
     resetMFilter("l:" + plid);
     return Promise.all([
       request("/api/place/" + encodeURIComponent(plid) + mfQuery()),
@@ -1216,7 +1222,7 @@
     if (ev.key === "Escape") closeReader();
   });
 
-  /* ---------- 回退：hash 路由（file:// 下 pushState 會拋異常，故一律走 hash）---------- */
+  /* ---------- 回退：应用内导航历史栈 + hash 路由 ---------- */
   var lastWritten = null;
   function routeHash() {
     if (currentPid) return "#/person/" + currentPid;
@@ -1226,9 +1232,149 @@
     if (lastQuery) return "#/q/" + encodeURIComponent(lastQuery) + "/" + mode;
     return "#/";
   }
+
+  // ── 应用内导航历史栈（精准支持“回到上一步”） ──
+  var navStack = [];
+  var isNavigatingBack = false;
+
+  function currentNavState() {
+    if (currentPid) {
+      return { type: "person", id: currentPid };
+    }
+    if (currentPlace) {
+      return { type: "place", id: currentPlace };
+    }
+    if (currentTab === "search" && lastQuery) {
+      return { type: "search", query: lastQuery, mode: mode };
+    }
+    return { type: "tab", tab: currentTab };
+  }
+
+  function pushNavState(st) {
+    if (isNavigatingBack || !st) return;
+    if (navStack.length > 0) {
+      var top = navStack[navStack.length - 1];
+      if (top.type === st.type &&
+          (top.id || "") === (st.id || "") &&
+          (top.tab || "") === (st.tab || "") &&
+          (top.query || "") === (st.query || "")) {
+        return;
+      }
+    }
+    navStack.push(st);
+    if (navStack.length > 50) navStack.shift();
+    syncBack();
+  }
+
+  function restoreNavState(st) {
+    if (!st) return;
+    isNavigatingBack = true;
+    try {
+      if (st.type === "person" && st.id) {
+        currentPlace = null;
+        renderPerson(st.id).then(function () {
+          writeHash();
+        }).finally(function () {
+          isNavigatingBack = false;
+          syncBack();
+        });
+      } else if (st.type === "place" && st.id) {
+        currentPid = null;
+        renderPlace(st.id).then(function () {
+          writeHash();
+        }).finally(function () {
+          isNavigatingBack = false;
+          syncBack();
+        });
+      } else if (st.type === "search") {
+        currentPid = null;
+        currentPlace = null;
+        switchTab("search");
+        mode = st.mode || "person";
+        setModeUI();
+        qEl.value = st.query || "";
+        if (st.query) {
+          search(st.query).finally(function () {
+            isNavigatingBack = false;
+            syncBack();
+          });
+        } else {
+          isNavigatingBack = false;
+          writeHash();
+          syncBack();
+        }
+      } else if (st.type === "tab") {
+        currentPid = null;
+        currentPlace = null;
+        switchTab(st.tab);
+        writeHash();
+        isNavigatingBack = false;
+        syncBack();
+      } else {
+        isNavigatingBack = false;
+        syncBack();
+      }
+    } catch (e) {
+      isNavigatingBack = false;
+      syncBack();
+      showErr(e);
+    }
+  }
+
+  function goBackStep() {
+    // 1. 若当前正开着原文阅读层，第一优先级：关闭原文，回到正文详情
+    if (reader.classList.contains("on")) {
+      closeReader();
+      return;
+    }
+    // 2. 若内部导航历史栈中有上一步记录，弹出并恢复
+    while (navStack.length > 0) {
+      var prev = navStack.pop();
+      var curr = currentNavState();
+      if (prev.type === curr.type &&
+          (prev.id || "") === (curr.id || "") &&
+          (prev.tab || "") === (curr.tab || "") &&
+          (prev.query || "") === (curr.query || "")) {
+        continue;
+      }
+      restoreNavState(prev);
+      return;
+    }
+    // 3. 栈已空，但当前在详情页：退回检索结果或篇目一览
+    if (currentPid || currentPlace) {
+      currentPid = null;
+      currentPlace = null;
+      if (lastQuery) {
+        switchTab("search");
+        search(lastQuery);
+      } else {
+        switchTab("chapters");
+      }
+      writeHash();
+      syncBack();
+      return;
+    }
+    // 4. 当前在搜索结果页但没有更早历史：退回篇目一览
+    if (currentTab === "search" && lastQuery) {
+      lastQuery = "";
+      qEl.value = "";
+      switchTab("chapters");
+      writeHash();
+      syncBack();
+      return;
+    }
+    // 5. 兜底回退
+    if (history.length > 1) {
+      history.back();
+    } else {
+      location.hash = "#/";
+    }
+  }
+
   function syncBack() {
     var onReader = reader.classList.contains("on");
-    backBtn.hidden = !(history.length > 1 || currentPid || currentPlace || onReader);
+    var canGoBack = onReader || navStack.length > 0 || currentPid || currentPlace || (currentTab === "search" && !!lastQuery);
+    backBtn.hidden = !canGoBack;
     backBtn.textContent = onReader ? "← 關閉原文" : "← 返回";
   }
   /* ⚠️ hash 的正規化：**守衛與路由解析必須吃同一份**，否則兩邊打架。
@@ -1272,7 +1418,20 @@
     //    `place` 與 `person` 同一組捕獲，改路由時**三處要同步**：
     //    routeHash（寫）／applyHash（讀）／offlineGet（離線派發）。
     var m = /^#\/(person|place|q)(?:\/([^?#/]+))?(?:\/(fts|person))?$/.exec(h);
-    if (!m) { currentPid = null; currentPlace = null; lastQuery = ""; return; }
+    if (!m) {
+      currentPid = null;
+      currentPlace = null;
+      if (lastQuery) {
+        switchTab("search");
+        search(lastQuery);
+      } else if (currentTab !== "search") {
+        switchTab(currentTab);
+      } else {
+        switchTab("chapters");
+      }
+      syncBack();
+      return;
+    }
     if (m[1] === "person" && m[2]) {
       renderPerson(decodeURIComponent(m[2])).then(syncBack).catch(showErr);
     } else if (m[1] === "place" && m[2]) {
@@ -1287,9 +1446,7 @@
   }
   window.addEventListener("hashchange", applyHash);
   backBtn.addEventListener("click", function () {
-    if (reader.classList.contains("on")) { closeReader(); return; }
-    if (history.length > 1) history.back();
-    else { location.hash = "#/"; }
+    goBackStep();
   });
 
   /* ---------- 關係卡片：圖 + 列表 + 三個旋鈕 ----------
@@ -1839,7 +1996,12 @@
   }
 
   function switchTab(tab) {
+    if (!isNavigatingBack && (currentTab !== tab || currentPid || currentPlace)) {
+      pushNavState(currentNavState());
+    }
     currentTab = tab;
+    currentPid = null;
+    currentPlace = null;
     document.querySelectorAll(".tabs span").forEach(function (el) {
       el.classList.toggle("on", el.getAttribute("data-tab") === tab);
     });
@@ -1850,6 +2012,8 @@
     }
     if (!IDX) { loadIndex(renderCurrentTab); return; }
     renderCurrentTab();
+    writeHash();
+    syncBack();
   }
 
   /* 輸入框候選：靜態版一直有，新版補索引頁時漏了。
@@ -1908,19 +2072,23 @@
 
   function search(query) {
     query = (query || "").trim();
-    if (!query) return;
+    if (!query) return Promise.resolve();
+    if (!isNavigatingBack && (lastQuery !== query || currentPid || currentPlace || currentTab !== "search")) {
+      pushNavState(currentNavState());
+    }
     lastQuery = query;
     currentPid = null;
     currentPlace = null;
     var url = mode === "fts"
       ? "/api/fts?q=" + encodeURIComponent(query)
       : "/api/search?q=" + encodeURIComponent(query);
-    request(url).then(function (d) {
+    return request(url).then(function (d) {
       // ⚠️ fts 模式**不分人物/地名**（它就是全文檢索），別把 places 塞進去——
       //    那會讓「全文」模式裡冒出一堆只有名字的地名行，語義不對。
       if (mode === "fts") renderFts(d.items || [], query);
       else renderResults(d.items || [], query, d.places || []);
       writeHash();
+      syncBack();
     }).catch(showErr);
   }
 
