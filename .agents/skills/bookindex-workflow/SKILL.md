@@ -9,8 +9,8 @@ icon: "📜"
 ## 一、项目本质与架构全景
 
 本项目是前四史（史记、汉书、后汉书、三国志）+ 晋书的**实体索引与篇目分层系统**（非全文检索）。
-- **事实源入口**：`app/DEV.md`（施工入口）· `docs/36-踩坑清单.md`（踩坑与铁律）· `.workbuddy/memory/MEMORY.md`。
-- **历史文档警示**：`docs/01`~`18` 数字打架、早期小程序方案已废弃，切勿当作当前事实。
+- **事实源入口**：`docs/00-BOOKINDEX-知识中心与全景导航.md`（总纲）· `docs/01-系统架构与全栈工程规范.md` · `app/DEV.md`（施工入口）· `docs/36-踩坑清单.md`（踩坑与铁律）· `.workbuddy/memory/MEMORY.md`。
+- **历史文档警示**：原 `docs/01`~`35` 号早期草稿已全面封存归档至 `docs/archive/`，切勿当作当前工程事实。
 - **架构全景**：
   - 权威源：`workbook/*.xlsx`（人与UI写，pipeline只读）
   - 派生存储：`data/index/index.db`（SQLite + FTS5）
