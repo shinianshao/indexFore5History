@@ -110,7 +110,7 @@ bash scripts/run_all.sh
    - 历史前端 `web/` 目录已全面冻结，仅作为无头 UI 参照物保留，日常开发与修改统一在 `app/web/`；
    - P3 阶段工程治理与收口断言运行 `python app/tools/verify_p3_review.py`（16/16 项断言，支持 `--inject` 故障注入）。
 8. **全系统端到端深度独立审查（Full-System Review）**：
-   - 运行 `python app/tools/verify_system_comprehensive_review.py`（35/35 项断言全覆盖权威源、管线、库、API、前端、快照、治理 7 大层级，支持 `--inject` 故障注入红绿闭环）。
+   - 运行 `python app/tools/verify_system_comprehensive_review.py`（42/42 项断言全覆盖权威源、管线、库、API、前端、快照、治理 7 大层级，支持 `--inject` 故障注入红绿闭环）。
 9. **地名扩充落地与权威源打通（docs/44–45）**：
    - **权威源单向流已打通**：`pipeline/build_places.py` 优先读取 `workbook/places.xlsx`（Sheet `地名`），`pipeline/build_dict.py` 联动触发 `build_places`，人写 Excel → pipeline 构建真正落地；
    - **行政建制对齐**：`db.py`、`annotate_places.py`、`app.js` 三方对齐 `"州"`（州部）分类；
@@ -127,6 +127,6 @@ bash scripts/run_all.sh
 
 **用户明确规则**：
 每次完成总结、架构审查或重大功能迭代后，**必须在项目中留下说明文档，并针对技能进行必要同步更新**：
-1. **递增留下交接文档**：在 `docs/` 下生成最新的说明文档（如 `docs/39-...md` ~ `docs/65-...md`），记录当轮结论、规模数据与最新缺陷台账。
+1. **递增留下交接文档**：在 `docs/` 下生成最新的说明文档（如 `docs/39-...md` ~ `docs/66-...md`），记录当轮结论、规模数据与最新缺陷台账。
 2. **更新项目核心记忆**：同步更新 `docs/36-踩坑清单.md` 和 `.workbuddy/memory/MEMORY.md`，保持最新待办清晰。
 3. **维护并更新技能**：保持 `.agents/skills/` 与 `.mimocode/skills/` 的各技能内容与工程事实同步，确保后续新对话载入时能立即准确对齐工作流。

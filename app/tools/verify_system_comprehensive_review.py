@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """BOOKINDEX 全系统端到端深度独立审查脚本（Full-System Independent Review）。
 
-覆盖全栈 7 大核心层级：
-[1] 权威源层（Workbook & Data Sources）：xlsx 完整性、安全保存、2238人物、101纯三元组关系、39证据无孤儿
-[2] 处理管线层（Pipeline & Annotation）：564篇、223,164句、49,069段、稳定uid算法、注文段落100%可达、check_trad 7闸
-[3] 存储派生层（Database & FTS5）：SQLite 8表基线对账、字面截断校验 text[s:e]==surface、零孤儿外键
+覆盖全栈 7 大核心层级（共 42 项审查基准）：
+[1] 权威源层（Workbook & Data Sources）：xlsx 完整性、安全保存、2402活跃人物、101纯三元组关系、39证据无孤儿、764王公侯本名规范
+[2] 处理管线层（Pipeline & Annotation）：564篇、223,164句、49,069段、稳定uid算法、注文段落100%可达、15项高危伪切词清零、晚期人物跨朝0残留
+[3] 存储派生层（Database & FTS5）：SQLite 8表基线对账、字面截断校验 text[s:e]==surface、零孤儿外键、11.8万地名命中
 [4] 后端服务层（Backend & API）：mention_nth (人/地)、override_states 状态机、5000长篇上限、relations_graph 过滤
-[5] 前端交互层（Frontend & Web）：hitSpan 三级回退、多证据 evidences 展开、地名标错面板、web/ 历史冻结
+[5] 前端交互层（Frontend & Web）：hitSpan 三级回退、多证据 evidences 展开、地名标错面板、web/ 历史冻结、isLord(p) 名录契约
 [6] 脱机快照层（Offline Snapshot）：dist/data.js 与库同步、dist/app.js 逻辑100%对齐、export_static 守卫
-[7] 工程治理层（Governance & Safety）：README 真实性、零 blat 垃圾文件、知识库与两处工作流 SKILL 同步
+[7] 工程治理层（Governance & Safety）：README 真实性、零 blat 垃圾文件、两处工作流 SKILL 同步、Tier 1 白皮书、docs/archive/ 封存库
 
 运行方式：
     python app/tools/verify_system_comprehensive_review.py           # 正常模式（全绿 -> 退出码 0）
@@ -72,10 +72,14 @@ def review_layer1_workbooks():
     active_pids = set()
     dead_pids = set()
     taoqian_row = None
+    benming_cnt = 0
     for r in ws_p.iter_rows(min_row=2, values_only=True):
         pid, stat = r[0], r[7]
         if stat == "active":
             active_pids.add(pid)
+            bio = str(r[5] or "")
+            if bio.startswith("【本名："):
+                benming_cnt += 1
         elif stat == "dead":
             dead_pids.add(pid)
         if pid == "p_taoqian":
@@ -127,25 +131,28 @@ def review_layer1_workbooks():
     wb_o.close()
     check("overrides.xlsx 中无残留自检脏行", len(test_dirty_rows) == 0, f"脏行行号={test_dirty_rows}")
 
+    # 4. [新增] 王公侯宗室封君实体【本名：】简介规范覆盖
+    if INJECT_FAULT:
+        benming_cnt = 0
+    check("persons.xlsx 中王公侯宗室封君实体【本名：】规范前缀达标 (>=760位，覆盖全名录)",
+          benming_cnt >= 760, f"本名标注人数={benming_cnt}")
+
 
 # ---------------------------------------------------------------- 第二层
 def review_layer2_pipeline_and_corpus():
     print("\n[审查层级 2] 处理管线层（Pipeline & Annotation）语料与算法契约")
-    # 1. 篇目数与语料总句数
     conn = sqlite3.connect(db.db_path())
-    n_chaps = conn.execute("SELECT COUNT(*) FROM chapters").fetchone()[0]
-    n_sents = conn.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]
-    n_paras = conn.execute("SELECT COUNT(DISTINCT chapter_id || ':' || para_seq) FROM sentences").fetchone()[0]
-    conn.close()
+    cursor = conn.cursor()
+    n_chaps = cursor.execute("SELECT COUNT(*) FROM chapters").fetchone()[0]
+    n_sents = cursor.execute("SELECT COUNT(*) FROM sentences").fetchone()[0]
+    n_paras = cursor.execute("SELECT COUNT(DISTINCT chapter_id || ':' || para_seq) FROM sentences").fetchone()[0]
 
     check("五书篇目数完整覆盖 564 篇（含晋书载记30篇）", n_chaps == 564, f"篇目数={n_chaps}")
     check("全量语料入库 223,164 句且段落数达 49,069 段（正文无开洞）",
           n_sents == 223164 and n_paras == 49069, f"句数={n_sents}, 段落数={n_paras}")
 
-    # 2. 稳定 uid 算法契约验证
-    conn = sqlite3.connect(db.db_path())
-    samples = conn.execute("SELECT uid, chapter_id, para_seq, seq FROM sentences LIMIT 200").fetchall()
-    conn.close()
+    # 稳定 uid 算法契约验证
+    samples = cursor.execute("SELECT uid, chapter_id, para_seq, seq FROM sentences LIMIT 200").fetchall()
     bad_uids = []
     for uid, cid, pseq, sseq in samples:
         want_uid = common.stable_uid(cid, pseq, sseq)
@@ -153,10 +160,7 @@ def review_layer2_pipeline_and_corpus():
             bad_uids.append((uid, want_uid))
     check("稳定 uid 算法抽样校验 100% 一致（篇|段序|句序）", len(bad_uids) == 0, f"分歧数={len(bad_uids)}")
 
-    # 3. 注文独立索引与正文段落可达性
-    conn = sqlite3.connect(db.db_path())
-    p_notes = conn.execute("SELECT COUNT(*) FROM mentions WHERE tier='note'").fetchone()[0]
-    # 检查注文明细跳转段落是否存在于正文
+    # 注文独立索引与正文段落可达性
     pei_json_path = os.path.join(ROOT, "data", "index", "pei-data.json")
     with open(pei_json_path, encoding="utf-8") as f:
         pei_data = json.load(f)
@@ -165,22 +169,68 @@ def review_layer2_pipeline_and_corpus():
     for pid, pdata in check_samples:
         for it in pdata.get("items", [])[:3]:
             cid, pseq = it["cid"], it["pseq"]
-            cnt = conn.execute("SELECT COUNT(*) FROM sentences WHERE chapter_id=? AND para_seq=?", (cid, pseq)).fetchone()[0]
+            cnt = cursor.execute("SELECT COUNT(*) FROM sentences WHERE chapter_id=? AND para_seq=?", (cid, pseq)).fetchone()[0]
             if cnt == 0:
                 unreachable_notes.append((pid, cid, pseq))
-    conn.close()
     check("裴注与旧史注作为独立账本独立统计且正文段落 100% 可达跳转",
           len(unreachable_notes) == 0, f"不可达明细={len(unreachable_notes)}")
+
+    # [新增] 15 项高危语法虚词与动副词伪切词假阳性全局彻底清零
+    zero_tests = [
+        ("p_jinqinggong", "去疾"),
+        ("p_songzhaogong", "子得"),
+        ("p_songpinggong", "子成"),
+        ("p_dinggong", "子然"),
+        ("p_xushao", "子將"),
+        ("p_yaohong", "元子"),
+        ("p_tengxiu", "顯先"),
+        ("p_moubo", "宣則"),
+        ("p_huanghong", "始長"),
+        ("p_shengyan", "翁子"),
+        ("p_chunyuzhi", "叔平"),
+        ("p_liuer", "長魚"),
+        ("p_ruanxian", "仲容"),
+        ("p_baoxian", "子良"),
+        ("p_wangzicheng", "王子城"),
+    ]
+    opt_b_fp_leaks = []
+    for z_pid, z_surf in zero_tests:
+        cnt = cursor.execute("SELECT COUNT(*) FROM mentions WHERE person_id=? AND surface=?", (z_pid, z_surf)).fetchone()[0]
+        if cnt > 0:
+            opt_b_fp_leaks.append(f"{z_pid}:{z_surf}({cnt}处)")
+    if INJECT_FAULT:
+        opt_b_fp_leaks.append("inject_fault_leak")
+    check("15 项高危语法虚词与动副词伪切词假阳性全局彻底清零 (去疾/子得/子成/子然/子将/元子/子良/显先/宣则/始长/翁子/叔平/长鱼/仲容/王子城)",
+          len(opt_b_fp_leaks) == 0, f"泄漏={opt_b_fp_leaks}")
+
+    # [新增] 魏晋十六国晚期人物跨朝越书侵吞史汉 0 残留且齐国名将「王子城父」正典 100% 召回
+    cross_early_pids = ["p_zhangzhong", "p_zhangfu", "p_zhangguang", "p_liuyin_js", "p_xuguang"]
+    cross_leaks = []
+    for ce_pid in cross_early_pids:
+        cnt = cursor.execute("""
+            SELECT COUNT(*) FROM mentions m 
+            JOIN sentences s ON s.uid=m.sentence_uid
+            WHERE m.person_id=? AND (s.chapter_id LIKE 'sj-%' OR s.chapter_id LIKE 'hs-%')
+        """, (ce_pid,)).fetchone()[0]
+        if cnt > 0:
+            cross_leaks.append(f"{ce_pid}(史汉残余{cnt}处)")
+
+    wzcf_cnt = cursor.execute("SELECT COUNT(*) FROM mentions WHERE person_id='p_wangzicheng' AND surface='王子城父'").fetchone()[0]
+    conn.close()
+
+    check("魏晋十六国晚期人物跨朝越书侵吞史汉 0 残留且齐国名将「王子城父」正典 100% 召回 (3/3)",
+          len(cross_leaks) == 0 and wzcf_cnt == 3, f"跨朝泄漏={cross_leaks}, 王子城父命中={wzcf_cnt}/3")
 
 
 # ---------------------------------------------------------------- 第三层
 def review_layer3_database_integrity():
     print("\n[审查层级 3] 存储派生层（Database & FTS5）数据完整性与对账")
     conn = sqlite3.connect(db.db_path())
-    c_m = conn.execute("SELECT COUNT(*) FROM mentions").fetchone()[0]
-    c_pm = conn.execute("SELECT COUNT(*) FROM place_mentions").fetchone()[0]
-    c_pl = conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
-    c_pla = conn.execute("SELECT COUNT(*) FROM place_aliases").fetchone()[0]
+    cursor = conn.cursor()
+    c_m = cursor.execute("SELECT COUNT(*) FROM mentions").fetchone()[0]
+    c_pm = cursor.execute("SELECT COUNT(*) FROM place_mentions").fetchone()[0]
+    c_pl = cursor.execute("SELECT COUNT(*) FROM places").fetchone()[0]
+    c_pla = cursor.execute("SELECT COUNT(*) FROM place_aliases").fetchone()[0]
     
     check("人物命中总频次在七大高危假阳性清零后纯净收拢 (>=67,200处)", c_m >= 67200, f"mentions={c_m}")
     check("地名命中总频次在剔除千人/下相噪声后健康稳定 (>=118,000处)", c_pm >= 118000, f"place_mentions={c_pm}")
@@ -188,7 +238,7 @@ def review_layer3_database_integrity():
           c_pl >= 1620 and c_pla >= 2600, f"places={c_pl}, place_aliases={c_pla}")
 
     # 抽查命中字面截取准确性 text[s:e] == surface
-    samples = conn.execute(
+    samples = cursor.execute(
         "SELECT s.text, m.s, m.e, m.surface FROM mentions m "
         "JOIN sentences s ON s.uid=m.sentence_uid LIMIT 300").fetchall()
     mismatch_surface = []
@@ -259,6 +309,12 @@ def review_layer5_frontend_and_web():
     check("历史前端 web/ 目录包含冻结声明与入口警告注释",
           "已冻结" in txt1 and "历史冻结页面" in txt2)
 
+    # 5. [新增] 前端 isLord(p) 公侯名录分类契约与本名徽章渲染支持
+    has_islord = "function isLord(" in js and "本名" in js
+    has_capsule = "isLord" in js and ("公侯名录" in js or "公侯" in js)
+    check("前端 isLord(p) 公侯名录分类契约与本名徽章渲染支持",
+          has_islord and has_capsule, f"has_islord={has_islord}, has_capsule={has_capsule}")
+
 
 # ---------------------------------------------------------------- 第六层
 def review_layer6_offline_snapshot():
@@ -316,6 +372,40 @@ def review_layer7_governance_and_skills():
         s2 = f2.read().replace("\r\n", "\n")
     check("两处工作流 SKILL.md (.agents 与 .mimocode) 保持 100% 同步",
           s1 == s2, f"s1_len={len(s1)}, s2_len={len(s2)}")
+
+    # 4. [新增] Tier 1 核心顶层白皮书体系（docs/00~03）健康且完整（>2KB）
+    tier1_docs = [
+        "00-BOOKINDEX-知识中心与全景导航.md",
+        "01-系统架构与全栈工程规范.md",
+        "02-实体消歧与高危防误识别白皮书.md",
+        "03-王公侯宗藩真实姓名考据与名录系统规范.md",
+    ]
+    t1_bad = []
+    for td in tier1_docs:
+        p = os.path.join(ROOT, "docs", td)
+        if not os.path.exists(p) or os.path.getsize(p) < 2000:
+            t1_bad.append(td)
+    if INJECT_FAULT:
+        t1_bad.append("injected_missing_whitepaper.md")
+    check("Tier 1 核心顶层白皮书体系（docs/00~03）健康且完整（>2KB）",
+          len(t1_bad) == 0, f"缺失或残损={t1_bad}")
+
+    # 5. [新增] 历史技术文档封存库 docs/archive/ 隔离归档且说明书新旧映射齐全（>=38篇）
+    arch_dir = os.path.join(ROOT, "docs", "archive")
+    arch_files = [f for f in os.listdir(arch_dir) if f.endswith(".md") and f != "README.md"] if os.path.exists(arch_dir) else []
+    arch_readme = os.path.join(arch_dir, "README.md")
+    has_arch_rm = os.path.exists(arch_readme) and os.path.getsize(arch_readme) > 1000
+    check("历史技术文档封存库 docs/archive/ 隔离归档且说明书新旧映射齐全（>=38篇）",
+          len(arch_files) >= 38 and has_arch_rm, f"封存文档数={len(arch_files)}, 说明书完整={has_arch_rm}")
+
+    # 6. [新增] 踩坑清单（docs/36）与最新王公侯名录规范及高危消歧选项B交叉互证完整
+    p36_path = os.path.join(ROOT, "docs", "36-踩坑清单.md")
+    with open(p36_path, encoding="utf-8") as f:
+        p36_text = f.read()
+    has_p36_optb = "选项B" in p36_text and "高危人物消歧" in p36_text
+    has_p36_lords = "王公侯" in p36_text and "764" in p36_text
+    check("踩坑清单（docs/36）与最新王公侯名录规范及高危消歧选项B交叉互证完整",
+          has_p36_optb and has_p36_lords, f"包含选项B={has_p36_optb}, 包含764王公侯={has_p36_lords}")
 
 
 def main():
