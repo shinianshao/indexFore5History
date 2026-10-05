@@ -1394,6 +1394,75 @@ def check():
                   fj_yg <= 10 and yg_bad_ctx == 0,
                   "苻坚永固={} 非人名误标={}".format(fj_yg, yg_bad_ctx)))
 
+    # ===== 2026-10-05 春秋战国诸侯公侯真实姓名考据与检索支持 (Task B) =====
+    # ① 诸侯真实姓名检索召回：姜小白/姬重耳/嬴任好/魏斯/赵雍/田因齐/魏无忌等全部命中对应实体
+    _real_lord_checks = [
+        ("姜小白", "齊桓公", "p_qihuan"),
+        ("姬重耳", "晉文公", "p_jinwengong"),
+        ("嬴任好", "秦穆公", "p_qinmu"),
+        ("魏斯", "魏文侯", "p_weiwenhou"),
+        ("趙雍", "趙武靈王", "p_zhaowuling"),
+        ("田因齊", "齊威王", "p_qiweiwang"),
+        ("田辟疆", "齊宣王", "p_qixuanwang"),
+        ("田地", "齊湣王", "p_qiminwang"),
+        ("魏無忌", "信陵君", "p_xinlingjun"),
+        ("趙勝", "平原君", "p_pingyuanjun"),
+        ("田文", "孟嘗君", "p_mengchangjun"),
+        ("黃歇", "春申君", "p_chunshenjun"),
+        ("姬寤生", "鄭莊公", "p_zhengzhuanggong"),
+        ("子茲父", "宋襄公", "p_weizi_song"),
+        ("嬴渠梁", "秦孝公", "p_qinxiaogong"),
+        ("嬴駟", "秦惠王", "p_qin_huiwang"),
+        ("嬴稷", "秦昭襄王", "p_qinzhaoxiang"),
+        ("嬴子楚", "秦莊襄王", "p_qinzhuangxiangwang"),
+    ]
+    _rl_failed = []
+    for _q, _exp_name, _exp_pid in _real_lord_checks:
+        _hits = resolve(_q)
+        if not any(p["id"] == _exp_pid for p in _hits):
+            _rl_failed.append("{}(应中{})".format(_q, _exp_name))
+    cases.append(("春秋战国诸侯真实姓名（姜小白/姬重耳/魏斯/赵雍/魏无忌…）100% 召回",
+                  len(_rl_failed) == 0,
+                  "失败={}".format(_rl_failed) if _rl_failed else "18/18通过"))
+
+    # ② 正文语料噪声阻断：小白之旗/子南庚/小子受先功 不误标
+    _noise_checks = []
+    for s in DATA["sentences"]:
+        t = s.get("text") or ""
+        for m in s.get("marks") or []:
+            if m.get("alias") == "小白" and "小白之旗" in t:
+                _noise_checks.append("小白之旗")
+            if m.get("alias") == "子南" and "子南庚" in t:
+                _noise_checks.append("子南庚")
+            if m.get("alias") == "子受" and "小子受" in t:
+                _noise_checks.append("小子受")
+    cases.append(("语料伪命中阻断（小白之旗/子南庚/小子受先功 0 处误标）",
+                  len(_noise_checks) == 0,
+                  "伪命中={}".format(_noise_checks)))
+
+    # ③ 汉晋宗王朝代纠偏断言（齐孝王/齐献王等 11 位不混入先秦）
+    _dyn_corrections = [
+        ("p_qixiaowang", "西漢", "齊孝王"),
+        ("p_qixianwang", "西晉", "齊獻王"),
+        ("p_qishangwang", "東漢", "齊殤王"),
+        ("p_wuxiaowang", "西晉", "吳孝王"),
+        ("p_wujingwang", "三國", "吳敬王"),
+        ("p_caiwuaiwang", "西晉", "蔡武哀王"),
+        ("p_dengaiwang", "三國", "鄧哀王"),
+        ("p_lushanggong", "西晉", "魯殤公"),
+        ("p_lujiehou", "西漢", "魯節侯"),
+        ("p_zhaojiewang", "東漢", "趙節王"),
+        ("p_x61094_2", "西漢", "中山康王"),
+    ]
+    _dyn_bad = []
+    for _pid, _exp_dyn, _tname in _dyn_corrections:
+        _p = by_id.get(_pid)
+        if not _p or _p.get("dynasty") != _exp_dyn:
+            _dyn_bad.append("{}(现朝代={})".format(_tname, _p.get("dynasty") if _p else "无"))
+    cases.append(("汉晋宗王朝代纠偏（齐孝王西汉/齐献王西晋/吴孝王西晋…）",
+                  len(_dyn_bad) == 0,
+                  "未纠偏={}".format(_dyn_bad) if _dyn_bad else "11/11通过"))
+
     cases.extend(_newchain_cases())
     cases.extend(_workbook_cases())
 

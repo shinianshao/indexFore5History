@@ -343,9 +343,12 @@
         var bk = (p.books && p.books.length)
           ? "見於 " + p.books.map(function (b) { return esc(b.name); }).join(" · ")
           : "";
+        var mReal = (p.summary || "").match(/^【本名：([^】]+)】/);
+        var realNameHtml = mReal ? "<span class=\"realname-badge\">本名：" + esc(mReal[1]) + "</span>" : "";
         html += "<div class=\"row\" data-pid=\"" + esc(p.id) + "\">" +
           "<span class=\"name\">" + idx + esc(p.trad_name) +
-          (p.name && p.name !== p.trad_name ? "（" + esc(p.name) + "）" : "") + "</span>" +
+          (p.name && p.name !== p.trad_name ? "（" + esc(p.name) + "）" : "") +
+          realNameHtml + "</span>" +
           "<span class=\"meta\">" + esc(p.dynasty || "") +
           (p.title ? " · " + esc(p.title) : "") + " · " + p.n + " 處" +
           (bk ? "　<span class=\"books\">" + bk + "</span>" : "") + "</span></div>";
@@ -607,8 +610,11 @@
       var uids = {};
       rows.forEach(function (m) { if (m.uid) uids[m.uid] = 1; });
       readerState.hitUids = uids;
+      var mReal = (p.summary || "").match(/^【本名：([^】]+)】/);
+      var realNameBadge = mReal ? "<span class=\"realname-badge\">本名：" + esc(mReal[1]) + "</span>" : "";
       var html = "<div class=\"card\">" +
         "<div class=\"person-head\"><span class=\"name\">" + esc(p.trad_name) + "</span>" +
+        realNameBadge +
         "<span class=\"dyn\">" + esc(p.dynasty || "") +
         (p.title ? " · " + esc(p.title) : "") + "</span></div>";
       if (p.summary) html += "<p class=\"summary\">" + esc(p.summary) + "</p>";
@@ -1887,16 +1893,31 @@
      人物條目點了去檢索（同名異人要靠搜索消歧），地名條目**直接進詳情頁**——
      地名無重名（實測 trad_name 無重複），沒必要繞一圈搜索。
      以前兩者都帶 data-name，點地名會落到人物搜索上 → 空（這就是「地名點不動」的根因）。 */
+  function isLord(p) {
+    if (!p) return false;
+    var s = p.summary || "";
+    if (s.indexOf("【本名：") === 0) return true;
+    var n = p.name || "";
+    if (n.indexOf("公子") === 0 || n.indexOf("公孫") === 0 || n.indexOf("公孙") === 0) return true;
+    if (["孟嘗君", "孟尝君", "信陵君", "平原君", "春申君"].indexOf(n) >= 0) return true;
+    if (/(公|侯|伯|王|君)$/.test(n) && !/(孔子|孟子|荀子|老子|莊子|庄子|韓非子|韩非子|墨子|管子|晏子|孫子|孙子|曾子|有子|列子|尸子|慎子)$/.test(n)) {
+      return true;
+    }
+    return false;
+  }
+
   function indexGrid(items, isPlace) {
     var h = '<div class="grid">';
     items.forEach(function (p) {
       var attr = isPlace
         ? 'data-place="' + esc(p.id) + '"'
         : 'data-name="' + esc(p.name) + '"';
+      var lordTag = (!isPlace && isLord(p)) ? '<i class="lord-badge" title="諸侯公侯">公侯</i>' : '';
       h += '<div class="item" ' + attr + ' title="' +
         esc(p.summary || "") + '"><span class="n">' + esc(p.name) +
         (isPlace ? "" : (isFormerEra(p) ? '<i class="era-old" title="本書記載時代之前的' +
          '人物（前朝）">前朝</i>' : "")) +
+        lordTag +
         '</span><span class="c">' + statText(p.n, p.c) + "</span></div>";
     });
     return h + "</div>";
@@ -1914,12 +1935,32 @@
     });
   }
 
+  var currentPersonCat = "all";
+
   function renderPersonsIndex() {
-    var items = resort(((IDX || {}).persons || {}).items || []);
+    var allItems = resort(((IDX || {}).persons || {}).items || []);
+    var lordCount = 0;
+    allItems.forEach(function (p) { if (isLord(p)) lordCount++; });
+    var otherCount = allItems.length - lordCount;
+
+    var filteredItems = allItems;
+    if (currentPersonCat === "lord") {
+      filteredItems = allItems.filter(isLord);
+    } else if (currentPersonCat === "other") {
+      filteredItems = allItems.filter(function (p) { return !isLord(p); });
+    }
+
     var h = '<div class="group-title">人物索引 <span class="count">' +
-      items.length.toLocaleString() + ' 人 · <span class="sort-toggle" ' +
+      filteredItems.length.toLocaleString() + ' 人 · <span class="sort-toggle" ' +
       'role="button" tabindex="0">' + sortLabel() + '</span> · 懸停看簡介</span></div>';
-    h += indexGrid(items, false);
+
+    h += '<div class="person-cat-bar">' +
+      '<span class="cat-pill' + (currentPersonCat === "all" ? " on" : "") + '" data-pcat="all">全部 (' + allItems.length.toLocaleString() + ')</span>' +
+      '<span class="cat-pill' + (currentPersonCat === "lord" ? " on" : "") + '" data-pcat="lord">諸侯公侯 · 公侯名錄 (' + lordCount.toLocaleString() + ')</span>' +
+      '<span class="cat-pill' + (currentPersonCat === "other" ? " on" : "") + '" data-pcat="other">名臣將相與其他 (' + otherCount.toLocaleString() + ')</span>' +
+      '</div>';
+
+    h += indexGrid(filteredItems, false);
     out.innerHTML = h;
   }
 
@@ -2149,6 +2190,16 @@
     if (tg) {
       sortMode = sortMode === "c" ? "n" : "c";
       renderCurrentTab();
+      return;
+    }
+    // 人物索引分類切換（全部 / 諸侯公侯 · 公侯名錄 / 名臣將相與其他）
+    var cp = ev.target.closest ? ev.target.closest(".cat-pill[data-pcat]") : null;
+    if (cp) {
+      var pcat = cp.getAttribute("data-pcat");
+      if (pcat && pcat !== currentPersonCat) {
+        currentPersonCat = pcat;
+        renderPersonsIndex();
+      }
       return;
     }
     var row = ev.target.closest ? ev.target.closest(".row[data-pid]") : null;
