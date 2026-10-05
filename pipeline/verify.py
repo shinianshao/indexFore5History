@@ -1300,6 +1300,100 @@ def check():
     cases.append(("AI 判定「不收」的表字未進別名（同字他人/跨詞邊界）",
                   not _bad_rej, "误收={}".format(_bad_rej)))
 
+    # ===== 2026-10-05 七大高危人物考据消歧与假阳性彻底清零 (Task A) =====
+    # ① 刘翊：移出高频动副词别名「子相」（63 处语法词清零）
+    p_ly = by_id.get("p_liuyi") or {}
+    ly_aliases = set(p_ly.get("aliases") or [])
+    ly_cnt = p_ly.get("mentionCount") or 0
+    cases.append(("劉翊移出「子相」别名且假阳性清零",
+                  "子相" not in ly_aliases and ly_cnt <= 5,
+                  "别名含子相={} 命中={}".format("子相" in ly_aliases, ly_cnt)))
+
+    # ② 阳球：移出察举科目别名「方正」（129 处察举德行词清零）
+    p_yq = by_id.get("p_yangqiu") or {}
+    yq_aliases = set(p_yq.get("aliases") or [])
+    yq_cnt = p_yq.get("mentionCount") or 0
+    cases.append(("陽球移出「方正」别名且假阳性清零",
+                  "方正" not in yq_aliases and yq_cnt <= 20,
+                  "别名含方正={} 命中={}".format("方正" in yq_aliases, yq_cnt)))
+
+    # ③ 冉求：移出句式短语「子有」（90 处「君子有/公子有」清零，保底「冉求/冉有」）
+    p_rq = by_id.get("p_ranqiu") or {}
+    rq_aliases = set(p_rq.get("aliases") or [])
+    rq_cnt = p_rq.get("mentionCount") or 0
+    cases.append(("冉求移出「子有」别名且保留正名/冉有",
+                  "子有" not in rq_aliases and 10 <= rq_cnt <= 25,
+                  "别名含子有={} 命中={}".format("子有" in rq_aliases, rq_cnt)))
+
+    # ④ 孙亮与司马昱：会稽王跨朝隔离（孙亮限三国志，晋书会稽王归司马昱，移出「子明」）
+    p_sl = by_id.get("p_sunliang") or {}
+    sl_aliases = set(p_sl.get("aliases") or [])
+    smy_hj = sum(1 for s in DATA["sentences"]
+                 for m in s.get("marks") or []
+                 if m.get("alias") in ("會稽王", "会稽王") and m.get("pid") == "p_simayu"
+                 and s["chapterId"].startswith("js-"))
+    sl_hj = sum(1 for s in DATA["sentences"]
+                for m in s.get("marks") or []
+                if m.get("alias") in ("會稽王", "会稽王") and m.get("pid") == "p_sunliang"
+                and s["chapterId"].startswith("js-"))
+    cases.append(("會稽王跨朝断代：晋书会稽王归司马昱，孙亮移出「子明」",
+                  "子明" not in sl_aliases and sl_hj <= 2 and smy_hj >= 30,
+                  "孙亮别名含子明={} 晋书会稽王→孙亮={} 晋书会稽王→司马昱={}".format(
+                      "子明" in sl_aliases, sl_hj, smy_hj)))
+
+    # ⑤ 王霸：云台名将正位打破 0 处，隐士王霸不越书，王霸之道/霸上不误标
+    p_wb = by_id.get("p_wangba") or {}
+    p_wb_ym = by_id.get("p_wangba_ym") or {}
+    wb_cnt = p_wb.get("mentionCount") or 0
+    wb_ym_other = sum(((p_wb_ym.get("byBook") or {}).get(b) or {}).get("mentionCount") or 0
+                      for b in ("sj", "hs", "sgz", "js"))
+    wb_bad_ctx = 0
+    for s in DATA["sentences"]:
+        t = s.get("text") or ""
+        for m in s.get("marks") or []:
+            if m.get("alias") == "王霸":
+                i, j = m.get("s", 0), m.get("e", 0)
+                if (j < len(t) and t[j] in "上之君主業业略術术道會会") or (i > 0 and t[i - 1] in "趙赵魯鲁迎逆"):
+                    wb_bad_ctx += 1
+    cases.append(("王霸名将正位且隐士不越书，哲学与地名不误标",
+                  wb_cnt >= 15 and wb_ym_other == 0 and wb_bad_ctx == 0,
+                  "名将王霸={} 隐士越书={} 词法误标={}".format(wb_cnt, wb_ym_other, wb_bad_ctx)))
+
+    # ⑥ 淮南王：英布/刘长/刘安三家正位，三国志清零，晋书仅余地理志追述 2 处
+    def _hnw_count(pid):
+        return sum(1 for s in DATA["sentences"]
+                   for m in s.get("marks") or []
+                   if m.get("alias") in ("淮南王",) and m.get("pid") == pid)
+    hnw_qb = _hnw_count("p_qingbu")
+    hnw_lc = _hnw_count("p_liuchang")
+    hnw_la = _hnw_count("p_liu_an")
+    hnw_sgz = sum(1 for s in DATA["sentences"]
+                  for m in s.get("marks") or []
+                  if m.get("alias") in ("淮南王",) and s["chapterId"].startswith("sgz-"))
+    hnw_js = sum(1 for s in DATA["sentences"]
+                 for m in s.get("marks") or []
+                 if m.get("alias") in ("淮南王",) and s["chapterId"].startswith("js-"))
+    cases.append(("淮南王三家正位（英布收拢/刘长刘安收复），三国志清零，晋书仅余地理志",
+                  hnw_qb <= 35 and hnw_lc >= 80 and hnw_la >= 50 and hnw_sgz == 0 and hnw_js <= 2,
+                  "英布={} 刘长={} 刘安={} sgz={} js={}".format(hnw_qb, hnw_lc, hnw_la, hnw_sgz, hnw_js)))
+
+    # ⑦ 苻坚：小字「永固」守卫，非人名不标，纯净人名收拢
+    p_fj = by_id.get("p_fujian2") or {}
+    fj_yg = sum(1 for s in DATA["sentences"]
+                for m in s.get("marks") or []
+                if m.get("alias") == "永固" and m.get("pid") == "p_fujian2")
+    yg_bad_ctx = 0
+    for s in DATA["sentences"]:
+        t = s.get("text") or ""
+        for m in s.get("marks") or []:
+            if m.get("alias") == "永固":
+                i, j = m.get("s", 0), m.get("e", 0)
+                if (i > 0 and t[i - 1] in "社洪靈灵基根縣县為为仁稷以") or (j < len(t) and t[j] in "縣县儲储"):
+                    yg_bad_ctx += 1
+    cases.append(("苻坚小字「永固」非人名阻断（社稷/洪基/县），纯净人名收拢",
+                  fj_yg <= 10 and yg_bad_ctx == 0,
+                  "苻坚永固={} 非人名误标={}".format(fj_yg, yg_bad_ctx)))
+
     cases.extend(_newchain_cases())
     cases.extend(_workbook_cases())
 

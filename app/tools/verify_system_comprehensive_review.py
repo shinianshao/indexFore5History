@@ -182,7 +182,7 @@ def review_layer3_database_integrity():
     c_pl = conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
     c_pla = conn.execute("SELECT COUNT(*) FROM place_aliases").fetchone()[0]
     
-    check("人物命中总频次在P0/P1/P2/T3/T4高精收拢后健康稳定 (>=67,500处)", c_m >= 67500, f"mentions={c_m}")
+    check("人物命中总频次在七大高危假阳性清零后纯净收拢 (>=67,200处)", c_m >= 67200, f"mentions={c_m}")
     check("地名命中总频次在剔除千人/下相噪声后健康稳定 (>=118,000处)", c_pm >= 118000, f"place_mentions={c_pm}")
     check("地名总数在剔除千人县后收拢为 1,620 处且异体写法表达标 (>=2,600条)",
           c_pl >= 1620 and c_pla >= 2600, f"places={c_pl}, place_aliases={c_pla}")

@@ -344,9 +344,24 @@ ALIAS_STOP_PRE = {
     "主父": set("為为使拜"),
     # 晋文公重耳：排除「务其持重耳」（持重+耳）与「李士业子重耳」
     "重耳": set("持子"),
+    # 王霸：排除「迎赵王霸上/逆王霸上/鲁王霸/王霸之道/之略/之业」
+    "王霸": set("趙赵魯鲁迎逆孝明帝卒王"),
+    # 永固：排除「社稷永固/洪基永固/灵根永固/仁义可以永固/永固县」
+    "永固": set("社洪靈灵基根縣县為为仁稷以"),
+    # 子明：排除「復子明辟/復子明辭/譙子明/太子明識/諸子明毅/其子明/以子明慧」等古政论辞与他人名
+    "子明": set("復复譙谯太諸诸其"),
 }
 ALIAS_STOP_POST = {
     "有若": set("此自公富"),
+    # 王霸：排除后接哲学/政论/霸上动名词
+    "王霸": set("上之君主業业略術术道會会"),
+    # 永固：排除后接县名或储君
+    "永固": set("縣县儲储"),
+    # 会稽王后接单字名（会稽王昱/道子/脩之/衷）
+    "會稽王": set("昱道脩衷"),
+    # 子明：排除后接「辟/辭/辭/識/毅/慧」等政论与德行词
+    "子明": set("辟辭辞識识毅慧"),
+
     # 文王吴芮/文王礼/文王辟强/文王熊赀等诸侯王后接单字名
     "文王": set("吳吴禮礼辟貲赀"),
     # 太王后 / 太王太后
@@ -516,11 +531,14 @@ def resolve_generic(entry, chapter_owners, chapter_local, sent_count,
 
     # 分书收束：断代史里裸帝号优先本纪传统含义（後漢書「武帝」= 漢武帝）
     book_cands = entry.get("bookCandidates") or {}
-    if book_id and book_id in book_cands:
-        narrowed = [c for c in book_cands[book_id] if c in cands] or list(book_cands[book_id])
-        cands = narrowed
-        if len(cands) == 1:
-            return cands[0], "era"
+    if book_cands:
+        if book_id and book_id in book_cands:
+            narrowed = [c for c in book_cands[book_id] if c in cands] or list(book_cands[book_id])
+            cands = narrowed
+            if len(cands) == 1:
+                return cands[0], "era"
+        elif book_id:
+            return None, "none"
     # R-fix：泛称候选过书作用域——books:["sgz"] 的人不得在史汉被选中
     if book_id is not None and person_books:
         cands = [c for c in cands
