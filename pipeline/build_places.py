@@ -1772,6 +1772,55 @@ NAME_BLOCK = (
 # 故 main() 会拒绝这类条目——「紀成」「紀通」就是这么剔除的。
 
 
+def _load_places():
+    """PLACES 的权威源：优先读 workbook/places.xlsx（人写的表格），
+    表格不存在时回退 list(PLACES) + list(PLACES_DL) + list(PLACES_JS) 种子数据。
+
+    三条铁律：
+      1. 只读。pipeline 任何地方都不许回写 xlsx。
+      2. 只认数据列。pinyin / 备注 是辅助列，改了不影响产出。
+      3. 空行与 status≠active 的行跳过（支持通过 status=dead 软删除）。
+    """
+    xlsx = os.path.join(ROOT, "workbook", "places.xlsx")
+    if not os.path.exists(xlsx):
+        print("⚠ 未找到 {}，本次回退种子数据。".format(xlsx))
+        return list(PLACES) + list(PLACES_DL) + list(PLACES_JS)
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return list(PLACES) + list(PLACES_DL) + list(PLACES_JS)
+
+    wb = load_workbook(xlsx, read_only=True)
+    try:
+        if "地名" not in wb.sheetnames:
+            print("⚠ {} 缺少 '地名' 工作表，回退种子数据。".format(xlsx))
+            return list(PLACES) + list(PLACES_DL) + list(PLACES_JS)
+        ws = wb["地名"]
+        out = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            pid = (row[0] or "").strip() if row[0] else ""
+            trad = (row[1] or "").strip() if row[1] else ""
+            simp = (row[2] or "").strip() if row[2] else ""
+            if not pid or not trad:
+                continue
+            status = (row[7] or "active").strip() if row[7] else "active"
+            if status != "active":
+                continue
+            kind = (row[3] or "外").strip() if row[3] else "外"
+            era = (row[4] or "").strip() if row[4] else ""
+            summary = (row[5] or "").strip() if row[5] else ""
+            aliases_str = (row[6] or "").strip() if row[6] else ""
+            extra = [x.strip() for x in aliases_str.split("|") if x.strip()]
+            out.append((pid, simp or trad, trad, kind, era, summary, extra))
+        if not out:
+            print("⚠ places.xlsx 没读到任何有效行，回退种子数据。")
+            return list(PLACES) + list(PLACES_DL) + list(PLACES_JS)
+        print("✓ 从 workbook/places.xlsx 载入 {} 处地名（权威源）".format(len(out)))
+        return out
+    finally:
+        wb.close()
+
+
 def main():
     from opencc import OpenCC
 
@@ -1782,7 +1831,7 @@ def main():
     seen = set()
     total_aliases = 0
 
-    for row in list(PLACES) + list(PLACES_DL) + list(PLACES_JS):
+    for row in _load_places():
         pid, name, trad = row[0], row[1], row[2]
         kind, era, summary = row[3], row[4], row[5]
         extra = list(row[6]) if len(row) > 6 else []

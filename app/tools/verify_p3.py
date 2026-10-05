@@ -1288,6 +1288,37 @@ def test_override_api() -> None:
         return
     a, b = samples[0], samples[1]
 
+    # ── 地名樣本（P8-b 地名標錯入口）──
+    conn_pl = sqlite3.connect(db.db_path())
+    p_sample = None
+    for (puid, sfc, s, e) in conn_pl.execute(
+            "SELECT sentence_uid, surface, s, e FROM place_mentions "
+            "WHERE place_id='pl_luoyang' LIMIT 50"):
+        all_pms = conn_pl.execute(
+            "SELECT place_id, surface, s, e FROM place_mentions "
+            "WHERE sentence_uid=? ORDER BY s, e", (puid,)).fetchall()
+        for idx, pm in enumerate(all_pms, 1):
+            if pm[0] == "pl_luoyang" and pm[1] == sfc and pm[2] == s and pm[3] == e:
+                p_sample = {"uid": puid, "s": s, "e": e, "surface": sfc,
+                            "nth": idx, "pid": "pl_luoyang"}
+                break
+        if p_sample:
+            break
+    conn_pl.close()
+    check("取到地名樣本（洛陽）", p_sample is not None, str(p_sample))
+    if p_sample:
+        check("地名後端 nth 與 place_mentions 實際序號一致",
+              db.mention_nth(p_sample["uid"], p_sample["s"], p_sample["e"],
+                             p_sample["surface"], "pl_luoyang") == p_sample["nth"],
+              "實得 {}".format(db.mention_nth(p_sample["uid"], p_sample["s"],
+                                            p_sample["e"], p_sample["surface"],
+                                            "pl_luoyang")))
+        check("地名 override_states：reassign 已是 to→True / 不是 to→False",
+              db.override_states([
+                  dict(p_sample, action="reassign", to="pl_luoyang"),
+                  dict(p_sample, action="reassign", to="pl_changan"),
+              ]) == [True, False])
+
     check("樣本有效：本句第 {} 條，前端會算成第 {} 條".format(a["nth"], a["naive"]),
           a["nth"] > a["naive"], str(a))
     check("後端 nth 與庫裡實際序號一致",
@@ -1372,47 +1403,67 @@ def test_override_api() -> None:
         check("端點回的 nth 是後端算的那個（不是 1）", rb.get("nth") == a["nth"],
               "實得 {}".format(rb.get("nth")))
         st, rb2 = _http("POST", base + "api/override",
-                        {"uid": b["uid"], "s": b["s"], "e": b["e"],
-                         "surface": b["surface"], "pid": "p_liubang",
-                         "action": "reassign", "new": "p_xiangyu",
-                         "note": "P3-4 自檢"})
+                       {"uid": b["uid"], "s": b["s"], "e": b["e"],
+                        "surface": b["surface"], "pid": "p_liubang",
+                        "action": "reassign", "new": "p_xiangyu",
+                        "note": "P3-4 自檢"})
         check("reassign 寫入成功", st == 200 and rb2.get("ok"), str(rb2)[:100])
 
+        if p_sample:
+            st, rbp = _http("POST", base + "api/override",
+                            {"uid": p_sample["uid"], "s": p_sample["s"],
+                             "e": p_sample["e"], "surface": p_sample["surface"],
+                             "pid": "pl_luoyang", "action": "reassign",
+                             "new": "長安", "note": "P3-4 自檢"})
+            check("地名 reassign 寫入成功", st == 200 and rbp.get("ok"), str(rbp)[:100])
+
         st, lb = _http("GET", base + "api/overrides")
-        rows = [r for r in lb.get("items", [])
-                if r["uid"] in (a["uid"], b["uid"])]
-        check("列表裡兩條都在（uid / nth / 動作 / 原歸屬）",
-              len(rows) == 2
-              and sorted(r["nth"] for r in rows) == sorted([a["nth"], b["nth"]])
-              and all(r["from"] == "p_liubang" for r in rows),
+        check_uids = {a["uid"], b["uid"]}
+        if p_sample:
+            check_uids.add(p_sample["uid"])
+        rows = [r for r in lb.get("items", []) if r["uid"] in check_uids]
+        check("列表裡測試記錄都在（含地名）",
+              len(rows) == (3 if p_sample else 2),
               str([(r["uid"], r["nth"], r["action"]) for r in rows])[:120])
         to_row = [r for r in rows if r["uid"] == b["uid"]]
         check("pid 翻成正名（界面要寫「→ 項羽」不是「→ p_xiangyu」）",
               bool(to_row) and to_row[0].get("toName") == "項羽",
               str(to_row[0].get("toName")) if to_row else "—")
+        if p_sample:
+            pl_row = [r for r in rows if r["uid"] == p_sample["uid"]]
+            check("地名 pid 翻成正名（界面要寫「→ 長安」不是「→ pl_changan」）",
+                  bool(pl_row) and pl_row[0].get("toName") == "長安",
+                  str(pl_row[0].get("toName")) if pl_row else "—")
         # 剛寫進表、還沒套用 → 兩條都算「待重建」。不算的話頂欄 N 永不歸零。
-        check("列表帶 applied 且此刻兩條都未生效（重建前）",
+        check("列表帶 applied 且此刻記錄都未生效（重建前）",
               all(r.get("applied") is False for r in rows)
               and lb.get("pending") == len(rows),
               "applied={} pending={}".format(
                   [r.get("applied") for r in rows], lb.get("pending")))
 
         dry = _apply_dry()
-        check("apply（預演）認得這兩條：改歸 1 / 棄用 1",
-              "改歸 1 條" in dry and "棄用 1 條" in dry, dry.strip()[:100])
+        want_re_n = 2 if p_sample else 1
+        check("apply（預演）認得改歸 {} 條 / 棄用 1 條".format(want_re_n),
+              "改歸 {} 條".format(want_re_n) in dry and "棄用 1 條" in dry,
+              dry.strip()[:100])
 
         st, _b = _http("POST", base + "api/override/revoke", {"uid": a["uid"]})
         st, _b = _http("POST", base + "api/override/revoke", {"uid": b["uid"]})
+        if p_sample:
+            st, _b = _http("POST", base + "api/override/revoke",
+                           {"uid": p_sample["uid"]})
         st, lb = _http("GET", base + "api/overrides")
         check("撤銷後不再算生效（dead 行不進列表）",
-              not [r for r in lb.get("items", [])
-                   if r["uid"] in (a["uid"], b["uid"])],
+              not [r for r in lb.get("items", []) if r["uid"] in check_uids],
               str(len(lb.get("items", []))))
         check("撤銷後 apply 一條都套不上", "改歸" not in _apply_dry(),
               _apply_dry().strip()[:80])
     finally:
         # revoke 只改狀態不刪行，殘留由末尾 purge_test_rows 收走（帶「自檢」標記）
-        for smp in samples:
+        clean_samples = list(samples)
+        if p_sample:
+            clean_samples.append(p_sample)
+        for smp in clean_samples:
             subprocess.run([PY, os.path.join(HERE, "overrides.py"), "revoke",
                             "--uid", smp["uid"]], cwd=ROOT)
         proc.kill()

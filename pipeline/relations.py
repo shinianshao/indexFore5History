@@ -46,7 +46,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from common import stable_uid   # noqa: E402
+from common import stable_uid, safe_save_workbook   # noqa: E402
 
 # DB 路径认环境变量：断言要在**临时库副本**上做注入测试（docs/28 P0-5），
 # 否则「故意注入一个错误看断言变不变红」根本没法隔离验证。
@@ -148,9 +148,15 @@ HEADERS = [
 ]
 
 
-def rel_id(a: str, b: str, rel: str, book: str = "", era: str = "") -> str:
-    """稳定业务主键：重建时 id 会重排号，靠它才能追溯与去重。"""
-    raw = "{}|{}|{}|{}|{}".format(a, b, rel, book or "", era or "")
+def rel_id(a: str, b: str, rel: str, *args, **kwargs) -> str:
+    """稳定业务主键：仅由语义三元组 (person_a, person_b, rel) 决定。
+
+    契约重构（P2 架构重构，解决 docs/31 / docs/37 历史卡点）：
+    关系边为主键不变的知识图谱边。book（记载书卷）与 era（时代）属元数据属性，
+    不参与哈希。补充或调整属性绝不导致主键漂移与外键断裂。
+    兼容性：*args, **kwargs 容纳历史调用传入的 book/era，但不参与哈希。
+    """
+    raw = "{}|{}|{}".format(a, b, rel)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -179,7 +185,7 @@ def init_workbook() -> None:
     ev = wb.create_sheet(EV_SHEET)     # 证据一对多（docs/28 P1-6）
     ev.append(EV_HEADERS)
     os.makedirs(os.path.dirname(WORKBOOK), exist_ok=True)
-    wb.save(WORKBOOK)
+    safe_save_workbook(wb, WORKBOOK)
     print("已建空表：{}（含 {} 页）".format(WORKBOOK, EV_SHEET))
 
 
@@ -209,12 +215,16 @@ def _append_row(row: dict) -> None:
     ws = wb["relations"] if "relations" in wb.sheetnames else wb.active
     ws.append([row.get(h) for h in HEADERS])
     try:
-        wb.save(WORKBOOK)
+        safe_save_workbook(wb, WORKBOOK)
         print("已写入：{}".format(WORKBOOK))
-    except PermissionError:
+    except (PermissionError, OSError):
         alt = WORKBOOK.replace(".xlsx", ".new.xlsx")
-        wb.save(alt)
-        print("⚠️ 原表被占用，已改写：{}".format(alt))
+        try:
+            safe_save_workbook(wb, alt)
+            print("⚠️ 原表被占用，已改写：{}".format(alt))
+        except Exception as e:
+            print("⚠️ 写入备用表失败：{}".format(e))
+
 
 
 EV_SHEET = "relation_evidence"
@@ -258,11 +268,15 @@ def _ensure_ev_sheet() -> None:
     ws = wb.create_sheet(EV_SHEET)
     ws.append(EV_HEADERS)
     try:
-        wb.save(WORKBOOK)
+        safe_save_workbook(wb, WORKBOOK)
         print("已补建证据页 {}：{}".format(EV_SHEET, WORKBOOK))
-    except PermissionError:
-        wb.save(WORKBOOK.replace(".xlsx", ".new.xlsx"))
-        print("⚠️ 原表被占用，已改写 .new.xlsx")
+    except (PermissionError, OSError):
+        alt = WORKBOOK.replace(".xlsx", ".new.xlsx")
+        try:
+            safe_save_workbook(wb, alt)
+            print("⚠️ 原表被占用，已改写 .new.xlsx")
+        except Exception as e:
+            print("⚠️ 写入备用表失败：{}".format(e))
 
 
 def _evidence_pairs(rows):
@@ -313,11 +327,16 @@ def _set_status(rel_id_: str, status: str) -> None:
         print("没有匹配的记录：{}".format(rel_id_))
         return
     try:
-        wb.save(WORKBOOK)
+        safe_save_workbook(wb, WORKBOOK)
         print("已作废 {} 条（{}）".format(n, rel_id_))
-    except PermissionError:
-        wb.save(WORKBOOK.replace(".xlsx", ".new.xlsx"))
-        print("⚠️ 原表被占用，已改写 .new.xlsx")
+    except (PermissionError, OSError):
+        alt = WORKBOOK.replace(".xlsx", ".new.xlsx")
+        try:
+            safe_save_workbook(wb, alt)
+            print("⚠️ 原表被占用，已改写 .new.xlsx")
+        except Exception as e:
+            print("⚠️ 写入备用表失败：{}".format(e))
+
 
 
 # ---------------------------------------------------------------- 命令

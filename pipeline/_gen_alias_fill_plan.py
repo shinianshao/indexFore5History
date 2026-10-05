@@ -75,7 +75,7 @@ COURTESY = [
     # 荀彧
     ("文若", "p_xunyu"),
     # 陶谦
-    ("恭祖", "p_taohqian"),
+    ("恭祖", "p_taoqian"),
     # 刘备
     ("玄德", "p_liubei"),
     # 诸葛亮

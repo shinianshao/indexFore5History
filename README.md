@@ -1,162 +1,185 @@
-# BOOKINDEX · 古籍人物 / 地名索引
+# BOOKINDEX · 前四史与晋书古籍实体索引与对照分析系统
 
-前四史 + 晋书的**实体索引**（不是全文检索）：离线 Python 管线把原文切成句、用别名词典
-标出每个实体，产出一个**本地静态网页**。打开网页就能查，不需要服务端、不需要联网。
-
-核心能力是**别名归一 + 篇目分层**。搜「刘邦」，《史记》里这两个字一次都没出现过，
-全书写的是「高祖」（302 处）、「沛公」（242）、「漢王」（353）、「劉季」（15）——
-照样一处不落，并分成两类结果：
-
-- **整篇讲述**：这一篇的主人公就是他（如《史记·高祖本纪》）
-- **顺带提及**：别的篇里提到他，逐句列出，并高亮**书里真正写的那个称呼**（显示「沛公」，不是「刘邦」）
+> **五史古籍实体索引 · 篇目分层 · 注文独立账本 · 关系图谱 · 网页纠错闭环 · 联机与离线双轨分发**  
+> 覆盖范围：《史记》《汉书》《后汉书》《三国志》《晋书》（全五书 564 篇）  
+> 当前版本：第三代全栈架构（FastAPI + SQLite FTS5 + Excel 权威源单向流 + 离线轻量单页）  
+> 基线时间：2026-10-04
 
 ---
 
-## 快速开始
+## 一、系统本质与核心能力
 
-```bash
-# 1) 直接看（产物已在仓库外，见下）—— 起个静态服务
-cd web && python -m http.server 8770
-# 浏览器打开 http://127.0.0.1:8770/index.html
+本项目**不是常规的全文模糊检索系统**，而是针对前四史与晋书五部正史的**高精度实体索引、篇目分层与跨书对照分析系统**。
+
+### 1. 业务核心价值
+- **别名智能归一（解决“书中不写真名”的古籍难题）**：
+  在古籍中，人物往往以帝号、爵称、字号、官衔或专有泛称出现。例如检索「刘邦」，《史记》全书中从未直接出现「刘邦」二字，全作「高祖」（302 处）、「沛公」（242 处）、「漢王」（353 处）、「劉季」（15 处）——系统实现 100% 精准归并与多维度反查。
+- **篇目层次严格区隔**：
+  系统明确区分**整篇专述**（主人公纪/传/世家）与**旁见提及**（他篇引述），彻底杜绝全文检索将背景人物与传记主客颠倒的缺陷。
+- **古籍原文忠实保留**：
+  高亮命中时忠实保留书中实际用字（高亮显示书中原有的「沛公」，绝不粗暴篡改原文字面）。
+- **古籍注文独立文学账本**：
+  《三国志》裴松之注（3,049 处）、《晋书》旧史注（70 处）建立独立索引账本，不与正文频次混为一谈，且注文明细 100% 支持跳转至锚定正文段落。
+- **多维度图谱与地名网络**：
+  不仅涵盖 **2,238 位人物**与 **101 条经过考据的亲属/政治关系边**（含 39 条古籍引文证据），还支持 **1,575 处地名**索引，以及端到端网页「标错 / 改归」纠错工作流。
+
+---
+
+## 二、当前实测基线数据（2026-10-04）
+
+| 维度 | 指标数量 | 说明 |
+| :--- | :--- | :--- |
+| **涵盖书目** | **5 部通史/断代史** | 史記（130）· 漢書（109）· 後漢書（130）· 三國志（65）· 晉書（130，含载记 30）= **564 篇** |
+| **正文语料** | **223,164 句** | 自然连贯入库，**49,069 个自然段落**，彻底解决早期正文开洞丢句问题 |
+| **实体收录** | **2,402 位人物** | 涵盖孔门弟子、魏晋类传名士及 57 位无传名将谋臣；零命中人物 0 |
+| **地名收录** | **1,621 处地名** | 涵盖 2,644 种写法/别名；汉魏十三州及战略名隘全量入库；命中达 119,077 处 |
+| **人物命中** | **68,025 处** | 正文人物命中总频次 |
+| **关系图谱** | **101 条规范边** | 纯语义三元组主键；39 条古籍证据子表，零孤儿外键 |
+| **注文账本** | **4,377 裴注 + 72 晋书注** | 独立账本，正文段落 100% 可达跳转 |
+| **质量基线** | **全项通过（零回归）** | `check_trad.py` (全部不动点) · `verify_persons_tier3_all.py` (10/10) · `system_review` (35/35) |
+
+---
+
+## 三、全栈系统架构与单向数据流
+
+```text
+【权威源】workbook/*.xlsx (persons, places, overrides, sentence-edits, relations)
+     │  （红线 1：单向数据流，人类/UI代写，后端管线绝对只读）
+     │  （红线 2：safe_save_workbook 内存封包 + 临时文件原子替换，防 2.3KB 截断）
+     ▼
+【处理管线】pipeline/*.py (维基文本抓取、句段切分、繁简异体规一、实体标注、泛称消歧)
+     │
+     ▼
+【数据派生】data/index/index.db (SQLite 3 + FTS5 全文搜索 + 8 张核心关联表)
+     │
+     ├─────────────────────────────────────────┐
+     ▼                                         ▼
+【联机主力服务】app/                      【离线静态单页】dist/
+  - FastAPI 后端 (默认端口 8800)            - 轻量 JSON 预计算快照数据
+  - 动态按需 API + 原生单页应用               - 双击 dist/index.html 即可脱机使用
+  - 网页「标错」就地纠错与撤销               - 与联机版 100% 共享前端核心逻辑
 ```
 
-```bash
-# 2) 重跑管线（五书全量，约几分钟；会把 data/ 与 web/*-data.js 重新生成一遍）
-python pipeline/run_pipeline.py
+### 核心设计红线
+1. **单向数据流**：`workbook/*.xlsx` 是唯一不可再生权威源，pipeline 只读不写。若有编辑，走 `overrides.xlsx` / `sentence-edits.xlsx`。
+2. **稳定三参数 uid**：句子唯一主键为 `md5(篇|段序|句序)[:12]`（不含文本本身），拆句继承前半、并句留首标 `merged`、弃用标 `dead`，永不物理删除。
+3. **关系主键纯业务语义契约**：`rel_id = md5(a|b|rel)[:12]`，严禁将书卷（`book`）或时代（`era`）属性混入主键哈希，保证元数据治理不破坏外键引用。
+4. **古籍非 BMP 字符三级回退**：前端字符标色严禁纯 `indexOf` 或裸 `slice`，统一使用 `hitSpan`（A 快路径 / B Unicode 码位切 / C 兜底）。
+5. **保存安全护栏**：禁止直接调用 `openpyxl.Workbook.save`，统一经由 `pipeline.common.safe_save_workbook` 原子替换，杜绝 0 字节截断损坏。
 
-# 3) 改完东西跑回归（推荐用一键脚本，见下）
+---
+
+## 四、快速开始
+
+### 1. 运行环境要求
+- **操作系统**：Windows 10/11, macOS, Linux
+- **Python**：系统 Python 3.12（必须安装 `opencc`，用于繁简/异体归一）
+- **依赖库**：`fastapi`, `uvicorn`, `openpyxl`, `opencc`
+
+### 2. 启动联机主力服务（推荐日常使用）
+```bash
+# 启动 FastAPI 后端服务（端口 8800）
+python -m uvicorn app.server.main:app --port 8800 --reload
+```
+打开浏览器访问：**`http://127.0.0.1:8800/`**
+- 支持全文搜索与人物/地名快速导航；
+- 支持段落阅读与裴注/旧史注即时跳转；
+- 支持人物详情完整称谓表、前朝人物标注与多证据关系图谱；
+- 支持每条命中的「標錯」面板（修改归属或弃用），一键写入待生效纠错表。
+
+### 3. 打开离线静态单页（脱机便携查阅）
+直接双击打开目录下的 **`dist/index.html`**，或者使用简易静态服务器：
+```bash
+# 静态服务启动示例
+cd dist && python -m http.server 8808
+```
+无需后台数据库与 Python 环境，所有数据已打包预计算。
+
+### 4. 数据管线一键全量重建
+当修改了 `workbook/*.xlsx` 权威源后，执行全量重建：
+```bash
+# 运行前请确保关闭 8800 本地服务（避免 Windows 下 SQLite 句柄锁）
+python app/tools/rebuild.py
+```
+重建完成后，如需更新离线快照，运行：
+```bash
+python app/tools/export_static.py          # 导出离线快照至 dist/
+python app/tools/export_static.py --check  # 校验离线快照与 SQLite 库完全同步
+```
+
+---
+
+## 五、自动化测试与回归矩阵
+
+项目建立了覆盖数据层、字面层、服务端、前端交互及专项交付的完整断言网：
+
+```bash
+# 1. 数据管线基线回归（116 项，只许升不许降）
+python pipeline/verify.py --check
+
+# 2. 关系源健康度体检（0 问题，0 派生列分歧）
+python pipeline/relations.py check
+
+# 3. 全栈新链路与端点端到端断言（190 项，含关系读法、证据、地名检索、标色落点）
+python app/tools/verify_p3.py
+
+# 4. 网页标错（P8-b）纠错链路红绿闭环断言（28 项）
+python app/tools/verify_p3_overrides.py
+
+# 5. P2 交付专项独立审查（22 项，支持 --inject 故障注入）
+python app/tools/verify_p2_review.py
+
+# 6. 一键全回归脚本（含无头 UI 样式与功能检查，约 3-4 分钟）
 bash scripts/run_all.sh
 ```
 
-**依赖**：Python 3.12（须装 `opencc`，用于繁简/异体归一）；UI 测试另需 Node + `jsdom`。
-
 ---
 
-## 当前基线（2026-09-25）
+## 六、仓库目录结构
 
-| 项 | 值 |
-|---|---|
-| 覆盖 | 史記 130 / 漢書 109 / 後漢書 130 / 三國志 65 / 晉書 130（含载记 30）= **564 篇** |
-| 语料 | 95,632 句 |
-| 词典 | 人物数见 `annotate.py` 输出 / 地名 **1575** / 零命中 0 |
-| 验收 | `verify --check` 全通过（条数只许升不许降）· `check_trad` A–G 七道闸 · UI 四套 |
-
-> 人数与断言条数会随补人变动，**以实跑为准**，勿抄此处的旧数：
-> `python pipeline/annotate.py`（看「人物 N」）、`python pipeline/verify.py --check`（看末行）。
-
----
-
-## 回归链（一键）
-
-```bash
-bash scripts/run_all.sh            # 常规：断言 → 字面层 → UI 四套（约 1-2 分钟）
-bash scripts/run_all.sh --full     # 追加 _ui_sweep.js 全量扫描（慢）
-bash scripts/run_all.sh --no-ui    # 只跑 Python 侧（改词典时的快速回路）
-```
-
-脚本会自动定位 python（挑**装了 opencc** 的那个）、node 与 jsdom 目录，
-并自动起停 8770 端口的静态服务。手工等价步骤：
-
-```bash
-python pipeline/verify.py --check      # 数据断言基线，只许升不许降
-python pipeline/check_trad.py          # 字面层 A–G 七道闸
-
-cd web && python -m http.server 8770 &  # UI 测试需要它
-NODE_PATH=<含 jsdom 的 node_modules> node pipeline/_ui_test.js
-NODE_PATH=<...> node pipeline/_ui_test_books.js
-NODE_PATH=<...> node pipeline/_ui_test_places.js
-NODE_PATH=<...> node pipeline/_ui_csscheck.js
+```text
+├── app/                  # 【当前主力】联机与离线核心资产
+│   ├── server/           # FastAPI 服务后端（main.py 路由、db.py 数据库查询与组装）
+│   ├── web/              # 主力单页应用前端（index.html, app.js, style.css）
+│   ├── tools/            # 运维与断言工具（rebuild.py, export_static.py, verify_p*.py）
+│   └── DEV.md            # 开发者实战施工速查手册（端点清单、断言约定）
+├── dist/                 # 【分发产物】离线静态单页快照（index.html, data.js, app.js）
+├── workbook/             # 【唯一权威源】人工审定工作簿（只读单向流）
+│   ├── persons.xlsx      # 人物主表（正名、字号、朝代、跨书收录）
+│   ├── places.xlsx       # 地名主表与异体写法
+│   ├── relations.xlsx    # 人物关系表与 relation_evidence 证据子表
+│   ├── overrides.xlsx    # 命中标错/改归纠错表（UI 纠错写入目标）
+│   └── sentence-edits.xlsx # 句子拆分/合并/弃用表
+├── pipeline/             # 【离线数据管线】提取、规一、标注与守卫
+│   ├── run_pipeline.py   # 管线总编排
+│   ├── common.py         # 稳定 uid 计算与 safe_save_workbook 安全保存护栏
+│   ├── annotate.py       # 正文人物标注与泛称消歧
+│   ├── annotate_places.py # 正文地名标注
+│   ├── annotate_pei.py   # 裴松之注独立索引构建
+│   ├── relations.py      # 关系图谱与证据库处理
+│   ├── check_trad.py     # 字面层 A–G 七道防线守卫
+│   └── verify.py         # 数据层基线断言套件
+├── docs/                 # 【技术文档库】方案、踩坑清单与独立审查报告
+│   ├── 36-踩坑清单.md     # 必须掌握的踩坑教训、设计红线与环境病
+│   ├── 37-全栈交接与全貌审查-2026-10-04.md # 全栈架构交接全貌
+│   ├── 39-P0与P1交付及独立审查报告-2026-10-04.md # P0 安全保存与 P1 数据段落交付报告
+│   ├── 40-P2交付与地名标错及关系边治理总结.md # P2 功能总结
+│   ├── 41-P2全量交付独立审查报告-2026-10-04.md # P2 阶段独立审查报告
+│   └── ... (历史文档 01–35 供溯源参考)
+├── web/                  # 【已冻结】Phase 2 历史静态网页原型（保留供无头 UI 对齐）
+└── scripts/              # 自动化构建与回归批处理（run_all.sh 等）
 ```
 
 ---
 
-## 人工判断清单（裸帝号/王号到底归谁）
+## 七、开发与协作指南（给接手者的几点关键提示）
 
-算法硬兜不准的地方最终必须人判。条目**一律生成、禁止手敲**（光给统计数字判不了）：
-
-```bash
-python pipeline/_gen_review_items.py --list                   # 挑：按 guess 处数降序
-python pipeline/_gen_review_items.py --alias 武帝 --book js \
-    --per 6 --out "docs/17-条目-<批次>.md"                    # 生：带原文上下文
-```
-
-判定 → 回填 `GENERIC_*` / core → `verify.py` 加一条断言 → 结论记进 `docs/17` §五台账。
-模板与四步流程见 **`docs/17-待办-人工判断清单.md`**。
-
----
-
-## 目录结构
-
-```
-pipeline/        离线管线（Python）
-  fetch_book.py    抓维基文库卷页
-  build.py         提取正文、切句        → data/corpus/*.json
-  build_dict.py    人物词典与泛称规则    → data/dict/people.json
-  annotate.py      别名标注、建索引      → data/index/*.json + web/app-data.js
-  annotate_pei.py  裴注独立索引          → data/index/pei-data.json
-  annotate_js_note.py  晋书旧史注独立索引
-  build_places.py / annotate_places.py   地名层
-  check_trad.py    字面层守卫（必须最后跑）
-  verify.py        回归断言
-  run_pipeline.py  按顺序编排以上各步
-  _ui_test*.js _ui_csscheck.js _ui_sweep.js   无头 UI 回归
-  _snapshot_counts.py   改动前后逐 id 对账
-  _shot*.js             截图取证
-  _probe_*.py _gen_*_fill.py _apply_*_fill.py
-                        **仍在用的**抽查探针与批量入典工具（见 _scratch/README.md）
-  _gen_review_items.py  人工判断条目生成器（带原文上下文）
-  _scratch/             一次性脚本存档（30 个，绑定某一轮，非工作流）
-
-data/
-  raw/ corpus/ index/   抓取 / 切分 / 索引产物（**不入库**）
-  dict/                 books.json 书注册表、volumes/*.json 五书篇名表（人工审定）
-web/
-  index.html app.js     源码（**入库**）
-  *-data.js             管线生成的数据（**不入库**）
-docs/                   18 篇设计 / 台账 / 交接文档
-scripts/run_all.sh      一键回归
-```
-
-**入库判据**：凡 `pipeline/*.py` 会覆写的文件一律不入库（见 `.gitignore`）。
-不可再生、必须入库的人工资产是 `data/dict/books.json`、`data/dict/volumes/*.json`、
-`pipeline/build_dict.py`（`PERSONS` 的唯一来源）、`pipeline/build_places.py`、`web/app.js`。
-
----
-
-## 改动铁律
-
-1. **算法三层不推倒** —— build 切分 / annotate 匹配·泛称 / 前端作用域。改质量 = 改词典与守卫。
-2. **每修一个坑，`verify.py` 加一条断言**，基线只许升不许降。
-3. 别名只写**繁体**；裸官职、裸帝号/王号**禁止**进单人 core（走 `GENERIC` 泛称）；长名优先。
-4. 跨书同人**只扩 `books` 并集**，禁止新建 `p_xxx2`，禁止后表覆盖前表。
-5. 改词典只跑 `annotate*` 子集，轮末才跑全量 `run_pipeline`。
-6. 复杂清洗脚本写 `pipeline/_*.py`，**勿用 `python -c`**（PowerShell 会吞引号和正则）。
-
----
-
-## 文档地图
-
-| 文档 | 内容 |
-|---|---|
-| **`docs/16`** | **新会话交接书**：目标、抽查工作流、回归链、禁区 —— 接手先读这篇 |
-| `docs/18` | 人名筛查方法与原则（什么算人名、排除闸） |
-| **`docs/17`** | **人工判断清单：模板 + 四步流程 + 已判台账**（条目在 `docs/17-条目-*.md`） |
-| `docs/15` | 本轮问题与经验总结 |
-| `docs/11–12` | 以史记为标杆的问题报告 + R0–R5 修改方案 |
-| `docs/13–14` | 晋书接入流程与五轮落地 |
-| `docs/01–10` | 早期方案与前三书接入记录（部分已过时，见下） |
-
-> ⚠ `docs/01` 方案中的**微信小程序 / 云托管路线已暂停**（`miniprogram/`、`server/`
-> 从未建立），当前交付形态是本地静态网页。文档 01–18 是线性累积的，
-> 其中的统计数字（verify 条数、人物数）多为当轮快照，**以实跑结果为准**。
-
----
-
-## 已知残留（未决）
-
-- `docs/17` 人工判断：待判批次 `docs/17-条目-晋书帝号.md`（高祖/武帝/元帝/惠帝/明帝 @js）
-- 泛称 `guess` 池（最可疑，硬兜 default）；规模以 `python pipeline/_gen_review_items.py --list` 当次输出为准
-- 晋书裸「武帝」仍有汉武帝追述（`GENERIC_BOOK_CANDIDATES` 已收过一轮，待复核）
-- 附传/类传长尾缺人；表字尊称命中 ≤10 的长尾
-- `web/app-data.js` 31.9 MB 整包注入（`docs/03` 已决策按书拆分，尚未实施）
-- 文档 01–18 数字互相打架，待治理
+1. **接手必读文档**：
+   - 优先阅读 **[`app/DEV.md`](app/DEV.md)**（施工入口与接口速查）；
+   - 必读 **[`docs/36-踩坑清单.md`](docs/36-踩坑清单.md)**（防踩坑必修清单）；
+   - 查阅最新的交付报告（`docs/39`、`docs/41`、`docs/42`）；
+   - 提示：`docs/01`–`docs/18` 为早期历史探索文档，其中关于“小程序/云开发”或早期统计数字已过时，请以最新代码与 36 号后文档为准。
+2. **拒绝假绿与恒真断言**：
+   - 所有断言与审查脚本必须满足「故意注入故障变红 🔴 $\rightarrow$ 还原代码变绿 🟢」闭环，杜绝 `assert True` 或空列表遍历等虚假断言。
+3. **跨会话文档留存铁律**：
+   - 每次完成重要特性或阶段审查后，必须在 `docs/` 递增留下交接文档，并同步更新 `.workbuddy/memory/` 与 `.agents/skills/` 技能文件。

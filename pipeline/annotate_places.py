@@ -47,10 +47,11 @@ except Exception:
     _T2S = None
 
 # 类型展示顺序（前端按此分组）与中文名
-KIND_ORDER = ["国", "郡", "县", "关", "山", "川", "湖", "域", "外"]
-KIND_LABEL = {"国": "国/朝代", "郡": "郡", "县": "县邑都城", "关": "关隘",
+KIND_ORDER = ["国", "州", "郡", "县", "关", "山", "川", "湖", "域", "外"]
+KIND_LABEL = {"国": "国/朝代", "州": "州部", "郡": "郡", "县": "县邑都城", "关": "关隘",
               "山": "山岳", "川": "河川", "湖": "湖泽",
               "域": "地域", "外": "域外"}
+
 
 # 「整篇讲述」的判据：**篇名里含这个地名**。
 #
@@ -359,9 +360,8 @@ def main():
                     new_sentences.append(record)
                 annotate(record, cid)
 
-    # 只留「确实命中了人 or 地」的句子
-    new_sentences = [s for s in new_sentences if s.get("persons") or s.get("pmarks")]
-    place_only = sum(1 for s in new_sentences if not s.get("persons"))
+    # 保留全量句子入库，保证正文阅读层无洞且注文跳转 100% 可达
+    place_only = sum(1 for s in new_sentences if s.get("pmarks") and not s.get("persons"))
 
     char_marks = sum(1 for s in new_sentences for m in s.get("pmarks", [])
                      if m["tier"] == "char")

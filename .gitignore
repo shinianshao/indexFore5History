@@ -69,11 +69,10 @@ __pycache__/
 
 # ===========================================================
 # Excel 权威源目录（workbook/）
-#   persons.xlsx   = **人写的权威源**，build_dict.py 优先读它 → 必须入库
-#   places.xlsx / sentences-*.xlsx = 脚本可再生的派生视图 → 不入库
+#   persons.xlsx / places.xlsx = **人写的权威源**，build_dict.py 优先读它们 → 必须入库
+#   sentences-*.xlsx = 脚本可再生的派生视图 → 不入库
 #   .bak-<时间戳>.xlsx / *.new.xlsx = 覆盖前备份与人改保护产物 → 不入库
 # ===========================================================
-workbook/places.xlsx
 workbook/sentences-*.xlsx
 workbook/*.bak-*.xlsx
 workbook/*.new.xlsx
@@ -93,3 +92,9 @@ workbook/*.new.xlsx
 # ⚠️ 2026-09-28 更正：PERSONS 的权威源不再是 build_dict.py 本身，
 #    而是 workbook/persons.xlsx（缺文件时才回退 persons_data.py）。
 # ===========================================================
+
+# 发布包与临时草稿
+release/
+scratch/
+pipeline/_scratch/
+

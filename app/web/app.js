@@ -683,6 +683,7 @@
       out.innerHTML = html;
       hint.textContent = "實線＝正名或別名直接命中；虛線＋？＝泛稱推斷，待確認。";
       currentPid = pid;
+      currentPlace = null;
     });
   }
 
@@ -693,9 +694,19 @@
      地名側沒有的：稱謂表（人物特有）、關係圖（人物特有）、注文（裴注只跟人）。 */
   function renderPlace(plid) {
     resetMFilter("l:" + plid);
-    return request("/api/place/" + encodeURIComponent(plid) + mfQuery())
-      .then(function (d) {
+    return Promise.all([
+      request("/api/place/" + encodeURIComponent(plid) + mfQuery()),
+      loadOverrides()
+    ]).then(function (rs) {
+      var d = rs[0];
       var p = d.profile;
+      if (ovMsgFor && ovMsgFor !== plid) { ovMsg = ""; ovMsgFor = ""; }
+      ovMap = {};
+      (rs[1].items || []).forEach(function (r) {
+        ovMap[ovKeyOf(r.uid, r.s, r.e, r.surface)] = r;
+      });
+      ovPending = rs[1].pending || 0;
+
       // 原文層的「只看相關段落」靠它（與人物頁同一個機制）
       var rows = filterMentions(d.mentions || []);
       var uids = {};
@@ -730,6 +741,17 @@
       }
       html += "</div>";
 
+      if (!OFF && ovPending > 0) {
+        html += "<div class=\"ovbar\"><span class=\"ovtxt\">" +
+          esc(ovMsg || ("有 " + ovPending + " 條標錯記錄待重建生效")) +
+          "</span>" +
+          (OFF || !ovPending ? "" : "<button data-act=\"ovrebuild\">重建</button>") +
+          "</div>";
+      } else if (!OFF && ovMsg) {
+        html += "<div class=\"ovbar\"><span class=\"ovtxt\">" +
+          esc(ovMsg) + "</span></div>";
+      }
+
       var groups = [], byId = {};
       html += mentionFilterBar(d, rows.length);
       rows.forEach(function (m) {
@@ -744,9 +766,17 @@
         html += "<div class=\"chapter-title\">" + esc(g.title || "") +
           " · " + g.rows.length + " 處</div>";
         g.rows.forEach(function (m) {
+          var ov = ovMap[ovKeyOf(m.uid, m.s, m.e, m.surface)];
+          var flag = OFF ? "" : (ov
+            ? flagBadge(ov)
+            : "<span class=\"acts\"><button data-act=\"flag\">標錯</button></span>");
           html += "<div class=\"sent\" data-chapter=\"" + esc(m.chapter_id) +
-            "\" data-uid=\"" + esc(m.uid) + "\" data-place=\"" + esc(plid) + "\">" +
-            markSentence(m.text, m.surface, m.tier, m.s, m.e) + "</div>";
+            "\" data-uid=\"" + esc(m.uid) +
+            "\" data-s=\"" + m.s + "\" data-e=\"" + m.e +
+            "\" data-surface=\"" + esc(m.surface) +
+            "\" data-pid=\"" + esc(plid) +
+            "\" data-place=\"" + esc(plid) + "\">" +
+            flag + markSentence(m.text, m.surface, m.tier, m.s, m.e) + "</div>";
         });
       });
 
@@ -756,23 +786,26 @@
   }
 
   /* 標錯面板：不彈窗，就地展開一行——彈窗要管焦點與層級，
-     而這裡只需要「輸入人名 → 點候選」兩下。 */
+     而這裡只需要「輸入人名/地名 → 點候選」兩下。 */
   function openFixBox(row) {
     var old = row.parentNode ? row.parentNode.querySelector(".fixbox") : null;
     if (old) { old.parentNode.removeChild(old); }
     var surface = row.getAttribute("data-surface") || "";
+    var pid = row.getAttribute("data-pid") || "";
+    var isPlace = !!row.getAttribute("data-place") || pid.startsWith("pl_");
     var box = document.createElement("div");
     box.className = "fixbox";
     ["uid", "s", "e", "surface", "pid"].forEach(function (k) {
       box.setAttribute("data-" + k, row.getAttribute("data-" + k) || "");
     });
+    box.setAttribute("data-is-place", isPlace ? "1" : "0");
     box.innerHTML =
       "<div class=\"fix-head\">這處判為「" + esc(surface) + "」</div>" +
       "<div class=\"fix-line\"><input class=\"fix-input\" " +
-      "placeholder=\"改歸給誰？輸入人名，如 項羽\" autocomplete=\"off\">" +
+      "placeholder=\"" + (isPlace ? "改歸給哪個地名？輸入地名，如 洛陽" : "改歸給誰？輸入人名，如 項羽") + "\" autocomplete=\"off\">" +
       "<button data-act=\"cancel\">取消</button></div>" +
       "<div class=\"fix-cand\"></div>" +
-      "<div class=\"fix-alt\">或者 <button data-act=\"drop\">不是他（這處不算）</button>" +
+      "<div class=\"fix-alt\">或者 <button data-act=\"drop\">" + (isPlace ? "不是此地（這處不算）" : "不是他（這處不算）") + "</button>" +
       "<span class=\"fix-hint\">　改動記進 overrides.xlsx，重建後生效</span></div>";
     if (row.nextSibling) { row.parentNode.insertBefore(box, row.nextSibling); }
     else { row.parentNode.appendChild(box); }
@@ -785,19 +818,50 @@
     var cand = box.querySelector(".fix-cand");
     q = String(q || "").trim();
     if (!q) { cand.innerHTML = ""; return; }
+    var isPlace = box.getAttribute("data-is-place") === "1";
     clearTimeout(fixTimer);
     // 防抖：每敲一個字就查一次，古籍人名兩三個字，會連著查三次
     fixTimer = setTimeout(function () {
       request("/api/search?q=" + encodeURIComponent(q)).then(function (r) {
-        var items = (r.items || []).slice(0, 6);
-        cand.innerHTML = items.length
-          ? items.map(function (x) {
+        var candItems = [];
+        if (isPlace) {
+          (r.places || []).slice(0, 5).forEach(function (x) {
+            candItems.push({
+              id: x.id,
+              name: x.trad_name,
+              meta: (x.kindLabel || x.kind || "地名") + (x.era ? " · " + x.era : "") + " · " + x.n + " 處"
+            });
+          });
+          (r.items || []).slice(0, 3).forEach(function (x) {
+            candItems.push({
+              id: x.id,
+              name: x.trad_name,
+              meta: "人名 · " + (x.dynasty || "") + (x.title ? " · " + x.title : "") + " · " + x.n + " 處"
+            });
+          });
+        } else {
+          (r.items || []).slice(0, 5).forEach(function (x) {
+            candItems.push({
+              id: x.id,
+              name: x.trad_name,
+              meta: (x.dynasty || "") + (x.title ? " · " + x.title : "") + " · " + x.n + " 處"
+            });
+          });
+          (r.places || []).slice(0, 3).forEach(function (x) {
+            candItems.push({
+              id: x.id,
+              name: x.trad_name,
+              meta: "地名 · " + (x.kindLabel || x.kind || "") + (x.era ? " · " + x.era : "") + " · " + x.n + " 處"
+            });
+          });
+        }
+        cand.innerHTML = candItems.length
+          ? candItems.map(function (x) {
               return "<div class=\"fix-cand-row\" data-pid=\"" + esc(x.id) + "\">" +
-                "<span class=\"nm\">" + esc(x.trad_name) + "</span>" +
-                "<span class=\"mt\">" + esc(x.dynasty || "") +
-                (x.title ? " · " + esc(x.title) : "") + " · " + x.n + " 處</span></div>";
+                "<span class=\"nm\">" + esc(x.name) + "</span>" +
+                "<span class=\"mt\">" + esc(x.meta) + "</span></div>";
             }).join("")
-          : "<div class=\"fix-empty\">查不到這個人</div>";
+          : "<div class=\"fix-empty\">查不到「" + esc(q) + "」</div>";
       }).catch(function () { cand.innerHTML = ""; });
     }, 220);
   }
@@ -814,10 +878,11 @@
     if (newPid) { body.new = newPid; }
     requestPost("/api/override", body).then(function (r) {
       // 重渲染：徽章與計數都由服務端那份決定
-      return renderPerson(currentPid).then(function () {
+      var refresh = currentPlace ? renderPlace(currentPlace) : renderPerson(currentPid);
+      return refresh.then(function () {
         // ⚠️ overrides.py 在 Excel 被別人占著（.new.xlsx 已寫、退出碼還是 0）時
         // 會回 warning。不顯示的話介面說「已記錄」而權威源裡根本沒有。
-        ovStatus(r.warning ? "⚠️ " + r.warning : "已記錄，重建後生效", currentPid);
+        ovStatus(r.warning ? "⚠️ " + r.warning : "已記錄，重建後生效", currentPlace || currentPid);
       });
     }).catch(function (e) {
       var alt = box.querySelector(".fix-hint");
@@ -827,7 +892,10 @@
 
   function submitUnflag(row) {
     requestPost("/api/override/revoke", { uid: row.getAttribute("data-uid") })
-      .then(function () { renderPerson(currentPid); })
+      .then(function () {
+        if (currentPlace) return renderPlace(currentPlace);
+        return renderPerson(currentPid);
+      })
       .catch(showErr);
   }
 
@@ -922,6 +990,11 @@
       if (!(pno in hp)) { readerState.hitsOnly = false; renderReader(); }
     }
     var node = readerBody.querySelector('p[data-para="' + pno + '"]');
+    var cur = pno;
+    while (!node && cur > 1) {
+      cur--;
+      node = readerBody.querySelector('p[data-para="' + cur + '"]');
+    }
     if (!node) return false;
     readerBody.scrollTop += node.getBoundingClientRect().top -
                             readerBody.getBoundingClientRect().top -
@@ -1464,7 +1537,8 @@
     { code: "js", name: "晉書", era: [12, 15] }
   ];
   // 地名分組順序，與 pipeline/annotate_places.py 的 KIND_ORDER 一致
-  var PLACE_KIND_ORDER = ["国", "郡", "县", "关", "山", "川", "湖", "域", "外"];
+  var PLACE_KIND_ORDER = ["国", "州", "郡", "县", "关", "山", "川", "湖", "域", "外"];
+
 
   /* ---------- 命中篩選（按書 / 按時代）----------
      聯機 `mentions` 有 200 條上限，離線給全量（docs/29 §六「只多不少」的刻意差異）。
@@ -1914,7 +1988,10 @@
     // 糾錯條上的「重建」
     var ovr = ev.target.closest ? ev.target.closest("button[data-act=\"ovrebuild\"]") : null;
     if (ovr) {
-      onRebuilt = function () { renderPerson(currentPid); };
+      onRebuilt = function () {
+        if (currentPlace) renderPlace(currentPlace);
+        else renderPerson(currentPid);
+      };
       startRebuild();
       return;
     }

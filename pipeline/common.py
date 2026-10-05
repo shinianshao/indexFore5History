@@ -353,3 +353,29 @@ def stable_uid(chapter_id, para, seq) -> str:
     import hashlib
     raw = "{}|{}|{}".format(chapter_id, para, seq)
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def safe_save_workbook(wb, path: str) -> None:
+    """安全原子保存 openpyxl 工作簿，防 Windows 下 open('wb') 截斷損壞原表。
+
+    原理：先在內存 io.BytesIO() 完成 Zip 封包，成功後再寫入臨時文件原子替換目標。
+    若生成過程報錯或目標被佔用，原文件 100% 保持完好，絕不留 0 字節或 2.3KB 損壞檔。
+    """
+    import io
+    bio = io.BytesIO()
+    wb.save(bio)
+    buf = bio.getvalue()
+    dir_name = os.path.dirname(path) or "."
+    os.makedirs(dir_name, exist_ok=True)
+    tmp = path + ".tmp." + str(os.getpid())
+    try:
+        with open(tmp, "wb") as f:
+            f.write(buf)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+

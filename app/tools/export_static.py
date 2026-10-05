@@ -679,9 +679,20 @@ def check(out_dir: str) -> int:
             bad.append("{}(缺键·快照早於地名側)".format(k))
     if bad:
         print("× 快照過期：{}".format(
-            ", ".join("{} {}→{}".format(k, old.get(k), new[k]) for k in bad)))
+            ", ".join("{} {}→{}".format(k, old.get(k), new.get(k)) for k in bad)))
         print("  重導：python app/tools/export_static.py")
         return 1
+
+    # 前端腳本一致性守衛：防止改了 app/web/app.js 卻漏了同步到 dist/app.js
+    app_src = os.path.join(WEB_DIR, "app.js")
+    app_dist = os.path.join(out_dir, "app.js")
+    if os.path.exists(app_src) and os.path.exists(app_dist):
+        with open(app_src, "r", encoding="utf-8") as f1, open(app_dist, "r", encoding="utf-8") as f2:
+            if f1.read().replace("\r\n", "\n") != f2.read().replace("\r\n", "\n"):
+                print("× 前端腳本未同步：dist/app.js 與 app/web/app.js 存在差異")
+                print("  重導：python app/tools/export_static.py")
+                return 1
+
     print("✓ 快照與庫同步（{} 句 / {} 命中 / {} 地名命中 / {} 地名寫法）".format(
         new["sentences"], old.get("mentions"), old.get("place_mentions"),
         old.get("place_aliases")))

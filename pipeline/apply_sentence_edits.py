@@ -50,7 +50,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from common import CORPUS, stable_uid   # noqa: E402
+from common import CORPUS, stable_uid, safe_save_workbook   # noqa: E402
 
 DB_PATH = os.path.join(ROOT, "data", "index", "index.db")
 WORKBOOK = os.path.join(ROOT, "workbook", "sentence-edits.xlsx")
@@ -84,7 +84,7 @@ def init_workbook() -> None:
     ws.title = "edits"
     ws.append(HEADERS)
     os.makedirs(os.path.dirname(WORKBOOK), exist_ok=True)
-    wb.save(WORKBOOK)
+    safe_save_workbook(wb, WORKBOOK)
     print("已建空表：{}".format(WORKBOOK))
 
 
@@ -115,12 +115,15 @@ def _append_row(row: dict) -> None:
     ws = wb["edits"] if "edits" in wb.sheetnames else wb.active
     ws.append([row.get(h) for h in HEADERS])
     try:
-        wb.save(WORKBOOK)
+        safe_save_workbook(wb, WORKBOOK)
         print("已写入：{}".format(WORKBOOK))
-    except PermissionError:
+    except (PermissionError, OSError):
         alt = WORKBOOK.replace(".xlsx", ".new.xlsx")
-        wb.save(alt)
-        print("⚠️ 原表被占用，已改写：{}".format(alt))
+        try:
+            safe_save_workbook(wb, alt)
+            print("⚠️ 原表被占用，已改写：{}".format(alt))
+        except Exception as e:
+            print("⚠️ 写入备用表失败：{}".format(e))
 
 
 def _set_status(uid: str, status: str) -> None:
@@ -143,11 +146,16 @@ def _set_status(uid: str, status: str) -> None:
         print("没有匹配的生效编辑：{}".format(uid))
         return
     try:
-        wb.save(WORKBOOK)
+        safe_save_workbook(wb, WORKBOOK)
         print("已作废 {} 条（{}）".format(n, uid))
-    except PermissionError:
-        wb.save(WORKBOOK.replace(".xlsx", ".new.xlsx"))
-        print("⚠️ 原表被占用，已改写 .new.xlsx")
+    except (PermissionError, OSError):
+        alt = WORKBOOK.replace(".xlsx", ".new.xlsx")
+        try:
+            safe_save_workbook(wb, alt)
+            print("⚠️ 原表被占用，已改写 .new.xlsx")
+        except Exception as e:
+            print("⚠️ 写入备用表失败：{}".format(e))
+
 
 
 # ---------------------------------------------------------------- 定位

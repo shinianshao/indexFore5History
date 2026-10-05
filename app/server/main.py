@@ -243,9 +243,12 @@ def api_person(pid: str, limit: int = Query(200), book: str = Query(""),
     return data
 
 
+MAX_CHAPTER_LIMIT = 5000  # 全篇原文单次上限（最长篇 sj-014 有 3454 句）
+
+
 @app.get("/api/chapter/{cid}")
-def api_chapter(cid: str, limit: int = Query(500)):
-    limit = max(1, min(int(limit), MAX_LIMIT))
+def api_chapter(cid: str, limit: int = Query(5000)):
+    limit = max(1, min(int(limit), MAX_CHAPTER_LIMIT))
     data = db.chapter_sentences(cid, limit)
     if not data["chapter"]:
         raise HTTPException(404, "查无此篇：{}".format(cid))
@@ -364,13 +367,14 @@ def api_overrides(uid: str = Query("", description="只看某句的纠错")):
     if uid:
         uid = uid.strip()
         items = [r for r in items if r["uid"] == uid]
-    # pid 翻成正名：界面上「已標錯 → 項羽」比「→ p_xiangyu」有用得多
-    names = db.person_names([r["to"] for r in items] + [r["from"] for r in items])
+    # pid/plid 翻成正名：界面上「已標錯 → 項羽」比「→ p_xiangyu」有用得多
+    p_names = db.person_names([r["to"] for r in items] + [r["from"] for r in items])
+    pl_names = db.place_names([r["to"] for r in items] + [r["from"] for r in items])
     # ⚠️ 一定要带上「是否已生效」：表里的行永远 active，重建完也不会消失。
     #    不算的话顶栏的 N 永不归零，会一直骗你「重建后生效」。
     for r, applied in zip(items, db.override_states(items)):
-        r["toName"] = names.get(r["to"], "")
-        r["fromName"] = names.get(r["from"], "")
+        r["toName"] = pl_names.get(r["to"]) or p_names.get(r["to"], "")
+        r["fromName"] = pl_names.get(r["from"]) or p_names.get(r["from"], "")
         r["applied"] = applied
     pending = sum(1 for r in items if not r["applied"])
     return {"items": items, "count": len(items), "pending": pending}
@@ -404,6 +408,8 @@ def api_override(body: dict = Body(...)):
     if action == "reassign" and not new_pid:
         raise HTTPException(400, "reassign 要给 new（人名或 pid）")
     args = ["add", "--uid", uid, "--nth", str(nth), "--action", action]
+    if pid:
+        args += ["--pid", pid]
     if action == "reassign":
         args += ["--new", new_pid]
     if body.get("note"):

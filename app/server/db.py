@@ -193,10 +193,11 @@ def stats() -> Dict[str, Any]:
 # ⚠️ 不是拼音序——拼音只是 Excel 里给人看排序用的辅助列，界面从来没按它排过。
 
 # 地名按类型分组展示。顺序与 pipeline/annotate_places.py 的 KIND_ORDER 一致。
-PLACE_KIND_ORDER = ["国", "郡", "县", "关", "山", "川", "湖", "域", "外"]
-PLACE_KIND_LABEL = {"国": "国/朝代", "郡": "郡", "县": "县邑都城", "关": "关隘",
-                    "山": "山", "川": "川", "湖": "湖", "域": "域外",
+PLACE_KIND_ORDER = ["国", "州", "郡", "县", "关", "山", "川", "湖", "域", "外"]
+PLACE_KIND_LABEL = {"国": "国/朝代", "州": "州部", "郡": "郡", "县": "县邑都城", "关": "关隘",
+                    "山": "山", "川": "川", "湖": "湖", "域": "地域",
                     "外": "其他"}
+
 
 
 def _book_counts(conn, table: str, key_col: str,
@@ -651,16 +652,16 @@ def mention_nth(uid: str, s: Any, e: Any, surface: str,
 
     为什么必须由后端算，不能让前端传
     --------------------------------
-    前端（人物页）看到的是「这个人在本句里的第几条」，而 nth 是
-    「本句**所有人**的命中里的第几条」。一句常同时挂着好几个人
-    （劉邦 / 項羽 / 樊噲），两个序号根本不是一回事。
-    前端传 nth 的话，改归就会落到**别人头上**，而且不报错——
-    `overrides.apply` 只按 nth 取第几条，取错也是「改归 1 条」。
+    前端（人物页/地名页）看到的是「这个人在本句里的第几条」，而 nth 是
+    「本句**所有人/地名**的命中里的第几条」。一句常同时挂着好几个实体，
+    两个序号根本不是一回事。
     """
+    table = "place_mentions" if (pid and str(pid).startswith("pl_")) else "mentions"
+    id_col = "place_id" if table == "place_mentions" else "person_id"
     with connect() as conn:
         rows = conn.execute(
-            "SELECT person_id, surface, s, e FROM mentions "
-            "WHERE sentence_uid=? ORDER BY s, e", (uid,)).fetchall()
+            "SELECT {}, surface, s, e FROM {} "
+            "WHERE sentence_uid=? ORDER BY s, e".format(id_col, table), (uid,)).fetchall()
     if not rows:
         return None
     # 先精确（串 + 偏移），与 overrides.cmd_apply 的匹配顺序保持一致
@@ -671,7 +672,7 @@ def mention_nth(uid: str, s: Any, e: Any, surface: str,
     for i, r in enumerate(rows, 1):
         if r["surface"] != surface:
             continue
-        if pid and r["person_id"] != pid:
+        if pid and r[id_col] != pid:
             continue
         return i
     for i, r in enumerate(rows, 1):
@@ -707,7 +708,7 @@ def override_states(rows: List[Dict[str, Any]]) -> List[bool]:
 
     判据就是拿行去问库（一次查完，别一条一条问）：
       `drop`     → 这处命中已经不在了
-      `reassign` → 这处命中已经归到 `to` 那个人
+      `reassign` → 这处命中已经归到 `to` 那个人/地名
       `keep`     → 不改数据，永远算「待重建」（它只是个标记）
     """
     uids = sorted({str(r.get("uid") or "").strip() for r in rows} - {""})
@@ -719,6 +720,10 @@ def override_states(rows: List[Dict[str, Any]]) -> List[bool]:
                     "SELECT sentence_uid, s, e, surface, person_id FROM mentions "
                     "WHERE sentence_uid IN ({})".format(ph), uids):
                 hit[(uid, s, e, surface)] = pid
+            for uid, s, e, surface, plid in conn.execute(
+                    "SELECT sentence_uid, s, e, surface, place_id FROM place_mentions "
+                    "WHERE sentence_uid IN ({})".format(ph), uids):
+                hit[(uid, s, e, surface)] = plid
     out = []
     for r in rows:
         key = (str(r.get("uid") or "").strip(), _as_int(r.get("s")),
@@ -749,6 +754,18 @@ def person_names(pids) -> Dict[str, str]:
         return {r[0]: r[1] for r in conn.execute(
             "SELECT id, trad_name FROM persons WHERE id IN ({})".format(ph),
             pids)}
+
+
+def place_names(plids) -> Dict[str, str]:
+    """place_id → 正名，**一次查完**而不是 N+1。"""
+    plids = [p for p in (plids or []) if p and str(p).startswith("pl_")]
+    if not plids:
+        return {}
+    ph = ",".join("?" * len(plids))
+    with connect() as conn:
+        return {r[0]: r[1] for r in conn.execute(
+            "SELECT id, trad_name FROM places WHERE id IN ({})".format(ph),
+            plids)}
 
 
 def full_text_search(q: str, limit: int = 50) -> List[Dict[str, Any]]:
@@ -946,7 +963,7 @@ def place_payload(pid: str, limit: int = 200, book: Optional[str] = None,
 
 
 
-def chapter_sentences(cid: str, limit: int = 500) -> List[Dict[str, Any]]:
+def chapter_sentences(cid: str, limit: int = 5000) -> Dict[str, Any]:
     """取一篇的原文（句子序列）。用于「读全篇」。"""
     with connect() as conn:
         meta = conn.execute(

@@ -47,7 +47,10 @@ def main() -> None:
         if doc.get("bookId") != BOOK:
             continue
         cid = doc["chapterId"]
+        last_text_pseq = 1
         for para in doc.get("paragraphs") or []:
+            if para.get("sentences"):
+                last_text_pseq = para.get("seq", 1)
             text = pei_text(para)
             if not text:
                 continue
@@ -55,6 +58,7 @@ def main() -> None:
             note_chars += len(text)
             normalized = norm(text)
             occupied = [False] * len(text)
+            target_pseq = para.get("seq", 1) if para.get("sentences") else last_text_pseq
 
             def add_hit(pid, s, e, surface):
                 nonlocal hit_marks
@@ -73,7 +77,7 @@ def main() -> None:
                 a = max(0, s - 18)
                 b = min(len(text), e + 22)
                 person_samples[pid].append({
-                    "cid": cid, "pseq": para.get("seq", 0), "alias": surface,
+                    "cid": cid, "pseq": target_pseq, "alias": surface,
                     "s": s - a, "e": e - a, "text": text[a:b],
                 })
 

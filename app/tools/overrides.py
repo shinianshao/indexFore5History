@@ -95,15 +95,17 @@ def make_context(text: str, s: int, e: int) -> str:
         if text else ""
 
 
-def sentence_mentions(conn, uid: str):
+def sentence_mentions(conn, uid: str, pid: str = ""):
     """該句的全部命中，按位置排序後附上 nth（1-based）。"""
     row = conn.execute("SELECT text, chapter_id FROM sentences WHERE uid=?",
                        (uid,)).fetchone()
     if not row:
         raise SystemExit("庫裡沒有這個 uid：{}".format(uid))
+    table = "place_mentions" if (pid and str(pid).startswith("pl_")) else "mentions"
+    id_col = "place_id" if table == "place_mentions" else "person_id"
     rows = conn.execute(
-        "SELECT person_id, surface, s, e, tier FROM mentions "
-        "WHERE sentence_uid=? ORDER BY s, e", (uid,)).fetchall()
+        "SELECT {}, surface, s, e, tier FROM {} "
+        "WHERE sentence_uid=? ORDER BY s, e".format(id_col, table), (uid,)).fetchall()
     out = []
     for i, r in enumerate(rows, 1):
         out.append({"nth": i, "pid": r[0], "surface": r[1],
@@ -112,9 +114,24 @@ def sentence_mentions(conn, uid: str):
 
 
 def resolve_pid(conn, who: str) -> str:
-    """人名 → pid。本來就是 pid 就原樣返回；多個候選就報錯要你寫 pid。"""
-    if who.startswith("p_"):
+    """实体名/ID → pid/plid。本來就是 id 就原樣返回；多個候選報錯。"""
+    who = str(who or "").strip()
+    if who.startswith("p_") or who.startswith("pl_"):
         return who
+    # 先查地名
+    hit_pl = {r[0] for r in conn.execute(
+        "SELECT id FROM places WHERE trad_name=? OR name=?", (who, who))}
+    if not hit_pl:
+        alias_pl = {r[0] for r in conn.execute(
+            "SELECT place_id FROM place_aliases WHERE alias=?", (who,))}
+        hit_pl = alias_pl
+    if len(hit_pl) == 1:
+        return hit_pl.pop()
+    if len(hit_pl) > 1:
+        raise SystemExit("「{}」對應多個地名，請改寫 id：{}".format(
+            who, " / ".join(sorted(hit_pl))))
+
+    # 再查人名
     hit = {r[0] for r in conn.execute(
         "SELECT id FROM persons WHERE trad_name=? OR name=?", (who, who))}
     if not hit:
@@ -126,10 +143,35 @@ def resolve_pid(conn, who: str) -> str:
     if len(hit) > 1:
         raise SystemExit("「{}」對應多個人，請改寫 pid：{}".format(
             who, " / ".join(sorted(hit))))
-    raise SystemExit("查無此人：{}（可先查 python app/tools/query.py {}）".format(who, who))
+    raise SystemExit("查無此人或地名：{}（可先查 python app/tools/query.py {}）".format(who, who))
 
 
 # ---------------------------------------------------------------- 表操作
+
+def safe_save_workbook(wb, path: str) -> None:
+    """安全原子保存 openpyxl 工作簿，防 Windows 下 open('wb') 截斷損壞原表。
+
+    原理：先在內存 io.BytesIO() 完成 Zip 封包，成功後再寫入臨時文件原子替換目標。
+    若生成過程報錯或目標被佔用，原文件 100% 保持完好，絕不留 0 字節或 2.3KB 損壞檔。
+    """
+    import io
+    bio = io.BytesIO()
+    wb.save(bio)
+    buf = bio.getvalue()
+    dir_name = os.path.dirname(path) or "."
+    os.makedirs(dir_name, exist_ok=True)
+    tmp = path + ".tmp." + str(os.getpid())
+    try:
+        with open(tmp, "wb") as f:
+            f.write(buf)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
+
 
 def init_workbook() -> str:
     opx = _openpyxl()
@@ -141,9 +183,10 @@ def init_workbook() -> str:
     ws.title = "overrides"
     ws.append(HEADERS)
     os.makedirs(os.path.dirname(WORKBOOK), exist_ok=True)
-    wb.save(WORKBOOK)
+    safe_save_workbook(wb, WORKBOOK)
     print("已建空表：{}".format(WORKBOOK))
     return WORKBOOK
+
 
 
 def _read_rows():
@@ -204,12 +247,16 @@ def _append_row(row: dict) -> None:
     ws = wb["overrides"] if "overrides" in wb.sheetnames else wb.active
     ws.append([row.get(h) for h in HEADERS])
     try:
-        wb.save(WORKBOOK)
+        safe_save_workbook(wb, WORKBOOK)
         print("已寫入：{}".format(WORKBOOK))
-    except PermissionError:
+    except (PermissionError, OSError):
         alt = WORKBOOK.replace(".xlsx", ".new.xlsx")
-        wb.save(alt)
-        print("⚠️ 原表被佔用（Excel 開著？），已改寫：{}\n   關掉 Excel 後手動合併這一行。".format(alt))
+        try:
+            safe_save_workbook(wb, alt)
+            print("⚠️ 原表被佔用（Excel 開著？），已改寫：{}\n   關掉 Excel 後手動合併這一行。".format(alt))
+        except Exception as e:
+            print("⚠️ 寫入備用表失敗：{}".format(e))
+
 
 
 # ---------------------------------------------------------------- 子命令
@@ -228,7 +275,8 @@ def cmd_show(args) -> None:
 
 def cmd_add(args) -> None:
     conn = connect_db()
-    text, cid, ms = sentence_mentions(conn, args.uid)
+    pid_hint = getattr(args, "pid", "") or ""
+    text, cid, ms = sentence_mentions(conn, args.uid, pid_hint)
     pick = [m for m in ms if m["nth"] == args.nth]
     if not pick:
         conn.close()
@@ -239,7 +287,7 @@ def cmd_add(args) -> None:
     if args.action == "reassign":
         if not args.new:
             conn.close()
-            raise SystemExit("reassign 必須給 --new（人名或 pid）")
+            raise SystemExit("reassign 必須給 --new（人名、地名或 id）")
         new_pid = resolve_pid(conn, args.new)
     conn.close()
 
@@ -297,12 +345,16 @@ def cmd_revoke(args) -> None:
         print("沒有匹配的生效糾錯：{}".format(args.uid))
         return
     try:
-        wb.save(WORKBOOK)
+        safe_save_workbook(wb, WORKBOOK)
         print("已作廢 {} 條（{}）".format(n, args.uid))
-    except PermissionError:
+    except (PermissionError, OSError):
         alt = WORKBOOK.replace(".xlsx", ".new.xlsx")
-        wb.save(alt)
-        print("⚠️ 原表被佔用，已改寫：{}".format(alt))
+        try:
+            safe_save_workbook(wb, alt)
+            print("⚠️ 原表被佔用，已改寫：{}".format(alt))
+        except Exception as e:
+            print("⚠️ 寫入備用表失敗：{}".format(e))
+
 
 
 def cmd_apply(args) -> int:
@@ -332,32 +384,73 @@ def cmd_apply(args) -> int:
         if not sents:
             miss.append(uid)
             continue
-        for s in sents:
-            marks = s.get("marks") or []
-            # 優先精確匹配 (s, e, surface)，再用 nth 兜底
-            cand = [m for m in marks
+        orig_pid = str(r.get("原pid") or "").strip()
+        new_pid = str(r.get("应归(newPid)") or "").strip()
+        is_place_hint = orig_pid.startswith("pl_") or (not orig_pid and new_pid.startswith("pl_"))
+
+        def find_cand(target_list):
+            cand = [m for m in target_list
                     if m.get("s") == r["s"] and m.get("e") == r["e"]
                     and m.get("alias") == r["surface"]]
             if not cand:
-                same = [m for m in marks if m.get("alias") == r["surface"]]
+                same = [m for m in target_list if m.get("alias") == r["surface"]]
                 nth = int(r["nth"] or 0)
                 if 1 <= nth <= len(same):
                     cand = [sorted(same, key=lambda m: (m.get("s") or 0,
                                                         m.get("e") or 0))[nth - 1]]
+            return cand
+
+        for s in sents:
+            marks = s.get("marks") or []
+            pmarks = s.get("pmarks") or []
+
+            cand = []
+            cand_source = None
+            if is_place_hint:
+                cand = find_cand(pmarks)
+                if cand:
+                    cand_source = "pmarks"
+                else:
+                    cand = find_cand(marks)
+                    if cand:
+                        cand_source = "marks"
+            else:
+                cand = find_cand(marks)
+                if cand:
+                    cand_source = "marks"
+                else:
+                    cand = find_cand(pmarks)
+                    if cand:
+                        cand_source = "pmarks"
+
             if not cand:
                 miss.append("{}#{}".format(uid, r["nth"]))
                 continue
+
+            target_list = pmarks if cand_source == "pmarks" else marks
             for m in cand:
                 if action == "drop":
-                    marks.remove(m)
+                    target_list.remove(m)
                     n_drop += 1
-                elif action == "reassign" and r["应归(newPid)"]:
-                    m["pid"] = str(r["应归(newPid)"]).strip()
+                elif action == "reassign" and new_pid:
+                    m["pid"] = new_pid
                     m["override"] = 1          # 保留原 tier，只加標記
+                    # 跨實體類型遷移
+                    if cand_source == "pmarks" and not new_pid.startswith("pl_"):
+                        target_list.remove(m)
+                        marks.append(m)
+                    elif cand_source == "marks" and new_pid.startswith("pl_"):
+                        target_list.remove(m)
+                        pmarks.append(m)
                     n_re += 1
                 elif action == "keep":
                     pass
+
             s["marks"] = marks
+            if pmarks:
+                s["pmarks"] = pmarks
+            elif "pmarks" in s:
+                s["pmarks"] = []
 
     if not args.dry_run:
         with open(BOOK, "w", encoding="utf-8") as f:
@@ -386,6 +479,7 @@ def main() -> int:
     p.add_argument("--new", default="", help="應歸給誰（人名或 pid）")
     p.add_argument("--action", default="reassign", choices=ACTIONS)
     p.add_argument("--note", default="")
+    p.add_argument("--pid", default="", help="原命中 pid 提示（區分人名 vs 地名）")
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("list", help="列已有糾錯")
