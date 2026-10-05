@@ -45,7 +45,7 @@ def run_checks(inject=False):
     ws = wb["地名"]
     excel_rows = [r for r in ws.iter_rows(min_row=2, values_only=True)
                   if r[0] and (r[7] or "active") == "active"]
-    min_expected = 1621 if not inject else 9999
+    min_expected = 1620 if not inject else 9999
     assert len(excel_rows) >= min_expected, (
         f"断言 1 失败：places.xlsx 有效行数 {len(excel_rows)} < {min_expected}"
     )
@@ -53,12 +53,12 @@ def run_checks(inject=False):
     passed += 1
 
     # -------------------------------------------------------------
-    # 断言 2：data/dict/places.json 与 SQLite places 表一致且 >= 1621
+    # 断言 2：data/dict/places.json 与 SQLite places 表一致且 >= 1620
     # -------------------------------------------------------------
     with open(DICT_PATH, "r", encoding="utf-8") as f:
         dict_data = json.load(f)
     json_places = dict_data.get("places", [])
-    assert len(json_places) >= 1621, f"places.json 地名数不足: {len(json_places)}"
+    assert len(json_places) >= 1620, f"places.json 地名数不足: {len(json_places)}"
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -85,12 +85,13 @@ def run_checks(inject=False):
     passed += 1
 
     # -------------------------------------------------------------
-    # 断言 4：正文打标命中大幅提升（place_mentions >= 119,000）
+    # 断言 4：正文打标命中健康稳定（place_mentions >= 118,000，剔除千人734处与下相60处噪声）
     # -------------------------------------------------------------
     c.execute("SELECT COUNT(*) FROM place_mentions")
     pm_count = c.fetchone()[0]
-    assert pm_count >= 119000, f"断言 4 失败：place_mentions 命中数不足: {pm_count}"
-    print(f"✓ [4/10] 正文地名打标命中数突破基线: {pm_count} 处 (>= 119,000)")
+    min_pm = 118000 if not inject else 999999
+    assert pm_count >= min_pm, f"断言 4 失败：place_mentions 命中数不足: {pm_count} < {min_pm}"
+    print(f"✓ [4/10] 正文地名打标命中数保持健康稳定: {pm_count} 处 (>= {min_pm})")
     passed += 1
 
     # -------------------------------------------------------------
@@ -183,7 +184,7 @@ def run_checks(inject=False):
     passed += 1
 
     # -------------------------------------------------------------
-    # 断言 9：单字压制守卫依然有效（樊城正常打标，单字樊不越界误标）
+    # 断言 9：单字与多字守卫有效（樊城正常打标/裸樊0处；千人县下线0处；下相精准10处并拦截60处上下相跨词噪声）
     # -------------------------------------------------------------
     c.execute("""
         SELECT COUNT(*) FROM place_mentions m
@@ -196,7 +197,25 @@ def run_checks(inject=False):
     c.execute("SELECT COUNT(*) FROM place_mentions WHERE surface = '樊城'")
     fancheng_count = c.fetchone()[0]
     assert fancheng_count >= 15, f"断言 9 失败：具名「樊城」命中数 {fancheng_count} 异常！"
-    print(f"✓ [9/10] 单字压制与多字放行守卫验证通过（裸樊 0 处，樊城 {fancheng_count} 处）")
+
+    # 千人县（pl_hhs_67）彻底下线，零数词假阳性
+    c.execute("SELECT COUNT(*) FROM place_mentions WHERE place_id = 'pl_hhs_67'")
+    qianren_count = c.fetchone()[0]
+    assert qianren_count == 0, f"断言 9 失败：千人县未完全下线，仍有 {qianren_count} 处命中！"
+
+    # 下相（pl_xiaxiang）精准守卫：仅保留项羽故里等 10 处真实地名，零「上下相...」跨词假阳性
+    c.execute("SELECT COUNT(*) FROM place_mentions WHERE place_id = 'pl_xiaxiang'")
+    xiaxiang_count = c.fetchone()[0]
+    assert xiaxiang_count == 10, f"断言 9 失败：下相命中数 {xiaxiang_count} != 10！"
+    c.execute("""
+        SELECT COUNT(*) FROM place_mentions m
+        JOIN sentences s ON m.sentence_uid = s.uid
+        WHERE m.place_id = 'pl_xiaxiang' AND s.text LIKE '%上下相%'
+    """)
+    shangxia_count = c.fetchone()[0]
+    assert shangxia_count == 0, f"断言 9 失败：下相仍有 {shangxia_count} 处「上下相」假阳性！"
+
+    print(f"✓ [9/10] 单字/多字守卫与千人/下相精度验证通过（裸樊 0 处，千人 0 处，下相纯净 10 处，樊城 {fancheng_count} 处）")
     passed += 1
 
     # -------------------------------------------------------------

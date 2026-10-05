@@ -302,12 +302,17 @@ def main():
                 if hit_name:
                     blocked_name[hit_name] += 1
                     continue
-                if not char_ok(text, match.start(), match.end(),
-                               guards_raw.get(surface)):
+                guard = guards_raw.get(surface) or guards_raw.get(norm(surface))
+                if not char_ok(text, match.start(), match.end(), guard):
                     blocked_guard[place["name"]] += 1
                     continue
                 tier = "char"
             else:
+                # 具名/多字地名守卫（如「下相」拦截「上下相...」「下相国」等跨词边界噪声）
+                guard = guards_raw.get(surface) or guards_raw.get(norm(surface))
+                if guard and not char_ok(text, match.start(), match.end(), guard):
+                    blocked_guard[place["name"]] += 1
+                    continue
                 tier = "core"
             marks.append({"s": match.start(), "e": match.end(),
                           "pid": place["id"], "tier": tier, "alias": surface})
