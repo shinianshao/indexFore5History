@@ -95,6 +95,11 @@ ALIAS_STOP_POST = {"趙王": set("倫冏乂…"), "有若": set("此自公富")}
 - `GENERIC_MANUAL` 多候选；**至少一人 aliases 声明该串**（否则 build_dict 报「手工泛称未登记」）。
 - `GENERIC_DEFAULT` 按书意图写；default 须在候选内。
 
+### F. 单字泛称与名臣/名将/上古三家分立（张汤 vs 商汤 vs 陈汤）
+- **分书收束铁律**：后世断代史绝不可单字指前朝名臣。`GENERIC_BOOK_CANDIDATES["湯"]` 将后三书强制收束为上古商汤 `["p_tang"]`，张汤与陈汤在后三书单字 100% 清零。
+- **非人名全量硬排除**：汤药/汤液/汤熨/火齐汤/和齐汤/苦参汤/汤池/金城汤池/沸汤/赴汤蹈火/汤沐邑/汤官/汤谷等，必须通过字符级三道防线（`SINGLE_CHAR_STOP`、`SINGLE_CHAR_PRE`、`SINGLE_CHAR_STOP2`）与上下文硬规则（`GENERIC_CONTEXT_RULES` 目标为 `None`）双重绞杀。
+- **规则作用域陷阱**：`scope == "window"` 会切除目标词本身，若匹配 key 包含被匹配字（如“苦參湯”），`window` 无法命中，必须使用 `scope == "sent"`；前缀词切忌用单字泛词如 `("pre", "臣")`，必须用专属组合词如 `("sent", "大夫臣湯")`。
+
 ## 回归链
 
 ```text
