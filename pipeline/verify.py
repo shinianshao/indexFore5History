@@ -1539,6 +1539,110 @@ def check():
                   len(_bare_leak) == 0,
                   "泄露={}".format(_bare_leak) if _bare_leak else "严格阻断通过"))
 
+    # ===== 2026-10-05 三国魏晋宗室诸侯王真实姓名考据与公侯宗王名录 (Task D) =====
+    # ① 三国魏晋诸侯王真实姓名（本名）检索 100% 召回断言
+    _sg_jin_royal_realnames = [
+        ("司马攸", "齐献王", "p_qixianwang"),
+        ("司马晏", "吴孝王", "p_wuxiaowang"),
+        ("司马晃", "蔡武哀王", "p_caiwuaiwang"),
+        ("司马维", "鲁殇公", "p_lushanggong"),
+        ("司马柬", "秦献王", "p_qinxianwang"),
+        ("司马兆", "城阳哀王", "p_chengyangaiwang"),
+        ("司马焕", "琅邪悼王", "p_langxiedaowang"),
+        ("司马遐", "清河康王", "p_qinghekangwang"),
+        ("司马遂", "济南惠王", "p_jinanhuiwang"),
+        ("司马宪", "城阳殇王", "p_x50419_2"),
+        ("司马衡", "常山孝王", "p_changshanxiaowang"),
+        ("司马敦", "常山景王", "p_changshanjingwang"),
+        ("司马亮", "司马亮", "p_simaliang"),
+        ("司马伦", "司马伦", "p_simalun"),
+        ("司马冏", "司马冏", "p_simajiong"),
+        ("司马颖", "司马颖", "p_simaying"),
+        ("司马颙", "司马颙", "p_simayong"),
+        ("司马乂", "司马乂", "p_simayi3"),
+        ("司马肜", "司马肜", "p_simaxing"),
+        ("司马孚", "司马孚", "p_sima_fu"),
+        ("司马幹", "司马幹", "p_simagan"),
+        ("司马遹", "司马遹", "p_sima_yu2"),
+        ("曹冲", "邓哀王", "p_dengaiwang"),
+        ("曹植", "曹植", "p_caozhi"),
+        ("曹彰", "曹彰", "p_caizhang"),
+        ("曹宇", "曹宇", "p_caoyu"),
+        ("曹志", "曹志", "p_caozhi_jin"),
+        ("孙亮", "孙亮", "p_sunliang"),
+        ("孙休", "孙休", "p_sunxiu"),
+        ("孙皓", "孙皓", "p_sunhao"),
+        ("孙和", "孙和", "p_sunhe"),
+        ("孙奋", "孙奋", "p_sunfen"),
+        ("刘理", "刘理", "p_liuli_sg"),
+        ("司马裒", "王子宣", "p_wangzixuan"),
+        ("司马玷", "王子玷", "p_wangzidian"),
+        ("司马纮", "王子纮", "p_wangzihong"),
+        ("司马缉", "王子缉", "p_wangziji"),
+        ("司马修之", "王子修", "p_wangzixiu"),
+        ("司马迪", "王子迪", "p_wangzidi"),
+    ]
+    _sjr_failed = []
+    for _q, _exp_name, _exp_pid in _sg_jin_royal_realnames:
+        _hits = resolve(_q)
+        if not any(p["id"] == _exp_pid for p in _hits):
+            _sjr_failed.append("{}(应中{})".format(_q, _exp_name))
+    cases.append(("三国魏晋诸侯王真实姓名（司马攸/司马晏/司马柬/司马伦/司马冏/曹冲/曹植/曹彰/孙亮/孙休/孙皓/刘理…）100% 召回",
+                  len(_sjr_failed) == 0,
+                  "失败={}".format(_sjr_failed) if _sjr_failed else "{}/{}通过".format(len(_sg_jin_royal_realnames), len(_sg_jin_royal_realnames))))
+
+    # ② 三国魏晋宗室诸王实体简介「【本名：XX】」规范标注覆盖率 100%
+    _sg_jin_royal_pids = [
+        'p_qixianwang', 'p_wuxiaowang', 'p_caiwuaiwang', 'p_lushanggong', 'p_qinxianwang',
+        'p_qiwuminwang', 'p_chengyangaiwang', 'p_langxiedaowang', 'p_qinghekangwang',
+        'p_jinanhuiwang', 'p_x50419_2', 'p_changshanxiaowang', 'p_changshanjingwang',
+        'p_simaliang', 'p_simalun', 'p_simajiong', 'p_simaying', 'p_simayong', 'p_simayi3',
+        'p_simaxing', 'p_sima_fu', 'p_simagan', 'p_sima_yu2', 'p_simayi', 'p_simashi',
+        'p_simazhao', 'p_simayan', 'p_simazhong', 'p_simazhi', 'p_simaye', 'p_simarui',
+        'p_simashao2', 'p_simayan2', 'p_simayue', 'p_simadan2', 'p_simapi', 'p_simayi2',
+        'p_simayu', 'p_simayao', 'p_simadezong', 'p_simadewen', 'p_simalang_sg', 'p_dengaiwang',
+        'p_caocao', 'p_caopi', 'p_cao_rui', 'p_caofang', 'p_caomao', 'p_caohuan', 'p_caozhi',
+        'p_caizhang', 'p_caoyu', 'p_caoren', 'p_caohong', 'p_caoxiu', 'p_caozhen', 'p_caoshang',
+        'p_caochun', 'p_caozhi_jin', 'p_sunjian', 'p_sunce', 'p_wujingwang', 'p_sunquan',
+        'p_sunliang', 'p_sunxiu', 'p_sunhao', 'p_sunhe', 'p_sunfen', 'p_sunfu', 'p_sunshao',
+        'p_sunhuan', 'p_sunjing', 'p_sunben', 'p_sunjun', 'p_sunlin', 'p_liubei', 'p_liushan',
+        'p_liuli_sg', 'p_liuzhang_sg'
+    ]
+    _sj_unmarked = []
+    for _rpid in _sg_jin_royal_pids:
+        _rp = by_id.get(_rpid)
+        if not _rp or not (_rp.get("summary") or "").startswith("【本名："):
+            _sj_unmarked.append(_rpid)
+    cases.append(("三国魏晋宗室诸王实体简介「【本名：XX】」规范标注覆盖率 100%",
+                  len(_sj_unmarked) == 0,
+                  "未标注={}".format(_sj_unmarked) if _sj_unmarked else "{}/{}抽检全数合规".format(len(_sg_jin_royal_pids), len(_sg_jin_royal_pids))))
+
+    # ③ 魏晋宗王朝代纠偏与负向阻断（秦献王西晋/齐武闵王西晋且无田地别名/王子叡不抢曹叡…）
+    _sj_guards = []
+    _p_qx = by_id.get("p_qinxianwang")
+    if not _p_qx or _p_qx.get("dynasty") not in ("西晉", "西晋"):
+        _sj_guards.append("秦献王朝代未纠偏西晋")
+    _p_qwm = by_id.get("p_qiwuminwang")
+    if not _p_qwm or _p_qwm.get("dynasty") not in ("西晉", "西晋"):
+        _sj_guards.append("齐武闵王朝代未纠偏西晋")
+    if _p_qwm:
+        _qwm_al = {a.get("w") for a in _p_qwm.get("aliasList") or []} | {a.get("simp") for a in _p_qwm.get("aliasList") or []}
+        if "田地" in _qwm_al:
+            _sj_guards.append("齐武闵王残留误挂别名田地")
+    _p_wj = by_id.get("p_wujingwang")
+    if _p_wj:
+        _wj_al = {a.get("w") for a in _p_wj.get("aliasList") or []} | {a.get("simp") for a in _p_wj.get("aliasList") or []}
+        if "孫策" in _wj_al or "孙策" in _wj_al:
+            _sj_guards.append("吴敬王抢占孙策正名别名")
+    _p_wzr = by_id.get("p_wangzirui")
+    if _p_wzr:
+        _wzr_al = {a.get("w") for a in _p_wzr.get("aliasList") or []} | {a.get("simp") for a in _p_wzr.get("aliasList") or []}
+        if "曹叡" in _wzr_al:
+            _sj_guards.append("王子叡抢占曹叡正名别名")
+    cases.append(("魏晋宗王朝代纠偏与负向阻断（秦献王西晋/齐武闵王西晋且无田地别名/王子叡不抢曹叡…）",
+                  len(_sj_guards) == 0,
+                  "违规={}".format(_sj_guards) if _sj_guards else "严格守卫通过"))
+
     cases.extend(_newchain_cases())
     cases.extend(_workbook_cases())
 
