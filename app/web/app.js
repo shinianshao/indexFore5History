@@ -435,7 +435,7 @@
   function notesSection(pid, notes, mainN) {
     var h = "";
     var pei = notes.pei;
-    if (pei && pei.n) {
+    if (pei && pei.n && peiOn) {
       // 【裴N】標記擺在正文命中旁邊：讓用戶一眼看到這是另一層文本的數字。
       // ⚠️ 這裡**不做 n + pei.n 的相加**（紅線：注文不進 mentionCount）。
       h += "<div class=\"note-sum\">正文命中 <b>" + count(mainN) +
@@ -443,7 +443,9 @@
         count(pei.n) + "】</b></div>";
     }
     var titles = notes.chapterTitles || {};
-    h += noteBlock(pei, "三國志裴松之注明細", "三國志", true, titles);
+    if (peiOn) {
+      h += noteBlock(pei, "三國志裴松之注明細", "三國志", true, titles);
+    }
     var js = notes.jsNote;
     if (js && js.n) {
       // 晉書舊史注：docs/29 §六-3 判定只留一行（全庫僅少數篇），
@@ -1693,11 +1695,11 @@
      這份常量與庫裡 books.era_from/era_to **必須一致**，verify_p3 [15] 會對一遍
      ——對不上不會報錯，只會標錯人（與 ALIAS_KINDS 順序同類型的壞）。 */
   var BOOKS = [
-    { code: "sj", name: "史記", era: null },
-    { code: "hs", name: "漢書", era: [8, 10] },
-    { code: "hhs", name: "後漢書", era: [10, 11] },
-    { code: "sgz", name: "三國志", era: [11, 12] },
-    { code: "js", name: "晉書", era: [12, 15] }
+    { code: "sj", name: "史記", era: null, chapterCount: 130, author: "司馬遷", eraName: "西漢" },
+    { code: "hs", name: "漢書", era: [8, 10], chapterCount: 100, author: "班固", eraName: "東漢" },
+    { code: "hhs", name: "後漢書", era: [10, 11], chapterCount: 120, author: "范曄", eraName: "南朝宋" },
+    { code: "sgz", name: "三國志", era: [11, 12], chapterCount: 65, author: "陳壽", eraName: "西晉" },
+    { code: "js", name: "晉書", era: [12, 15], chapterCount: 130, author: "房玄齡等", eraName: "唐" }
   ];
   // 地名分組順序，與 pipeline/annotate_places.py 的 KIND_ORDER 一致
   var PLACE_KIND_ORDER = ["国", "州", "郡", "县", "关", "山", "川", "湖", "域", "外"];
@@ -1839,6 +1841,7 @@
   }
 
   var scopeBook = "";        // 空 = 全五書
+  var peiOn = true;          // 默認顯示裴注（三國志裴松之注）
   var currentTab = "search";
   var sortMode = "c";        // c = 篇數（默認），n = 次數
   var IDX = null;            // 索引資料緩存，換書才重取
@@ -1851,12 +1854,23 @@
   }
 
   function renderBookbar() {
-    var h = '<span class="bk all' + (scopeBook === "" ? " on" : "") +
-      '" data-book="">全部</span>';
+    var h = "";
     BOOKS.forEach(function (b) {
-      h += '<span class="bk' + (scopeBook === b.code ? " on" : "") +
-        '" data-book="' + b.code + '">' + esc(b.name) + "</span>";
+      var on = (scopeBook === "" || scopeBook === b.code);
+      var title = esc("《" + b.name + "》（" + (b.eraName || "") + "·" + (b.author || "") + "）· " +
+                      (b.chapterCount || "") + " 篇");
+      h += '<span class="bk' + (on ? " on" : "") + '" data-book="' + b.code + '" title="' + title + '">' +
+        esc("《" + b.name + "》") + "<em>" + (b.chapterCount || "") + " 篇</em></span>";
+      /* 三國志後緊跟裴注小膠囊（三國志裴松之注） */
+      if (b.code === "sgz") {
+        h += '<span class="bk pei-chip' + (peiOn ? " on" : "") + '" data-book="pei"' +
+          ' title="三國志裴松之注·開啟後統計包含注文【裴N】；關閉則只計正文">' +
+          '三國志裴松之注</span>';
+      }
     });
+    var allOn = (scopeBook === "");
+    h += '<span class="bk all' + (allOn ? " on" : "") + '" data-book="all">' +
+      "多書合檢<em>" + (allOn ? "同時選中 5 / 5 本" : "切回全書合檢") + "</em></span>";
     bookbarEl.innerHTML = h;
   }
 
@@ -2089,8 +2103,24 @@
     var bk = ev.target.closest ? ev.target.closest(".bk[data-book]") : null;
     if (!bk) return;
     var code = bk.getAttribute("data-book");
-    if (code === scopeBook) return;
-    scopeBook = code;
+    if (code === "pei") {
+      peiOn = !peiOn;
+      renderBookbar();
+      if (currentTab === "search" && currentPid) {
+        renderPerson(currentPid).catch(showErr);
+      }
+      return;
+    }
+    if (code === "all" || code === "") {
+      if (scopeBook === "") return;
+      scopeBook = "";
+    } else {
+      if (code === scopeBook) {
+        scopeBook = "";
+      } else {
+        scopeBook = code;
+      }
+    }
     renderBookbar();
     // 換書後快捷詞要跟著換；索引頁也要重取（計數是按書算的）
     if (currentTab === "search") loadIndex();

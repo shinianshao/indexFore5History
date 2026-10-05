@@ -264,10 +264,14 @@
     background: var(--panel); color: var(--muted); font-family: var(--serif); font-size: 15px;
   }
   .bk:hover { border-color: var(--accent); color: var(--accent); }
+  .bk em { font-family: var(--sans); font-style: normal; font-size: 11px; color: #b8b3a8; }
+  .bk.pei-chip { font-size: 12px; padding: 6px 10px; color: var(--muted); opacity: 0.75; max-width: 11em; }
+  .bk.pei-chip.on { opacity: 1; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .bk.on {
     border-color: var(--accent); background: var(--accent-soft);
     color: var(--accent); font-weight: 600;
   }
+  .bk.on em { color: #a2977f; }
   .bk.all { font-family: var(--sans); font-size: 13px; margin-left: 6px; }
 
   /* ---- 標籤頁 ---- 與靜態版同序：檢索結果 / 人物索引 / 地名索引 / 篇目一覽 */
