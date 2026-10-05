@@ -1463,6 +1463,82 @@ def check():
                   len(_dyn_bad) == 0,
                   "未纠偏={}".format(_dyn_bad) if _dyn_bad else "11/11通过"))
 
+    # ===== 2026-10-05 汉朝宗室诸王真实姓名考据与公侯宗王名录 (Task C) =====
+    # ① 汉代诸侯王真实姓名（本名）检索 100% 召回断言
+    _han_royal_realnames = [
+        ("刘余", "鲁共王", "p_lugongwang"),
+        ("刘将闾", "齐孝王", "p_qixiaowang"),
+        ("刘霸", "广陵孝王", "p_guanglingxiaowang"),
+        ("刘不害", "城阳戴王", "p_chengyangdaiwang"),
+        ("刘阏于", "临江哀王", "p_linjiangaiwang"),
+        ("刘庆忌", "鲁孝王", "p_luxiaowang"),
+        ("刘劲", "鲁顷王", "p_luqingwang"),
+        ("刘高", "赵哀王", "p_zhaoaiwang"),
+        ("刘尊", "赵缪王", "p_zhaomouwang"),
+        ("刘通平", "胶东戴王", "p_jiaodongdaiwang"),
+        ("刘授", "胶东共王", "p_jiaodonggongwang"),
+        ("刘音", "胶东顷王", "p_jiaodongqingwang"),
+        ("刘景", "城阳孝王", "p_chengyangxiaowang"),
+        ("刘仲", "鲁哀王", "p_luaiwang"),
+        ("刘栩", "赵节王", "p_zhaojiewang"),
+        ("张偃", "鲁元王", "p_luyuanwang"),
+        ("张耳", "张耳", "p_zhang_er"),
+        ("彭越", "彭越", "p_pengyue"),
+        ("卢绾", "卢绾", "p_luwan"),
+        ("英布", "黥布", "p_qingbu"),
+        ("刘肥", "齐悼惠王", "p_liufei"),
+        ("刘武", "梁孝王", "p_liuwu"),
+        ("刘安", "淮南王", "p_liu_an"),
+        ("刘濞", "吴王", "p_liupi"),
+        ("刘德", "河间献王", "p_liude"),
+        ("刘胜", "中山靖王", "p_liusheng"),
+        ("刘交", "楚元王", "p_liujiao"),
+        ("刘苍", "东平宪王", "p_liucang"),
+    ]
+    _hr_failed = []
+    for _q, _exp_name, _exp_pid in _han_royal_realnames:
+        _hits = resolve(_q)
+        if not any(p["id"] == _exp_pid for p in _hits):
+            _hr_failed.append("{}(应中{})".format(_q, _exp_name))
+    cases.append(("汉代诸侯王真实姓名（刘余/刘将闾/刘霸/刘不害/刘阏于/刘肥/刘武…）100% 召回",
+                  len(_hr_failed) == 0,
+                  "失败={}".format(_hr_failed) if _hr_failed else "{}/{}通过".format(len(_han_royal_realnames), len(_han_royal_realnames))))
+
+    # ② 汉代宗王实体本名标记覆盖率 100%
+    _han_royal_pids = [
+        'p_lugongwang', 'p_qixiaowang', 'p_guanglingxiaowang', 'p_chengyangdaiwang',
+        'p_linjiangaiwang', 'p_luxiaowang', 'p_luqingwang', 'p_zhaoaiwang', 'p_zhaomouwang',
+        'p_jiaodongdaiwang', 'p_jiaodonggongwang', 'p_jiaodongqingwang', 'p_chengyangxiaowang',
+        'p_luaiwang', 'p_zhaojiewang', 'p_luyuanwang', 'p_liufei', 'p_liuwu', 'p_liu_an',
+        'p_liupi', 'p_liude', 'p_liusheng', 'p_liujiao', 'p_liucang', 'p_liuchang', 'p_liuci',
+        'p_liurong', 'p_liuhong', 'p_liudan', 'p_liuxu', 'p_liuwu_chu', 'p_liuruyi', 'p_liuyou'
+    ]
+    _unmarked = []
+    for _rpid in _han_royal_pids:
+        _rp = by_id.get(_rpid)
+        if not _rp or not (_rp.get("summary") or "").startswith("【本名："):
+            _unmarked.append(_rpid)
+    cases.append(("汉代宗王实体简介「【本名：XX】」规范标注覆盖率 100%",
+                  len(_unmarked) == 0,
+                  "未标注={}".format(_unmarked) if _unmarked else "{}/{}抽检全数合规".format(len(_han_royal_pids), len(_han_royal_pids))))
+
+    # ③ 裸国名王号（楚王/梁王/赵王/燕王）零越朝向非传主别名泄露
+    _bare_leak = []
+    for _pid_check, _bad_bare in [
+        ('p_liuyingke', '楚王'), ('p_liujiao', '楚王'), ('p_liuli', '楚王'),
+        ('p_liuyi_hs', '梁王'),
+        ('p_liuhui', '趙王'),
+        ('p_liujian', '燕王')
+    ]:
+        _p_check = by_id.get(_pid_check)
+        if _p_check:
+            for _a in _p_check.get("aliasList") or []:
+                if _a.get("w") == _bad_bare:
+                    _bare_leak.append("{}:{}".format(_pid_check, _bad_bare))
+    cases.append(("裸国号王号（楚王/梁王/赵王/燕王）零非传主别名泄露",
+                  len(_bare_leak) == 0,
+                  "泄露={}".format(_bare_leak) if _bare_leak else "严格阻断通过"))
+
     cases.extend(_newchain_cases())
     cases.extend(_workbook_cases())
 
