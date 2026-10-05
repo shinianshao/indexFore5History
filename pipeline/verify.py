@@ -1643,6 +1643,123 @@ def check():
                   len(_sj_guards) == 0,
                   "违规={}".format(_sj_guards) if _sj_guards else "严格守卫通过"))
 
+    # ===== 2026-10-05 战国封君与秦汉名臣封侯考据与公侯名录建设 (Task E) =====
+    # ① 战国封君与秦汉名臣名将封爵称号与真实姓名 100% 召回断言
+    _lords_marquises_tests = [
+        ("卫鞅", "商鞅", "p_shangyang"),
+        ("商君", "商鞅", "p_shangyang"),
+        ("商鞅", "商鞅", "p_shangyang"),
+        ("白起", "白起", "p_baiqi"),
+        ("李牧", "李牧", "p_li_mu"),
+        ("赵奢", "赵奢", "p_zhaoshe"),
+        ("马服君", "赵奢", "p_zhaoshe"),
+        ("安平君", "田单", "p_tiandan"),
+        ("乐毅", "乐毅", "p_yueyi"),
+        ("昌国君", "乐毅", "p_yueyi"),
+        ("望诸君", "乐毅", "p_yueyi"),
+        ("廉颇", "廉颇", "p_lianpo"),
+        ("信平君", "廉颇", "p_lianpo"),
+        ("蔺相如", "蔺相如", "p_linxiangru"),
+        ("蔡泽", "蔡泽", "p_caize"),
+        ("纲成君", "蔡泽", "p_caize"),
+        ("严君", "樗里子", "p_chulizi"),
+        ("武信君", "项梁", "p_xiangliang"),
+        ("广野君", "郦食其", "p_lishiqi"),
+        ("稷嗣君", "叔孙通", "p_shusuntong"),
+        ("万石君", "石奋", "p_shifen"),
+        ("平原君朱建", "朱建", "p_zhujian_hs"),
+        ("应侯", "范雎", "p_fansui"),
+        ("靖郭君", "田婴", "p_tianying"),
+        ("公孙侨", "子产", "p_zichan"),
+        ("东里子产", "子产", "p_zichan"),
+        ("文信侯", "吕不韦", "p_lubuwei"),
+        ("穰侯", "魏冉", "p_weiran"),
+        ("淮阴侯", "韩信", "p_hanxin"),
+        ("留侯", "张良", "p_zhangliang"),
+        ("张子房", "张良", "p_zhangliang"),
+        ("酂侯", "萧何", "p_xiaohe"),
+        ("平阳侯", "曹参", "p_caocan"),
+        ("绛侯", "周勃", "p_zhoubo"),
+        ("条侯", "周亚夫", "p_zhouyafu"),
+        ("舞阳侯", "樊哙", "p_fankuai"),
+        ("汝阴侯", "夏侯婴", "p_xiahouying"),
+        ("滕公", "夏侯婴", "p_xiahouying"),
+        ("曲逆侯", "陈平", "p_chenping"),
+        ("颍阴侯", "灌婴", "p_guanying"),
+        ("曲周侯", "郦商", "p_li_shang"),
+        ("辟阳侯", "审食其", "p_shenshiji"),
+        ("建武侯", "靳歙", "p_jinshe"),
+        ("博望侯", "张骞", "p_zhangqian"),
+        ("长平侯", "卫青", "p_weiqing"),
+        ("冠军侯", "霍去病", "p_huo_qubing"),
+        ("博陆侯", "霍光", "p_huoguang"),
+        ("秺侯", "金日磾", "p_jinmidi"),
+        ("富民侯", "田千秋", "p_tianqianqiu"),
+        ("车千秋", "田千秋", "p_tianqianqiu"),
+        ("平津侯", "公孙弘", "p_gongsunhong"),
+        ("高安侯", "董贤", "p_dongxian"),
+        ("安汉公", "王莽", "p_wangmang"),
+        ("新都侯", "王莽", "p_wangmang"),
+        ("建陵侯", "卫绾", "p_weiwan"),
+        ("魏其侯", "窦婴", "p_douying"),
+        ("武安侯", "田蚡", "p_tianfen"),
+        ("飞将军", "李广", "p_liguang"),
+        ("葛绎侯", "公孙贺", "p_gongsunhe"),
+        ("澎侯", "刘屈氂", "p_liuqumao"),
+        ("平通侯", "魏相", "p_weixiang_hs"),
+        ("博阳侯", "丙吉", "p_bingji"),
+        ("西平侯", "于定国", "p_yudingguo"),
+        ("高密侯", "邓禹", "p_dengyu"),
+        ("广平侯", "吴汉", "p_wuhan"),
+        ("胶东侯", "贾复", "p_jiafu"),
+        ("好畤侯", "耿弇", "p_gengyan"),
+        ("雍奴侯", "寇恂", "p_kouxun"),
+        ("阳夏侯", "冯异", "p_fengyi"),
+        ("大树将军", "冯异", "p_fengyi"),
+        ("鬲侯", "朱祐", "p_zhuhu"),
+        ("颍阳侯", "祭遵", "p_zhaizun"),
+        ("栎阳侯", "景丹", "p_jingdan"),
+        ("安成侯", "銚期", "p_yaoqi"),
+        ("东光侯", "耿纯", "p_gengchun"),
+        ("朗陵侯", "臧宫", "p_zanggong"),
+        ("杨虚侯", "马武", "p_mawu"),
+        ("安丰侯", "窦融", "p_dourong"),
+        ("新息侯", "马援", "p_mayuan"),
+        ("伏波将军", "马援", "p_mayuan"),
+        ("定远侯", "班超", "p_banchao"),
+        ("淳于意", "仓公", "p_canggong"),
+        ("申培", "申公", "p_shengong"),
+        ("姜不辰", "齐哀侯", "p_qiaihou"),
+        ("嬴刺", "秦厉公", "p_qinligong"),
+        ("子鲋祀", "宋厉公", "p_songligong"),
+        ("子举", "宋釐公", "p_songligong_hhs"),
+        ("姬幅", "晋厉侯", "p_jinlihou_hhs"),
+        ("姬费王", "晋缪侯", "p_jinmouhou"),
+        ("熊罢", "楚厉侯", "p_chulihou"),
+    ]
+    _lm_failed = []
+    for _q, _exp_name, _exp_pid in _lords_marquises_tests:
+        _hits = resolve(_q)
+        if not any(p["id"] == _exp_pid for p in _hits):
+            _lm_failed.append("{}(应中{})".format(_q, _exp_name))
+    cases.append(("战国封君与秦汉名臣名将封侯（商君/留侯/淮阴侯/冠军侯/长平侯/条侯/平津侯/伏波将军/定远侯…）100% 召回",
+                  len(_lm_failed) == 0,
+                  "失败={}".format(_lm_failed) if _lm_failed else "{}/{}通过".format(len(_lords_marquises_tests), len(_lords_marquises_tests))))
+
+    # ② Option A 96 位战国封君与秦汉封侯实体简介「【本名：XX】」规范标注覆盖率 100%
+    try:
+        from _scratch.generate_option_a_mappings import LORDS_MARQUISES_MAP
+    except ImportError:
+        from pipeline._scratch.generate_option_a_mappings import LORDS_MARQUISES_MAP
+    _opt_a_unmarked = []
+    for _apid in LORDS_MARQUISES_MAP:
+        _ap = by_id.get(_apid)
+        if not _ap or not (_ap.get("summary") or "").startswith("【本名："):
+            _opt_a_unmarked.append(_apid)
+    cases.append(("Option A 战国封君与秦汉名臣封侯 96 位实体简介「【本名：XX】」覆盖率 100%",
+                  len(_opt_a_unmarked) == 0,
+                  "未标注={}".format(_opt_a_unmarked) if _opt_a_unmarked else "{}/{}全数合规".format(len(LORDS_MARQUISES_MAP), len(LORDS_MARQUISES_MAP))))
+
     cases.extend(_newchain_cases())
     cases.extend(_workbook_cases())
 
