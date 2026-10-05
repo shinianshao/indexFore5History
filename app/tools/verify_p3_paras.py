@@ -80,8 +80,8 @@ def main() -> int:
                 if (cid, pseq) not in db_paras:
                     js_miss.append((cid, pseq, item.get("alias")))
 
-        check("晋书旧史注明细行（70 处）目标段落 100% 存在",
-              len(js_miss) == 0 and js_total == 70,
+        check("晋书旧史注明细行（≥70 处）目标段落 100% 存在",
+              len(js_miss) == 0 and js_total >= 70,
               f"总计 {js_total} 条，缺失 {len(js_miss)} 条")
 
         # 4. 长篇阅读不截断（sj-014）

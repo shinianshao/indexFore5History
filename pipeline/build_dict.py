@@ -2051,6 +2051,20 @@ PERSON_BOOKS_ACCURACY_FIX = {
     "p_sunhe": ["sgz"],                           # 排除 sj（田常曾孙和假命中）
     "p_sunfen": ["sgz"],                          # 排除 sj, hs（守将孙奋假命中）
     "p_jikang": ["sgz", "js"],                    # 排除 hs（古今人表西周重臣“叔夜”假命中）
+    # 高危人物消歧与跨朝代防抢占治理（docs/65 选项B）
+    "p_zhangzhong": ["js"],      # 东晋隐士张忠，排除 sj, hs, hhs（西汉御史大夫张忠等）
+    "p_zhangfu": ["js"],         # 西晋张辅，排除 hs（西汉五官掾张辅）
+    "p_zhangguang": ["js"],      # 东晋张光，排除 hs, hhs（西汉反将张光）
+    "p_liuyin_js": ["js"],       # 东晋刘殷，排除 sj（西汉侯刘殷）
+    "p_xuguang": ["js"],         # 东晋徐广，排除 sj（史记集解注文徐广曰）
+    "p_tengxiu": ["js"],         # 东晋滕修，排除 hs, hhs
+    "p_moubo": ["js"],           # 西晋缪播，排除 hs, sgz
+    "p_huanghong": ["js"],       # 十六国黄泓，排除 sj
+    "p_shengyan": ["js"],        # 东晋盛彦，排除 hs
+    "p_chunyuzhi": ["js"],       # 十六国淳于智，排除 hs, hhs
+    "p_liuer": ["js"],           # 东晋刘鮞，排除 hs, hhs
+    "p_ruanxian": ["sgz", "js"], # 西晋阮咸，排除 hs
+    "p_baoxian": ["hhs"],        # 东汉经学儒者包咸，排除 sj, hs, sgz, js
 }
 
 

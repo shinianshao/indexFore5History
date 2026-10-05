@@ -1683,7 +1683,9 @@ def test_place_search() -> None:
               st == 200 and "items" in rb and "places" in rb
               and bool(ps) and ps[0]["trad_name"] == "邯鄲",
               "places={}".format([(x["trad_name"], x["n"]) for x in ps[:3]]))
-        check("/api/search 的人物段沒被地名污染", bool(rb.get("items")))
+        check("/api/search 的人物段沒被地名污染",
+              all(not str(x.get("id", "")).startswith("pl_")
+                  for x in (rb.get("items") or [])))
         st, rb2 = _http("GET", base + "api/search?kind=place&q=" +
                         urllib.parse.quote("邯郸"))
         check("kind=place 只要地名（items 為空）",

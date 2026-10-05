@@ -1760,6 +1760,53 @@ def check():
                   len(_opt_a_unmarked) == 0,
                   "未标注={}".format(_opt_a_unmarked) if _opt_a_unmarked else "{}/{}全数合规".format(len(LORDS_MARQUISES_MAP), len(LORDS_MARQUISES_MAP))))
 
+    # ===== Option B: 高危人物消歧规则精细化治理与假阳性清零 (docs/65) =====
+    # ① 高危二字别名语法撕裂与伪切词清零断言 (去疾/子得/子成/子然/子将/元子/显先/宣则/始长/翁子/叔平/长鱼/仲容/子良)
+    _opt_b_zero_tests = [
+        ("p_jinqinggong", "去疾", "晋顷公去疾误配冯去疾/郑公子去疾"),
+        ("p_songzhaogong", "子得", "宋昭公子得误配文言短语太子得/君子得"),
+        ("p_songpinggong", "子成", "宋平公子成误配中子成公/生子成/成王"),
+        ("p_dinggong", "子然", "丁恭子然误配父子然/王章子然"),
+        ("p_xushao", "子將", "许劭子将误配太子将废之象"),
+        ("p_yaohong", "元子", "姚泓元子误配帝元子/桓温字元子"),
+        ("p_tengxiu", "顯先", "滕修显先误配董贤先自白/显先祖"),
+        ("p_moubo", "宣則", "缪播宣则误配昭宣则眭孟"),
+        ("p_huanghong", "始長", "黄泓始长误配始长史朱买臣"),
+        ("p_shengyan", "翁子", "盛彦翁子误配朱买臣字翁子"),
+        ("p_chunyuzhi", "叔平", "淳于智叔平误配冯参字叔平"),
+        ("p_liuer", "長魚", "刘鮞长鱼误配长鱼矫"),
+        ("p_ruanxian", "仲容", "阮咸仲容误配古今人表春秋大夫仲容"),
+        ("p_baoxian", "子良", "包咸子良误配楚子良/卫子良/太子良娣"),
+        ("p_wangzicheng", "王子城", "王子城伪切碎片"),
+    ]
+    _opt_b_fp_leaks = []
+    for _opid, _osurf, _odesc in _opt_b_zero_tests:
+        _hit_cnt = sum(1 for _al, _pid, _tr, _cid in marks_index if _pid == _opid and _al == _osurf)
+        if _hit_cnt > 0:
+            _opt_b_fp_leaks.append(f"{_opid}:{_osurf}(残余{_hit_cnt}处, {_odesc})")
+    cases.append(("Option B 高危人物语法别名伪切词假阳性彻底清零 (去疾/子得/子成/子然/子将/元子/子良/显先/宣则/始长/翁子/叔平/长鱼/仲容)",
+                  len(_opt_b_fp_leaks) == 0,
+                  "泄漏={}".format(_opt_b_fp_leaks) if _opt_b_fp_leaks else "15项高危伪切词100%清零"))
+
+    # ② 齐国名将「王子城父」正名与正典召回 100%
+    _wzcf_person = by_id.get("p_wangzicheng")
+    _wzcf_ok = bool(_wzcf_person and _wzcf_person.get("name") == "王子城父" and _wzcf_person.get("dynasty") == "春秋")
+    _wzcf_hits = sum(1 for _al, _pid, _tr, _cid in marks_index if _pid == "p_wangzicheng" and _al == "王子城父")
+    cases.append(("Option B 齐国名将「王子城父」正名、朝代纠偏与正典召回完整率 100%",
+                  _wzcf_ok and _wzcf_hits == 3,
+                  f"正名={_wzcf_person.get('name') if _wzcf_person else None}, 命中={_wzcf_hits}/3"))
+
+    # ③ 晚期人物（魏晋十六国）跨朝越书侵吞《史记》《汉书》清零断言 (张忠/张辅/张光/刘殷/徐广)
+    _cross_early_pids = ["p_zhangzhong", "p_zhangfu", "p_zhangguang", "p_liuyin_js", "p_xuguang"]
+    _cross_early_leaks = []
+    for _ce_pid in _cross_early_pids:
+        _early_hits = sum(1 for _al, _pid, _tr, _cid in marks_index if _pid == _ce_pid and (_cid.startswith("sj-") or _cid.startswith("hs-")))
+        if _early_hits > 0:
+            _cross_early_leaks.append(f"{_ce_pid}(史汉残余{_early_hits}处)")
+    cases.append(("Option B 魏晋十六国人物跨朝越书侵吞《史记》《汉书》假阳性清零 (张忠/张辅/张光/刘殷/徐广)",
+                  len(_cross_early_leaks) == 0,
+                  "侵吞={}".format(_cross_early_leaks) if _cross_early_leaks else "史汉侵吞0残留,晋书正典保底"))
+
     cases.extend(_newchain_cases())
     cases.extend(_workbook_cases())
 
