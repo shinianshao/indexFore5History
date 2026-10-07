@@ -2928,13 +2928,20 @@
     padX: 0, padY: 0
   };
 
+  function parseViewBox(str) {
+    var parts = (str || "0 0 1000 680").trim().split(/\s+/).map(Number);
+    return { x: parts[0] || 0, y: parts[1] || 0, w: parts[2] || 1000, h: parts[3] || 680 };
+  }
+
   var mapState = {
     zone: "all",
+    curVb: { x: 0, y: 0, w: 1000, h: 680 },
     showRoutes: true,
     showTerrain: true,
     selectedHub: null,
     itineraryPerson: null,
-    itineraryPlaces: []
+    itineraryPlaces: [],
+    lastDragTime: 0
   };
 
   var MAP_VIEWBOXES = {
@@ -3007,7 +3014,13 @@
     var stratKeys = Object.keys(strats);
     if (!stratKeys.length) return "";
 
-    var curVb = MAP_VIEWBOXES[mapState.zone] || MAP_VIEWBOXES["all"];
+    if (!mapState.curVb) {
+      mapState.curVb = parseViewBox(MAP_VIEWBOXES[mapState.zone] || MAP_VIEWBOXES["all"]);
+    }
+    var vb = mapState.curVb;
+    var vbStr = [Math.round(vb.x), Math.round(vb.y), Math.round(vb.w), Math.round(vb.h)].join(" ");
+    var zoomPct = Math.round((1000 / vb.w) * 100);
+
     var h = '<div class="strat-map-wrap" id="stratMapWrap">';
 
     if (mapState.itineraryPerson) {
@@ -3038,8 +3051,8 @@
       '</div>' +
       '</div>';
 
-    h += '<div class="strat-map-body">';
-    h += '<svg class="strat-map-svg" viewBox="' + curVb + '" preserveAspectRatio="xMidYMid meet">';
+    h += '<div class="strat-map-body" id="stratMapBody">';
+    h += '<svg class="strat-map-svg" id="stratMapSvg" viewBox="' + vbStr + '" preserveAspectRatio="xMidYMid meet">';
 
     // 1. 底圖紋理背景與真實立體自然地形底圖
     h += '<rect x="0" y="0" width="1000" height="680" fill="#FAF7F0"/>';
@@ -3056,13 +3069,13 @@
       '<text class="map-zone-label" x="790" y="520" fill="#a8382b">【江淮戰區】</text>' +
       '</g>';
 
-    // 3. 主要山脈形勝（標注於真實立體山脈骨架）
+    // 3. 主要山脈形勝（沿立體山脈主脊走向橫貫排布，低對比度水墨古典字距，與城邑要塞分層解耦）
     h += '<g class="map-mountains">' +
-      '<text class="map-mountain-label" x="740" y="110">▲ 燕山山脈</text>' +
-      '<text class="map-mountain-label" x="540" y="230">▲ 太行山</text>' +
-      '<text class="map-mountain-label" x="250" y="375">▲ 秦嶺山脈</text>' +
-      '<text class="map-mountain-label" x="260" y="445">▲ 大巴山 · 劍門</text>' +
-      '<text class="map-mountain-label" x="650" y="480">▲ 大別山</text>' +
+      '<text class="map-mountain-range" x="730" y="96" text-anchor="middle">── 燕　山　山　脈 ──</text>' +
+      '<text class="map-mountain-range" x="525" y="225" text-anchor="middle">▲ 太　行　山</text>' +
+      '<text class="map-mountain-range qinling" x="295" y="394" text-anchor="middle">── 秦　嶺　山　脈 ──</text>' +
+      '<text class="map-mountain-range" x="220" y="452" text-anchor="middle">── 大　巴　山 ──</text>' +
+      '<text class="map-mountain-range" x="670" y="488" text-anchor="middle">── 大　別　山 ──</text>' +
       '</g>';
 
     // 4. 古山川水系
@@ -3193,6 +3206,12 @@
     h += '</g>';
 
     h += '</svg>';
+    h += '<div class="map-zoom-tools">' +
+      '<button class="map-zoom-btn" data-map-zoom="in" title="放大（亦可滾輪放大）">＋</button>' +
+      '<button class="map-zoom-btn" data-map-zoom="reset" title="復位當前戰區視野">⟲</button>' +
+      '<button class="map-zoom-btn" data-map-zoom="out" title="縮小（亦可滾輪縮小）">－</button>' +
+      '<div class="map-zoom-level" id="mapZoomLevel">' + zoomPct + '%</div>' +
+      '</div>';
     h += '<div class="map-tooltip" id="mapTooltip"></div>';
     h += '</div>';
     h += '</div>';
@@ -3265,6 +3284,7 @@
       h += indexGrid(one, true);
     });
     out.innerHTML = h;
+    bindMapInteractions();
   }
 
   /* 篇目一覽：書 → 類別 → 篇。
@@ -3478,13 +3498,27 @@
       onMFilterChange("book", "");
       return;
     }
-    // 兩漢三國兵爭形勝輿圖控制：戰區切換、通道開關、全景復位、退出行跡
+    // 兩漢三國兵爭形勝輿圖控制：戰區切換、通道開關、全景復位、退出行跡、放大縮小
     var mz = ev.target.closest ? ev.target.closest(".map-pill[data-map-zone]") : null;
     if (mz) {
       var z = mz.getAttribute("data-map-zone");
       if (z) {
         mapState.zone = z;
+        mapState.curVb = parseViewBox(MAP_VIEWBOXES[z] || MAP_VIEWBOXES["all"]);
         renderPlacesIndex();
+      }
+      return;
+    }
+    var mzb = ev.target.closest ? ev.target.closest("[data-map-zoom]") : null;
+    if (mzb) {
+      var zAct = mzb.getAttribute("data-map-zoom");
+      if (zAct === "in") {
+        zoomMapByCenter(0.80);
+      } else if (zAct === "out") {
+        zoomMapByCenter(1.25);
+      } else if (zAct === "reset") {
+        mapState.curVb = parseViewBox(MAP_VIEWBOXES[mapState.zone] || MAP_VIEWBOXES["all"]);
+        updateMapSvgViewBox();
       }
       return;
     }
@@ -3503,6 +3537,7 @@
     var mres = ev.target.closest ? ev.target.closest(".map-pill[data-map-reset]") : null;
     if (mres) {
       mapState.zone = "all";
+      mapState.curVb = parseViewBox(MAP_VIEWBOXES["all"]);
       mapState.selectedHub = null;
       mapState.itineraryPerson = null;
       mapState.itineraryPlaces = [];
@@ -3519,6 +3554,10 @@
     // 形勝圖節點與下方戰區要塞膠囊點選：選中/取消選中要衝並展開考據卡片
     var mhub = ev.target.closest ? ev.target.closest(".map-hub[data-plid], .strat-pill[data-map-hub]") : null;
     if (mhub) {
+      // 正在拖拽地圖或剛拖拽結束（220ms 內），不觸發要衝選中
+      if (mapState.lastDragTime && (Date.now() - mapState.lastDragTime < 220)) {
+        return;
+      }
       var hubId = mhub.getAttribute("data-plid") || mhub.getAttribute("data-map-hub");
       if (hubId) {
         mapState.selectedHub = (mapState.selectedHub === hubId) ? null : hubId;
@@ -3541,6 +3580,7 @@
       mapState.itineraryPerson = pname;
       mapState.itineraryPlaces = hubs;
       mapState.zone = "all";
+      mapState.curVb = parseViewBox(MAP_VIEWBOXES["all"]);
       mapState.selectedHub = hubs[0] || null;
       switchTab("places");
       var mw = document.getElementById("stratMapWrap");
@@ -3562,6 +3602,7 @@
           else if (item.zone === "秦嶺隴蜀戰區") mapState.zone = "ls";
           else if (item.zone.indexOf("河洛") >= 0 || item.zone.indexOf("河北") >= 0) mapState.zone = "hl";
         }
+        mapState.curVb = parseViewBox(MAP_VIEWBOXES[mapState.zone] || MAP_VIEWBOXES["all"]);
         switchTab("places");
         var mw2 = document.getElementById("stratMapWrap");
         if (mw2 && mw2.scrollIntoView) {
@@ -3747,7 +3788,158 @@
     }
   });
 
-  // 兩漢三國兵爭形勝輿圖：懸停氣泡 Tooltip 動態跟隨（帶防抖與游標負偏移）
+  // 兩漢三國兵爭形勝輿圖：縮放（Zoom）與平移（Pan）核心交互引擎
+  function updateMapSvgViewBox() {
+    var svg = document.getElementById("stratMapSvg");
+    if (!svg || !mapState.curVb) return;
+    var vb = mapState.curVb;
+    svg.setAttribute("viewBox", [Math.round(vb.x), Math.round(vb.y), Math.round(vb.w), Math.round(vb.h)].join(" "));
+    var lvl = document.getElementById("mapZoomLevel");
+    if (lvl) {
+      var pct = Math.round((1000 / vb.w) * 100);
+      lvl.textContent = pct + "%";
+    }
+  }
+
+  function zoomMapByCenter(factor) {
+    if (!mapState.curVb) return;
+    var vb = mapState.curVb;
+    var centerX = vb.x + vb.w / 2;
+    var centerY = vb.y + vb.h / 2;
+    var newW = vb.w * factor;
+    var newH = vb.h * factor;
+    if (newW < 90 || newW > 1400) return;
+    vb.x = centerX - (vb.w * factor) / 2;
+    vb.y = centerY - (vb.h * factor) / 2;
+    vb.w = newW;
+    vb.h = newH;
+    updateMapSvgViewBox();
+  }
+
+  function bindMapInteractions() {
+    var svg = document.getElementById("stratMapSvg");
+    var body = document.getElementById("stratMapBody");
+    if (!svg || !body) return;
+    if (svg._zoomPanBound) return;
+    svg._zoomPanBound = true;
+
+    // 1. 滑鼠滾輪縮放（以指針位置為中心縮放）
+    svg.addEventListener("wheel", function (e) {
+      e.preventDefault();
+      var rect = svg.getBoundingClientRect();
+      var vb = mapState.curVb;
+      var mouseSvgX = vb.x + ((e.clientX - rect.left) / rect.width) * vb.w;
+      var mouseSvgY = vb.y + ((e.clientY - rect.top) / rect.height) * vb.h;
+      var factor = e.deltaY < 0 ? 0.82 : 1.22;
+      var newW = vb.w * factor;
+      var newH = vb.h * factor;
+      if (newW < 90 || newW > 1400) return;
+      vb.x = mouseSvgX - ((mouseSvgX - vb.x) * factor);
+      vb.y = mouseSvgY - ((mouseSvgY - vb.y) * factor);
+      vb.w = newW;
+      vb.h = newH;
+      updateMapSvgViewBox();
+    }, { passive: false });
+
+    // 2. 滑鼠左鍵拖拽平移
+    var isDragging = false;
+    var startClientX = 0, startClientY = 0;
+    var startVb = null;
+    var totalDragDist = 0;
+
+    body.addEventListener("mousedown", function (e) {
+      if (e.button !== 0) return;
+      isDragging = true;
+      totalDragDist = 0;
+      startClientX = e.clientX;
+      startClientY = e.clientY;
+      startVb = { x: mapState.curVb.x, y: mapState.curVb.y, w: mapState.curVb.w, h: mapState.curVb.h };
+      body.classList.add("panning");
+    });
+
+    window.addEventListener("mousemove", function (e) {
+      if (!isDragging || !startVb) return;
+      var dx = e.clientX - startClientX;
+      var dy = e.clientY - startClientY;
+      totalDragDist = Math.hypot(dx, dy);
+      var rect = svg.getBoundingClientRect();
+      var svgDx = dx * (startVb.w / rect.width);
+      var svgDy = dy * (startVb.h / rect.height);
+      mapState.curVb.x = startVb.x - svgDx;
+      mapState.curVb.y = startVb.y - svgDy;
+      updateMapSvgViewBox();
+    });
+
+    window.addEventListener("mouseup", function (e) {
+      if (isDragging) {
+        isDragging = false;
+        body.classList.remove("panning");
+        if (totalDragDist > 4) {
+          mapState.lastDragTime = Date.now();
+        }
+      }
+    });
+
+    // 3. 移動端觸摸雙指縮放與單指平移
+    var touchDist = 0;
+    var touchVb = null;
+    var touchStartX = 0, touchStartY = 0;
+
+    body.addEventListener("touchstart", function (e) {
+      if (e.touches.length === 1) {
+        isDragging = true;
+        totalDragDist = 0;
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        startVb = { x: mapState.curVb.x, y: mapState.curVb.y, w: mapState.curVb.w, h: mapState.curVb.h };
+      } else if (e.touches.length === 2) {
+        isDragging = false;
+        touchDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        touchVb = { x: mapState.curVb.x, y: mapState.curVb.y, w: mapState.curVb.w, h: mapState.curVb.h };
+      }
+    }, { passive: true });
+
+    body.addEventListener("touchmove", function (e) {
+      if (e.touches.length === 1 && isDragging && startVb) {
+        var dx = e.touches[0].clientX - touchStartX;
+        var dy = e.touches[0].clientY - touchStartY;
+        totalDragDist = Math.hypot(dx, dy);
+        var rect = svg.getBoundingClientRect();
+        var svgDx = dx * (startVb.w / rect.width);
+        var svgDy = dy * (startVb.h / rect.height);
+        mapState.curVb.x = startVb.x - svgDx;
+        mapState.curVb.y = startVb.y - svgDy;
+        updateMapSvgViewBox();
+      } else if (e.touches.length === 2 && touchVb && touchDist > 0) {
+        var curDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+        if (curDist > 0) {
+          var factor = touchDist / curDist;
+          var newW = touchVb.w * factor;
+          var newH = touchVb.h * factor;
+          if (newW >= 90 && newW <= 1400) {
+            var midClientX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+            var midClientY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+            var rect2 = svg.getBoundingClientRect();
+            var midSvgX = touchVb.x + ((midClientX - rect2.left) / rect2.width) * touchVb.w;
+            var midSvgY = touchVb.y + ((midClientY - rect2.top) / rect2.height) * touchVb.h;
+            mapState.curVb.x = midSvgX - (midSvgX - touchVb.x) * factor;
+            mapState.curVb.y = midSvgY - (midSvgY - touchVb.y) * factor;
+            mapState.curVb.w = newW;
+            mapState.curVb.h = newH;
+            updateMapSvgViewBox();
+          }
+        }
+      }
+    }, { passive: true });
+
+    body.addEventListener("touchend", function (e) {
+      if (totalDragDist > 4) {
+        mapState.lastDragTime = Date.now();
+      }
+      isDragging = false;
+    });
+  }
+
   // 兩漢三國兵爭形勝輿圖：懸停氣泡 Tooltip 動態跟隨（帶防抖、要衝狀態鎖定與平滑防閃）
   var mapTipTimer = null;
   var currentTipHub = null;
