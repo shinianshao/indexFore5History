@@ -344,10 +344,11 @@ def _notes(max_items: int = 8) -> dict:
     return out
 
 
-def _cooccurrences() -> tuple[dict, dict]:
+def _cooccurrences(strat: dict) -> tuple[dict, dict, dict]:
     """計算全庫人地同句共現榜：
     pl2p: plid -> [[pid, count], ...] (前 8 名)
-    p2pl: pid -> [[plid, count], ...] (前 8 名)
+    p2pl: pid -> [[plid, count], ...] (前 12 名)
+    p2strat: pid -> [[plid, count], ...] (涉足的全部 43 處兵爭要塞，無截斷)
     """
     with db.connect() as c:
         sql = """
@@ -370,10 +371,14 @@ def _cooccurrences() -> tuple[dict, dict]:
             ORDER BY m.person_id, c DESC
         """
         p2pl: dict = {}
+        p2strat: dict = {}
         for pid, plid, count in c.execute(sql_p):
-            if len(p2pl.get(pid, [])) < 8:
+            if len(p2pl.get(pid, [])) < 12:
                 p2pl.setdefault(pid, []).append([plid, count])
-        return pl2p, p2pl
+            if plid in strat:
+                p2strat.setdefault(pid, []).append([plid, count])
+        return pl2p, p2pl, p2strat
+
 
 
 def build() -> dict:
@@ -419,8 +424,8 @@ def build() -> dict:
 
     pmbk = step("人物分書全量", _mbk, "mentions", "person_id", codes)
     plbk = step("地名分書全量", _mbk, "place_mentions", "place_id", codes)
-    co_pl, co_p = step("人地共現", _cooccurrences)
     strat = step("兵爭要地", db.get_strategic_places)
+    co_pl, co_p, co_strat = step("人地共現", _cooccurrences, strat)
 
     data = {
         "v": 1,
@@ -475,6 +480,7 @@ def build() -> dict:
         # 人地時空交集（同句共現榜）
         "pl2p": co_pl,
         "p2pl": co_p,
+        "p2strat": co_strat,
     }
     data["_sec"] = round(time.time() - t0, 1)
     data["_steps"] = took
@@ -487,7 +493,7 @@ def build() -> dict:
 # ⚠️ 地名三块（pmen/plalias/plbook）**必须**在这里：漏一个不是报错，
 #    是离线版少一块数据（搜不到简体 / 点开没命中）——最难发现的那种坏。
 BIG = ("sents", "chaps", "pers", "pm", "pla", "pmen", "plalias", "plbook",
-       "pbook", "idx", "rel", "notes", "strat", "pl2p", "p2pl")
+       "pbook", "idx", "rel", "notes", "strat", "pl2p", "p2pl", "p2strat")
 
 
 def dump_js(data: dict) -> str:

@@ -72,7 +72,7 @@ def place_top_persons(plid: str, limit: int = 8) -> List[Dict[str, Any]]:
                 for r in rows]
 
 
-def person_top_places(pid: str, limit: int = 8) -> List[Dict[str, Any]]:
+def person_top_places(pid: str, limit: int = 12) -> List[Dict[str, Any]]:
     """某人物在語料中共同出現最頻繁的地名榜（主要行跡與兵爭輿地交集）。"""
     with connect() as conn:
         sql = """
@@ -88,6 +88,36 @@ def person_top_places(pid: str, limit: int = 8) -> List[Dict[str, Any]]:
         return [{"id": r["place_id"], "trad_name": r["trad_name"], "name": r["name"],
                  "kind": r["kind"], "n": r["c"], "isStrategic": (r["place_id"] in STRATEGIC_PLACES)}
                 for r in rows]
+
+
+def person_strategic_hubs(pid: str) -> List[Dict[str, Any]]:
+    """提取某人物在 43 處兵爭要衝中涉足的全部戰略要塞（無截斷，曹操 27 處全量返回）。"""
+    with connect() as conn:
+        sql = """
+            SELECT pm.place_id, pl.trad_name, pl.name, COUNT(DISTINCT pm.sentence_uid) as c
+            FROM mentions m
+            JOIN place_mentions pm ON m.sentence_uid = pm.sentence_uid
+            JOIN places pl ON pm.place_id = pl.id
+            WHERE m.person_id = ?
+            GROUP BY pm.place_id
+            ORDER BY c DESC
+        """
+        rows = conn.execute(sql, (pid,)).fetchall()
+        res = []
+        for r in rows:
+            plid = r["place_id"]
+            if plid in STRATEGIC_PLACES:
+                st = STRATEGIC_PLACES[plid]
+                res.append({
+                    "id": plid,
+                    "trad_name": r["trad_name"],
+                    "name": r["name"],
+                    "n": r["c"],
+                    "zone": st.get("zone", ""),
+                    "connections": st.get("connections", [])
+                })
+        return res
+
 
 
 
@@ -621,7 +651,8 @@ def person_payload(pid: str, limit: int = 200, book: Optional[str] = None,
         # 時代名（下標 = eraRank）。前端不再自己抄一份時代表。
         "eraNames": ERA_NAMES,
         # 主要行跡與兵爭輿地交集
-        "topPlaces": person_top_places(pid, 8),
+        "topPlaces": person_top_places(pid, 12),
+        "strategicHubs": person_strategic_hubs(pid),
     }
 
 

@@ -103,6 +103,19 @@
           n: item[1],
           isStrategic: !!((D.strat || {})[item[0]])
         };
+      }),
+      // 涉足的全部 43 處兵爭要衝（無截斷）
+      strategicHubs: ((D.p2strat || {})[pid] || []).map(function (item) {
+        var pl = (D.pla || {})[item[0]];
+        var st = (D.strat || {})[item[0]] || {};
+        return {
+          id: item[0],
+          trad_name: pl ? pl[0] : item[0],
+          name: pl ? pl[1] : item[0],
+          n: item[1],
+          zone: st.zone || "",
+          connections: st.connections || []
+        };
       })
     };
     d.sgzBreakdown = computeSgzBreakdown(d);
@@ -1075,14 +1088,16 @@
       html += renderFeoffLineageCard(pid);
 
       // 主要行跡與兵爭輿地交集
-      if (d.topPlaces && d.topPlaces.length) {
-        var stratHubsThisPerson = d.topPlaces.filter(function (tpl) { return tpl.isStrategic; }).map(function (tpl) { return tpl.id; });
-        var itinBtn = stratHubsThisPerson.length
-          ? "<button class=\"map-view-btn\" data-act=\"view-itinerary\" data-pname=\"" + esc(p.trad_name || p.name) + "\" data-hubs=\"" + esc(stratHubsThisPerson.join(",")) + "\">在形勝輿圖上檢視行跡 ➔</button>"
+      if ((d.topPlaces && d.topPlaces.length) || (d.strategicHubs && d.strategicHubs.length)) {
+        var allStratHubs = (d.strategicHubs && d.strategicHubs.length)
+          ? d.strategicHubs.map(function (h) { return h.id; })
+          : (d.topPlaces || []).filter(function (tpl) { return tpl.isStrategic; }).map(function (tpl) { return tpl.id; });
+        var itinBtn = allStratHubs.length
+          ? "<button class=\"map-view-btn\" data-act=\"view-itinerary\" data-pname=\"" + esc(p.trad_name || p.name) + "\" data-hubs=\"" + esc(allStratHubs.join(",")) + "\">在形勝輿圖上檢視行跡（涉足 " + allStratHubs.length + " 處要塞） ➔</button>"
           : "";
-        html += "<div class=\"group-title\">主要行跡 · 兵爭與輿地交集 <span class=\"count\">" + d.topPlaces.length + " 處</span>" + itinBtn + "</div>" +
+        html += "<div class=\"group-title\">主要行跡 · 兵爭與輿地交集 <span class=\"count\">" + (d.topPlaces ? d.topPlaces.length : 0) + " 處</span>" + itinBtn + "</div>" +
           "<div class=\"card\"><div class=\"footprint-grid\">" +
-          d.topPlaces.map(function (tpl) {
+          (d.topPlaces || []).map(function (tpl) {
             var cls = tpl.isStrategic ? "footprint-pill strat" : "footprint-pill";
             return "<span class=\"" + cls + "\" data-plid=\"" + esc(tpl.id) + "\">" +
               (tpl.isStrategic ? "<i class=\"strat-dot\">★</i>" : "") +
@@ -2916,6 +2931,7 @@
   var mapState = {
     zone: "all",
     showRoutes: true,
+    showTerrain: true,
     selectedHub: null,
     itineraryPerson: null,
     itineraryPlaces: []
@@ -3013,6 +3029,8 @@
       '<span class="map-pill' + (mapState.zone === "hl" ? " on" : "") + '" data-map-zone="hl">中原河洛</span>' +
       '<span class="map-pill' + (mapState.showRoutes ? " on" : "") + '" data-map-toggle="routes">' +
       (mapState.showRoutes ? "攻守通道：開" : "攻守通道：關") + '</span>' +
+      '<span class="map-pill' + (mapState.showTerrain ? " on" : "") + '" data-map-toggle="terrain">' +
+      (mapState.showTerrain ? "⛰️ 地形底圖：開" : "⛰️ 地形底圖：關") + '</span>' +
       '<span class="map-pill" data-map-reset="true" title="復位全景並清除選中">復位</span>' +
       '</div>' +
       '</div>';
@@ -3020,8 +3038,11 @@
     h += '<div class="strat-map-body">';
     h += '<svg class="strat-map-svg" viewBox="' + curVb + '" preserveAspectRatio="xMidYMid meet">';
 
-    // 1. 底圖紋理背景
+    // 1. 底圖紋理背景與真實立體自然地形底圖
     h += '<rect x="0" y="0" width="1000" height="620" fill="#FAF7F0"/>';
+    if (mapState.showTerrain) {
+      h += '<image href="terrain_basemap.jpg" x="0" y="0" width="1000" height="620" preserveAspectRatio="none" opacity="0.60" class="map-terrain-layer"/>';
+    }
 
     // 2. 戰區宏觀浮水印
     h += '<g class="map-watermarks">' +
@@ -3083,21 +3104,42 @@
       h += '</g>';
     }
 
-    // 6. 人物行跡流動連線
+    // 6. 人物行跡流動連線（基於戰略攻守通道拓撲走廊網絡）
     if (mapState.itineraryPerson && mapState.itineraryPlaces.length >= 2) {
       h += '<g class="map-itinerary-layer">';
-      var itinPts = [];
+      var itinSet = {};
+      mapState.itineraryPlaces.forEach(function (pid) { itinSet[pid] = true; });
+      var itinDrawn = {};
+      var validEdgesCount = 0;
+
+      // 優先繪製人物涉足要塞之間的所有攻守走廊
       mapState.itineraryPlaces.forEach(function (pid) {
-        if (strats[pid] && strats[pid].coords) {
-          itinPts.push(projectCoord(strats[pid].coords[0], strats[pid].coords[1]));
-        }
+        var it = strats[pid];
+        if (!it || !it.coords) return;
+        var p0 = projectCoord(it.coords[0], it.coords[1]);
+        (it.connections || []).forEach(function (tgtId) {
+          if (itinSet[tgtId] && strats[tgtId] && strats[tgtId].coords) {
+            var eKey = (pid < tgtId) ? (pid + "_" + tgtId) : (tgtId + "_" + pid);
+            if (!itinDrawn[eKey]) {
+              itinDrawn[eKey] = true;
+              validEdgesCount++;
+              var p1 = projectCoord(strats[tgtId].coords[0], strats[tgtId].coords[1]);
+              h += '<line x1="' + p0[0] + '" y1="' + p0[1] + '" x2="' + p1[0] + '" y2="' + p1[1] + '" class="map-flow-line"/>';
+            }
+          }
+        });
       });
-      if (itinPts.length >= 2) {
-        var itinPath = "M " + itinPts[0][0] + " " + itinPts[0][1];
-        for (var pi = 1; pi < itinPts.length; pi++) {
-          itinPath += " L " + itinPts[pi][0] + " " + itinPts[pi][1];
+
+      // 兜底：若要塞間無直接通道連線（離散要塞），則串聯主幹連線
+      if (validEdgesCount === 0) {
+        for (var pi = 0; pi < mapState.itineraryPlaces.length - 1; pi++) {
+          var idA = mapState.itineraryPlaces[pi], idB = mapState.itineraryPlaces[pi + 1];
+          if (strats[idA] && strats[idB] && strats[idA].coords && strats[idB].coords) {
+            var pa = projectCoord(strats[idA].coords[0], strats[idA].coords[1]);
+            var pb = projectCoord(strats[idB].coords[0], strats[idB].coords[1]);
+            h += '<line x1="' + pa[0] + '" y1="' + pa[1] + '" x2="' + pb[0] + '" y2="' + pb[1] + '" class="map-flow-line"/>';
+          }
         }
-        h += '<path d="' + itinPath + '" class="map-flow-line"/>';
       }
       h += '</g>';
     }
@@ -3122,6 +3164,9 @@
       h += '<g class="' + hubClasses + '" data-plid="' + esc(k) + '" ' +
         'data-name="' + esc(it.trad_name) + '" data-zone="' + esc(it.zone) + '" ' +
         'data-title="' + esc(it.strat_title) + '" data-battles="' + esc(battlesStr) + '">';
+
+      // 寬大透明命中感應圓（徹底杜絕游標在文字與圓點間切換造成的說明文字閃爍）
+      h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="18" class="hub-hitarea"/>';
 
       if (isSel || isItinMatch) {
         h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="6" stroke="' + (isSel ? "#9B3326" : zColor) + '" fill="none" class="map-pulse-ring"/>';
@@ -3449,6 +3494,12 @@
       renderPlacesIndex();
       return;
     }
+    var mt = ev.target.closest ? ev.target.closest(".map-pill[data-map-toggle=\"terrain\"]") : null;
+    if (mt) {
+      mapState.showTerrain = !mapState.showTerrain;
+      renderPlacesIndex();
+      return;
+    }
     var mres = ev.target.closest ? ev.target.closest(".map-pill[data-map-reset]") : null;
     if (mres) {
       mapState.zone = "all";
@@ -3696,11 +3747,13 @@
     }
   });
 
-  // 兩漢三國兵爭形勝輿圖：懸停氣泡 Tooltip 動態跟隨
+  // 兩漢三國兵爭形勝輿圖：懸停氣泡 Tooltip 動態跟隨（帶防抖與游標負偏移）
+  var mapTipTimer = null;
   out.addEventListener("mouseover", function (ev) {
     var hub = ev.target.closest ? ev.target.closest(".map-hub[data-plid]") : null;
     var tip = document.getElementById("mapTooltip");
     if (!hub || !tip) return;
+    if (mapTipTimer) { clearTimeout(mapTipTimer); mapTipTimer = null; }
     var name = hub.getAttribute("data-name") || "";
     var zone = hub.getAttribute("data-zone") || "";
     var title = hub.getAttribute("data-title") || "";
@@ -3719,7 +3772,7 @@
     if (!body) return;
     var rect = body.getBoundingClientRect();
     tip.style.left = (ev.clientX - rect.left) + "px";
-    tip.style.top = (ev.clientY - rect.top) + "px";
+    tip.style.top = (ev.clientY - rect.top - 14) + "px";
   });
 
   out.addEventListener("mouseout", function (ev) {
@@ -3728,7 +3781,12 @@
     var rel = ev.relatedTarget ? (ev.relatedTarget.closest ? ev.relatedTarget.closest(".map-hub[data-plid]") : null) : null;
     if (rel === hub) return;
     var tip = document.getElementById("mapTooltip");
-    if (tip) tip.style.display = "none";
+    if (tip) {
+      if (mapTipTimer) clearTimeout(mapTipTimer);
+      mapTipTimer = setTimeout(function () {
+        tip.style.display = "none";
+      }, 60);
+    }
   });
 
   /* ---------- 啟動 ---------- */

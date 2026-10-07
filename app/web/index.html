@@ -916,21 +916,24 @@
   .map-route-line.active {
     stroke: #9B3326; stroke-dasharray: none; stroke-width: 2.5; opacity: 0.95;
   }
-  .map-hub { cursor: pointer; transition: transform 0.2s ease, opacity 0.25s ease; }
-  .map-hub .hub-ring {
-    fill: #FFFDF7; stroke-width: 1.8; transition: all 0.2s ease;
+  .map-hub { cursor: pointer; transition: opacity 0.25s ease; }
+  .map-hub .hub-hitarea {
+    pointer-events: all; cursor: pointer; fill: transparent;
   }
-  .map-hub .hub-dot { transition: all 0.2s ease; }
+  .map-hub .hub-ring {
+    fill: #FFFDF7; stroke-width: 1.8; transition: all 0.2s ease; pointer-events: none;
+  }
+  .map-hub .hub-dot { transition: all 0.2s ease; pointer-events: none; }
   .map-hub .hub-text {
     font-family: var(--serif); font-size: 11px; font-weight: 500;
     paint-order: stroke; stroke: #FAF7F0; stroke-width: 3px; stroke-linejoin: round;
-    transition: all 0.2s ease; user-select: none;
+    transition: all 0.2s ease; user-select: none; pointer-events: none;
   }
   .map-hub:hover .hub-ring {
-    transform: scale(1.35); transform-origin: center; stroke-width: 2.4;
+    stroke-width: 2.6;
   }
   .map-hub:hover .hub-text {
-    font-weight: 600; font-size: 12.5px;
+    font-weight: 700; fill: #9B3326;
   }
   .map-hub.selected .hub-ring {
     stroke: #9B3326 !important; fill: #faecea; stroke-width: 2.8;
@@ -938,6 +941,9 @@
   .map-hub.selected .hub-dot { fill: #9B3326 !important; }
   .map-hub.selected .hub-text { font-weight: 700; fill: #9B3326 !important; }
   .map-hub.muted { opacity: 0.18; pointer-events: none; }
+  .map-terrain-layer {
+    transition: opacity 0.3s ease; pointer-events: none;
+  }
   .map-pulse-ring {
     animation: mapPulse 1.8s infinite ease-out; transform-origin: center;
     pointer-events: none;
