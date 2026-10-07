@@ -85,13 +85,21 @@ def run_checks(inject=False):
     passed += 1
 
     # -------------------------------------------------------------
-    # 断言 4：正文打标命中健康稳定（place_mentions >= 118,000，剔除千人734处与下相60处噪声）
+    # 断言 4：正文打标命中健康稳定（place_mentions >= 105,000，治理单字地名假阳性后健康收拢）
     # -------------------------------------------------------------
     c.execute("SELECT COUNT(*) FROM place_mentions")
     pm_count = c.fetchone()[0]
-    min_pm = 118000 if not inject else 999999
+    min_pm = 105000 if not inject else 999999
     assert pm_count >= min_pm, f"断言 4 失败：place_mentions 命中数不足: {pm_count} < {min_pm}"
-    print(f"✓ [4/10] 正文地名打标命中数保持健康稳定: {pm_count} 处 (>= {min_pm})")
+    # 单字地名假阳性阻断断言：夏/汝/曹/商/巢/唐/丰/岐/虞/柘 单字裸匹配全局清零
+    bare_leaks = c.execute("""
+        SELECT place_id, surface, COUNT(*) FROM place_mentions
+        WHERE place_id IN ('pl_xia', 'pl_ru_shui', 'pl_cao', 'pl_shang_g', 'pl_chao', 'pl_tang', 'pl_feng', 'pl_qi_shan', 'pl_yu_g', 'pl_zhe')
+          AND LENGTH(surface) = 1
+        GROUP BY place_id, surface
+    """).fetchall()
+    assert len(bare_leaks) == 0, f"断言 4 失败：存在未阻断的单字裸匹配地名: {bare_leaks}"
+    print(f"✓ [4/10] 正文地名打标命中数保持健康稳定: {pm_count} 处 (>= {min_pm}) 且高危单字裸匹配 0 泄漏")
     passed += 1
 
     # -------------------------------------------------------------
