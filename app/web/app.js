@@ -591,7 +591,8 @@
   function notesSection(pid, notes, mainN) {
     var h = "";
     var pei = notes.pei;
-    if (pei && pei.n && peiOn) {
+    var sgzActive = selectedBooks.indexOf("sgz") >= 0;
+    if (pei && pei.n && peiOn && sgzActive) {
       // 【裴N】標記擺在正文命中旁邊：讓用戶一眼看到這是另一層文本的數字。
       // ⚠️ 這裡**不做 n + pei.n 的相加**（紅線：注文不進 mentionCount）。
       h += "<div class=\"note-sum\">正文命中 <b>" + count(mainN) +
@@ -599,7 +600,7 @@
         count(pei.n) + "】</b></div>";
     }
     var titles = notes.chapterTitles || {};
-    if (peiOn) {
+    if (peiOn && sgzActive) {
       h += noteBlock(pei, "三國志裴松之注明細", "三國志", true, titles);
     }
     var js = notes.jsNote;
@@ -2529,8 +2530,13 @@
         esc("《" + b.name + "》") + "<em>" + (b.chapterCount || "") + " 篇</em></span>";
       /* 三國志後緊跟裴注小膠囊（三國志裴松之注） */
       if (b.code === "sgz") {
-        h += '<span class="bk pei-chip' + (peiOn ? " on" : "") + '" data-book="pei"' +
-          ' title="三國志裴松之注·開啟後統計包含注文【裴N】；關閉則只計正文">' +
+        var isSgzOn = selectedBooks.indexOf("sgz") >= 0;
+        var peiActive = isSgzOn && peiOn;
+        var peiTitle = isSgzOn
+          ? (peiOn ? "三國志裴松之注·已開啟（統計包含注文【裴N】）" : "三國志裴松之注·已關閉（只計正文）")
+          : "三國志裴松之注·當前未選中《三國志》（點擊可同時勾選《三國志》並開啟裴注）";
+        var peiClasses = "bk pei-chip" + (peiActive ? " on" : "") + (!isSgzOn ? " disabled" : "");
+        h += '<span class="' + peiClasses + '" data-book="pei" title="' + esc(peiTitle) + '">' +
           '三國志裴松之注</span>';
       }
     });
@@ -3402,16 +3408,42 @@
       PRESET_CAPSULES.forEach(function (x) { if (x.id === pid) target = x; });
       if (target) {
         selectedBooks = target.books.slice();
+        // 若所選預設範疇不包含《三國志》（如點擊「兩漢書」），自動取消裴注！
+        if (selectedBooks.indexOf("sgz") < 0) {
+          peiOn = false;
+        } else {
+          // 若包含《三國志》（如五書通檢、前四史、魏晉史），自動保持/恢復開啟裴注
+          peiOn = true;
+        }
         syncScopeBook();
         renderBookbar();
-        if (currentTab === "search") loadIndex();
-        else loadIndex(renderCurrentTab);
+        if (currentTab === "search") {
+          loadIndex();
+          if (currentPid) renderPerson(currentPid).catch(showErr);
+        } else {
+          loadIndex(renderCurrentTab);
+        }
       }
       return;
     }
 
     var code = bk.getAttribute("data-book");
     if (code === "pei") {
+      var sgzIdx = selectedBooks.indexOf("sgz");
+      if (sgzIdx < 0) {
+        // 若當前未選中《三國志》，點擊裴注時：自動勾選《三國志》並開啟裴注！
+        selectedBooks.push("sgz");
+        peiOn = true;
+        syncScopeBook();
+        renderBookbar();
+        if (currentTab === "search") {
+          loadIndex();
+          if (currentPid) renderPerson(currentPid).catch(showErr);
+        } else {
+          loadIndex(renderCurrentTab);
+        }
+        return;
+      }
       peiOn = !peiOn;
       renderBookbar();
       if (currentTab === "search" && currentPid) {
@@ -3425,14 +3457,26 @@
     if (idx >= 0) {
       if (selectedBooks.length <= 1) return;
       selectedBooks.splice(idx, 1);
+      // 若取消了《三國志》，裴注隨之連帶取消！
+      if (code === "sgz") {
+        peiOn = false;
+      }
     } else {
       selectedBooks.push(code);
+      // 若重新勾選了《三國志》，自動恢復裴注開啟！
+      if (code === "sgz") {
+        peiOn = true;
+      }
     }
     syncScopeBook();
     renderBookbar();
     // 換書後快捷詞要跟著換；索引頁也要重取（計數是按書算的）
-    if (currentTab === "search") loadIndex();
-    else loadIndex(renderCurrentTab);
+    if (currentTab === "search") {
+      loadIndex();
+      if (currentPid) renderPerson(currentPid).catch(showErr);
+    } else {
+      loadIndex(renderCurrentTab);
+    }
   });
 
   quickEl.addEventListener("click", function (ev) {
