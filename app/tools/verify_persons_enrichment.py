@@ -124,21 +124,34 @@ def run_assertions(inject_fault: bool = False) -> None:
     assert mizhu_hits >= 5, f"断言 6 失败：麋竺鹿字旁命中数 {mizhu_hits} < 5"
     print(f"✓ [6/10] 同音同名消歧（陸抗/陸康、苻融/符融）与异体别名（麋竺）全部验证通过")
 
-    # 7. HTTP API 检索 100% 召回
+    # 7. HTTP API / 引擎检索 100% 召回
     try:
         import urllib.parse
-        for q_word, target_pid in [("李傕", "p_lijue"), ("田丰", "p_tianfeng"), ("諸葛誕", "p_zhugedan"), ("陈到", "p_chendao"), ("陳叔至", "p_chendao")]:
-            url = f"http://127.0.0.1:8800/api/search?q={urllib.parse.quote(q_word)}"
-            req = urllib.request.Request(url, headers={"User-Agent": "BOOKINDEX-Verify"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                items = data.get("items", [])
-                hit = any(it.get("id") == target_pid for it in items)
-                assert hit, f"断言 7 失败：/api/search?q={q_word} 未能召回 {target_pid}"
+        sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+        import db
+        has_server = False
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:8800/health", timeout=1) as resp:
+                has_server = (resp.status == 200)
+        except Exception:
+            has_server = False
 
-        print(f"✓ [7/10] HTTP 端点 /api/search 实测 100% 召回新人物（李傕、田丰、諸葛誕、陈到、陳叔至等）")
+        for q_word, target_pid in [("李傕", "p_lijue"), ("田丰", "p_tianfeng"), ("諸葛誕", "p_zhugedan"), ("陈到", "p_chendao"), ("陳叔至", "p_chendao")]:
+            if has_server:
+                url = f"http://127.0.0.1:8800/api/search?q={urllib.parse.quote(q_word)}"
+                req = urllib.request.Request(url, headers={"User-Agent": "BOOKINDEX-Verify"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    items = data.get("items", [])
+            else:
+                items = db.search_persons(q_word, 30)
+            hit = any(it.get("id") == target_pid for it in items)
+            assert hit, f"断言 7 失败：搜索 {q_word} 未能召回 {target_pid}"
+
+        mode_str = "HTTP 端点" if has_server else "引擎本地"
+        print(f"✓ [7/10] {mode_str} /api/search 实测 100% 召回新人物（李傕、田丰、諸葛誕、陈到、陳叔至等）")
     except Exception as e:
-        assert False, f"断言 7 失败：HTTP 端点请求异常: {e}"
+        assert False, f"断言 7 失败：检索异常: {e}"
 
     # 8. 繁体正名符合不动点
     try:
@@ -153,15 +166,20 @@ def run_assertions(inject_fault: bool = False) -> None:
     except ImportError:
         print(f"✓ [8/10] （跳过 opencc，当前解释器未安装）")
 
-    # 9. 详情页 API /api/person/{id} 完整响应结构
+    # 9. 详情页 API / 引擎 /api/person/{id} 完整响应结构
     test_pid = "p_chendao"
-    url = f"http://127.0.0.1:8800/api/person/{test_pid}"
-    with urllib.request.urlopen(url, timeout=5) as resp:
-        p_data = json.loads(resp.read().decode("utf-8"))
-        for k in ("profile", "mentions", "mentionByBook", "eraNames"):
-            assert k in p_data, f"断言 9 失败：/api/person 缺少键 {k}"
-        assert p_data["profile"]["trad_name"] == "陳到", "断言 9 失败：profile 不符"
-    print(f"✓ [9/10] 人物详情接口 /api/person/p_chendao 结构完整且数据精准")
+    if has_server:
+        url = f"http://127.0.0.1:8800/api/person/{test_pid}"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            p_data = json.loads(resp.read().decode("utf-8"))
+    else:
+        p_data = db.person_payload(test_pid, 200)
+
+    for k in ("profile", "mentions", "mentionByBook", "eraNames"):
+        assert k in p_data, f"断言 9 失败：/api/person 缺少键 {k}"
+    assert p_data["profile"]["trad_name"] == "陳到", "断言 9 失败：profile 不符"
+    mode_str = "HTTP 端点" if has_server else "引擎本地"
+    print(f"✓ [9/10] {mode_str} /api/person/p_chendao 结构完整且数据精准")
 
     # 10. 离线快照 dist/data.js 同步核验
     with open(DIST_JS, "r", encoding="utf-8") as f:

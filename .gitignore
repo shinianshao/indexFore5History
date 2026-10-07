@@ -97,4 +97,6 @@ workbook/*.new.xlsx
 release/
 scratch/
 pipeline/_scratch/
+data/.terrain_cache/
+
 

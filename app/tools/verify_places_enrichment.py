@@ -155,15 +155,29 @@ def run_checks(inject=False):
         ("荆州", "荊州"),
         ("凉州", "涼州"),
     ]
+    sys.path.insert(0, os.path.join(ROOT, "app", "server"))
+    import db
+    has_server = False
+    try:
+        with urllib.request.urlopen(f"{BASE_URL}/health", timeout=1) as resp:
+            has_server = (resp.status == 200)
+    except Exception:
+        has_server = False
+
     for query, expected_main in alias_test_cases:
-        url = f"{BASE_URL}/api/search?q={urllib.parse.quote(query)}"
-        req = urllib.request.urlopen(url)
-        data = json.loads(req.read().decode("utf-8"))
-        places = [p.get("trad_name") for p in data.get("places", [])]
+        if has_server:
+            url = f"{BASE_URL}/api/search?q={urllib.parse.quote(query)}"
+            req = urllib.request.urlopen(url)
+            data = json.loads(req.read().decode("utf-8"))
+            places = [p.get("trad_name") for p in data.get("places", [])]
+        else:
+            cand = db.search_places(query, 30)
+            places = [p.get("trad_name") for p in cand]
         assert expected_main in places, (
             f"断言 7 失败：搜索「{query}」未能召回预期地名「{expected_main}」，实际返回: {places}"
         )
-    print(f"✓ [7/10] 核心别名映射（宛城/许都/建邺/黄河/长江/汉江等）HTTP 检索 100% 召回")
+    mode_str = "HTTP 端点" if has_server else "引擎本地"
+    print(f"✓ [7/10] 核心别名映射（宛城/许都/建邺/黄河/长江/汉江等）{mode_str}检索 100% 召回")
     passed += 1
 
     # -------------------------------------------------------------

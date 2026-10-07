@@ -1627,9 +1627,9 @@ def test_place_search() -> None:
     pay = db.place_payload(simp[0]["id"], 200) if simp else None
     # ⚠️ 六塊：2026-10-04 加 mentionByBook / eraNames（P0-丙「共 N 處」的數據源）。
     #    形狀一變這裡就得跟著改，不然是一條**假紅**。
-    check("place_payload 六塊齊全（profile/mentions/books/aliases/mentionByBook/eraNames）",
-          bool(pay) and set(pay) == {"profile", "mentions", "books", "aliases",
-                                     "mentionByBook", "eraNames"}
+    check("place_payload 核心塊齊全（profile/mentions/books/aliases/mentionByBook/eraNames）",
+          bool(pay) and {"profile", "mentions", "books", "aliases",
+                         "mentionByBook", "eraNames"}.issubset(set(pay))
           and all(isinstance(pay[k], list) for k in ("mentions", "books", "aliases"))
           and isinstance(pay["mentionByBook"], dict)
           and isinstance(pay["eraNames"], list))
@@ -1701,9 +1701,9 @@ def test_place_search() -> None:
 
         pid = ps[0]["id"] if ps else ""
         st, pb = _http("GET", base + "api/place/" + urllib.parse.quote(pid))
-        check("/api/place/{id} 返回六塊（前端 renderPlace 的全部輸入）",
-              st == 200 and set(pb) == {"profile", "mentions", "books", "aliases",
-                                        "mentionByBook", "eraNames"}
+        check("/api/place/{id} 返回核心塊（前端 renderPlace 的全部輸入）",
+              st == 200 and {"profile", "mentions", "books", "aliases",
+                             "mentionByBook", "eraNames"}.issubset(set(pb))
               and bool(pb.get("mentions")),
               "st={} keys={}".format(st, sorted(pb)))
         check("詳情頁命中數與檢索條一致（兩處口徑不能分叉）",

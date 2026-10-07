@@ -2922,10 +2922,10 @@
      依據宋杰教授三大專著考據與譚其驤歷史地圖集，純原生 SVG 繪製古山川形勝與戰略攻守網絡
      ========================================================================= */
   var MAP_BOUNDS = {
-    lngMin: 104.0, lngMax: 120.5,
-    latMin: 27.8, latMax: 37.2,
-    w: 1000, h: 620,
-    padX: 50, padY: 35
+    lngMin: 102.0, lngMax: 122.5,
+    latMin: 26.5, latMax: 43.2,
+    w: 1000, h: 680,
+    padX: 0, padY: 0
   };
 
   var mapState = {
@@ -2938,14 +2938,16 @@
   };
 
   var MAP_VIEWBOXES = {
-    "all": "0 0 1000 620",
-    "jh": "610 170 380 330",
-    "jx": "370 170 410 420",
-    "ls": "30 70 420 350",
-    "hl": "240 20 630 270"
+    "all": "0 0 1000 680",
+    "sb": "480 30 460 290",
+    "hl": "310 250 500 160",
+    "ls": "30 260 510 210",
+    "jx": "420 420 240 220",
+    "jh": "640 400 240 180"
   };
 
   var ZONE_COLORS = {
+    "塞北邊疆戰區": "#4a5568",
     "荊襄戰區": "#2f6d7a",
     "江淮戰區": "#a8382b",
     "秦嶺隴蜀戰區": "#2d6a4f",
@@ -3019,14 +3021,15 @@
     h += '<div class="strat-map-bar">' +
       '<div class="strat-map-title-box">' +
       '<span class="strat-map-title">兩漢三國兵爭形勝輿圖</span>' +
-      '<span class="strat-map-sub">宋杰兵爭考據 · 四大戰區戰略拓撲</span>' +
+      '<span class="strat-map-sub">宋杰兵爭考據 · 塞北與中原南北五大戰區戰略拓撲</span>' +
       '</div>' +
       '<div class="strat-map-controls">' +
       '<span class="map-pill' + (mapState.zone === "all" ? " on" : "") + '" data-map-zone="all">全景通覽</span>' +
-      '<span class="map-pill' + (mapState.zone === "jh" ? " on" : "") + '" data-map-zone="jh">淮南江東</span>' +
-      '<span class="map-pill' + (mapState.zone === "jx" ? " on" : "") + '" data-map-zone="jx">荊襄戰區</span>' +
-      '<span class="map-pill' + (mapState.zone === "ls" ? " on" : "") + '" data-map-zone="ls">漢中隴蜀</span>' +
+      '<span class="map-pill' + (mapState.zone === "sb" ? " on" : "") + '" data-map-zone="sb">塞北幽燕</span>' +
       '<span class="map-pill' + (mapState.zone === "hl" ? " on" : "") + '" data-map-zone="hl">中原河洛</span>' +
+      '<span class="map-pill' + (mapState.zone === "ls" ? " on" : "") + '" data-map-zone="ls">漢中隴蜀</span>' +
+      '<span class="map-pill' + (mapState.zone === "jx" ? " on" : "") + '" data-map-zone="jx">荊襄戰區</span>' +
+      '<span class="map-pill' + (mapState.zone === "jh" ? " on" : "") + '" data-map-zone="jh">淮南江東</span>' +
       '<span class="map-pill' + (mapState.showRoutes ? " on" : "") + '" data-map-toggle="routes">' +
       (mapState.showRoutes ? "攻守通道：開" : "攻守通道：關") + '</span>' +
       '<span class="map-pill' + (mapState.showTerrain ? " on" : "") + '" data-map-toggle="terrain">' +
@@ -3039,30 +3042,27 @@
     h += '<svg class="strat-map-svg" viewBox="' + curVb + '" preserveAspectRatio="xMidYMid meet">';
 
     // 1. 底圖紋理背景與真實立體自然地形底圖
-    h += '<rect x="0" y="0" width="1000" height="620" fill="#FAF7F0"/>';
+    h += '<rect x="0" y="0" width="1000" height="680" fill="#FAF7F0"/>';
     if (mapState.showTerrain) {
-      h += '<image href="terrain_basemap.jpg" x="0" y="0" width="1000" height="620" preserveAspectRatio="none" opacity="0.60" class="map-terrain-layer"/>';
+      h += '<image href="terrain_basemap.jpg" x="0" y="0" width="1000" height="680" preserveAspectRatio="none" opacity="0.88" class="map-terrain-layer"/>';
     }
 
     // 2. 戰區宏觀浮水印
     h += '<g class="map-watermarks">' +
-      '<text class="map-zone-label" x="140" y="150" fill="#2d6a4f">【秦嶺隴蜀戰區】</text>' +
-      '<text class="map-zone-label" x="480" y="80" fill="#8c6239">【中原河洛與河北戰區】</text>' +
-      '<text class="map-zone-label" x="470" y="440" fill="#2f6d7a">【荊襄戰區】</text>' +
-      '<text class="map-zone-label" x="780" y="380" fill="#a8382b">【江淮戰區】</text>' +
+      '<text class="map-zone-label" x="720" y="70" fill="#4a5568">【塞北幽燕戰區】</text>' +
+      '<text class="map-zone-label" x="140" y="270" fill="#2d6a4f">【秦嶺隴蜀戰區】</text>' +
+      '<text class="map-zone-label" x="510" y="260" fill="#8c6239">【中原河洛與河北戰區】</text>' +
+      '<text class="map-zone-label" x="510" y="580" fill="#2f6d7a">【荊襄戰區】</text>' +
+      '<text class="map-zone-label" x="790" y="520" fill="#a8382b">【江淮戰區】</text>' +
       '</g>';
 
-    // 3. 主要山脈形勝
+    // 3. 主要山脈形勝（標注於真實立體山脈骨架）
     h += '<g class="map-mountains">' +
-      '<path d="M 120 220 Q 200 200 290 205 T 390 215" fill="none" stroke="#8a7e6f" stroke-width="12" stroke-linecap="round" opacity="0.14"/>' +
-      '<path d="M 140 223 Q 220 203 300 208 T 370 218" fill="none" stroke="#685f53" stroke-width="4" stroke-linecap="round" opacity="0.18"/>' +
-      '<text class="map-mountain-label" x="220" y="196">▲ 秦嶺山脈</text>' +
-      '<path d="M 580 40 Q 590 100 600 150 T 595 190" fill="none" stroke="#8a7e6f" stroke-width="10" stroke-linecap="round" opacity="0.14"/>' +
-      '<text class="map-mountain-label" x="555" y="115">▲ 太行山</text>' +
-      '<path d="M 100 305 Q 150 285 200 295 T 260 310" fill="none" stroke="#8a7e6f" stroke-width="9" stroke-linecap="round" opacity="0.14"/>' +
-      '<text class="map-mountain-label" x="130" y="330">▲ 大巴山 · 劍門</text>' +
-      '<path d="M 560 350 Q 610 340 660 345 T 710 360" fill="none" stroke="#8a7e6f" stroke-width="9" stroke-linecap="round" opacity="0.14"/>' +
-      '<text class="map-mountain-label" x="610" y="375">▲ 大別山</text>' +
+      '<text class="map-mountain-label" x="740" y="110">▲ 燕山山脈</text>' +
+      '<text class="map-mountain-label" x="540" y="230">▲ 太行山</text>' +
+      '<text class="map-mountain-label" x="250" y="375">▲ 秦嶺山脈</text>' +
+      '<text class="map-mountain-label" x="260" y="445">▲ 大巴山 · 劍門</text>' +
+      '<text class="map-mountain-label" x="650" y="480">▲ 大別山</text>' +
       '</g>';
 
     // 4. 古山川水系
@@ -3072,14 +3072,14 @@
     var pathHU = buildRiverPath(RIVER_COORDS["huaishui"]);
 
     h += '<g class="map-rivers">' +
-      '<path d="' + pathCJ + '" fill="none" stroke="#527588" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>' +
-      '<text class="map-water-label" x="840" y="355">大江（長江）→</text>' +
-      '<path d="' + pathHH + '" fill="none" stroke="#b08d57" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.62"/>' +
-      '<text class="map-water-label" x="690" y="55">古黃河 →</text>' +
+      '<path d="' + pathCJ + '" fill="none" stroke="#527588" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>' +
+      '<text class="map-water-label" x="830" y="460">大江（長江）→</text>' +
+      '<path d="' + pathHH + '" fill="none" stroke="#b08d57" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.62"/>' +
+      '<text class="map-water-label" x="650" y="310">古黃河 →</text>' +
       '<path d="' + pathHS + '" fill="none" stroke="#688f9e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>' +
-      '<text class="map-water-label" x="350" y="275">漢水</text>' +
+      '<text class="map-water-label" x="470" y="450">漢水</text>' +
       '<path d="' + pathHU + '" fill="none" stroke="#688f9e" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>' +
-      '<text class="map-water-label" x="720" y="295">淮水</text>' +
+      '<text class="map-water-label" x="730" y="440">淮水</text>' +
       '</g>';
 
     // 5. 攻守通道連線
@@ -3165,8 +3165,8 @@
         'data-name="' + esc(it.trad_name) + '" data-zone="' + esc(it.zone) + '" ' +
         'data-title="' + esc(it.strat_title) + '" data-battles="' + esc(battlesStr) + '">';
 
-      // 寬大透明命中感應圓（徹底杜絕游標在文字與圓點間切換造成的說明文字閃爍）
-      h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="18" class="hub-hitarea"/>';
+      // 寬大透明命中感應區（全面包裹圓點與文字，杜絕游標在筆畫間移動造成閃爍）
+      h += '<rect x="' + (pt[0] - 24) + '" y="' + (pt[1] - 22) + '" width="48" height="42" rx="10" class="hub-hitarea"/>';
 
       if (isSel || isItinMatch) {
         h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="6" stroke="' + (isSel ? "#9B3326" : zColor) + '" fill="none" class="map-pulse-ring"/>';
@@ -3205,7 +3205,7 @@
     var stratKeys = Object.keys(strats);
     var h = "";
 
-    // 兵爭要地 · 四大戰區形勝輿圖與專欄（宋杰先生軍事地理考據精華）
+    // 兵爭要地 · 五大戰區形勝輿圖與專欄（宋杰先生軍事地理考據精華）
     if (stratKeys.length) {
       h += '<div class="group-title">兩漢三國兵爭形勝圖 <span class="count">' + stratKeys.length + ' 處要塞</span></div>';
       h += renderStrategicMap(strats);
@@ -3225,7 +3225,7 @@
           '</div>';
       }
 
-      var zoneOrder = ["荊襄戰區", "江淮戰區", "秦嶺隴蜀戰區", "中原河洛戰區", "中原河北戰區"];
+      var zoneOrder = ["塞北邊疆戰區", "中原河洛戰區", "中原河北戰區", "秦嶺隴蜀戰區", "荊襄戰區", "江淮戰區"];
       var byZone = {};
       stratKeys.forEach(function (k) {
         var it = strats[k];
@@ -3233,7 +3233,7 @@
         (byZone[z] = byZone[z] || []).push({ id: k, data: it });
       });
 
-      h += '<div class="group-title">兵爭要地 · 四大戰區要衝一覽 <span class="count">' + stratKeys.length + ' 處</span></div>';
+      h += '<div class="group-title">兵爭要地 · 五大戰區要衝一覽 <span class="count">' + stratKeys.length + ' 處</span></div>';
       h += '<div class="card strat-index-card">';
       h += '<div class="strat-intro"><p>依據宋杰先生《三國兵爭要地與戰略》《中國古代戰爭的地理樞紐》考訂。點選地圖節點或下方要塞，可檢視學術考據與人地共現。</p></div>';
 
@@ -3748,12 +3748,18 @@
   });
 
   // 兩漢三國兵爭形勝輿圖：懸停氣泡 Tooltip 動態跟隨（帶防抖與游標負偏移）
+  // 兩漢三國兵爭形勝輿圖：懸停氣泡 Tooltip 動態跟隨（帶防抖、要衝狀態鎖定與平滑防閃）
   var mapTipTimer = null;
+  var currentTipHub = null;
+
   out.addEventListener("mouseover", function (ev) {
     var hub = ev.target.closest ? ev.target.closest(".map-hub[data-plid]") : null;
     var tip = document.getElementById("mapTooltip");
     if (!hub || !tip) return;
+    var plid = hub.getAttribute("data-plid");
     if (mapTipTimer) { clearTimeout(mapTipTimer); mapTipTimer = null; }
+    if (currentTipHub === plid && tip.style.display === "block") return;
+    currentTipHub = plid;
     var name = hub.getAttribute("data-name") || "";
     var zone = hub.getAttribute("data-zone") || "";
     var title = hub.getAttribute("data-title") || "";
@@ -3771,8 +3777,10 @@
     var body = tip.parentElement;
     if (!body) return;
     var rect = body.getBoundingClientRect();
-    tip.style.left = (ev.clientX - rect.left) + "px";
-    tip.style.top = (ev.clientY - rect.top - 14) + "px";
+    var x = ev.clientX - rect.left;
+    var y = ev.clientY - rect.top;
+    tip.style.left = Math.max(70, Math.min(rect.width - 70, x)) + "px";
+    tip.style.top = Math.max(25, y - 16) + "px";
   });
 
   out.addEventListener("mouseout", function (ev) {
@@ -3780,12 +3788,13 @@
     if (!hub) return;
     var rel = ev.relatedTarget ? (ev.relatedTarget.closest ? ev.relatedTarget.closest(".map-hub[data-plid]") : null) : null;
     if (rel === hub) return;
+    currentTipHub = null;
     var tip = document.getElementById("mapTooltip");
     if (tip) {
       if (mapTipTimer) clearTimeout(mapTipTimer);
       mapTipTimer = setTimeout(function () {
-        tip.style.display = "none";
-      }, 60);
+        if (!currentTipHub) tip.style.display = "none";
+      }, 100);
     }
   });
 

@@ -952,8 +952,11 @@
     0% { r: 6; opacity: 0.9; stroke-width: 2; }
     100% { r: 18; opacity: 0; stroke-width: 0.5; }
   }
+  .map-tooltip, .map-tooltip * {
+    pointer-events: none !important;
+  }
   .map-tooltip {
-    position: absolute; z-index: 100; pointer-events: none;
+    position: absolute; z-index: 100;
     background: rgba(255, 253, 247, 0.96); border: 1px solid var(--border);
     border-radius: 8px; padding: 8px 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
     font-family: var(--serif); max-width: 260px; display: none;
