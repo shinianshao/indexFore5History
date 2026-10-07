@@ -67,9 +67,8 @@ sys.stdout.reconfigure(encoding="utf-8")
 WEB_DIR = os.path.join(ROOT, "app", "web")
 DEFAULT_OUT = os.path.join(ROOT, "dist")
 
-# 書作用域：「」= 全五書 + 五個單書。索引頁的計數是按書算的，沒法從全量推出來
-# （地名索引的 items 不帶分書明細），所以老實導六份。
-SCOPES = ["", "sj", "hs", "hhs", "sgz", "js"]
+# 書作用域：「」= 全五書 + 五個單書 + 常用預設（前四史、兩漢書、魏晉史）。
+SCOPES = ["", "sj", "hs", "hhs", "sgz", "js", "sj,hs,hhs,sgz", "hs,hhs", "sgz,js"]
 # 關係圖的兩個旋鈕：度數 1/2/3 × 只看有證據（min_conf 0.5）。
 # 只給**有邊的人**導——沒邊的人聯機返回的也是 {nodes:[{id,degree:0}],edges:[]}，
 # 前端自己就能造，不必在快照裡佔 2240 個位置。
@@ -345,6 +344,38 @@ def _notes(max_items: int = 8) -> dict:
     return out
 
 
+def _cooccurrences() -> tuple[dict, dict]:
+    """計算全庫人地同句共現榜：
+    pl2p: plid -> [[pid, count], ...] (前 8 名)
+    p2pl: pid -> [[plid, count], ...] (前 8 名)
+    """
+    with db.connect() as c:
+        sql = """
+            SELECT pm.place_id, m.person_id, COUNT(DISTINCT m.sentence_uid) as c
+            FROM mentions m
+            JOIN place_mentions pm ON m.sentence_uid = pm.sentence_uid
+            GROUP BY pm.place_id, m.person_id
+            ORDER BY pm.place_id, c DESC
+        """
+        pl2p: dict = {}
+        for plid, pid, count in c.execute(sql):
+            if len(pl2p.get(plid, [])) < 8:
+                pl2p.setdefault(plid, []).append([pid, count])
+
+        sql_p = """
+            SELECT m.person_id, pm.place_id, COUNT(DISTINCT m.sentence_uid) as c
+            FROM mentions m
+            JOIN place_mentions pm ON m.sentence_uid = pm.sentence_uid
+            GROUP BY m.person_id, pm.place_id
+            ORDER BY m.person_id, c DESC
+        """
+        p2pl: dict = {}
+        for pid, plid, count in c.execute(sql_p):
+            if len(p2pl.get(pid, [])) < 8:
+                p2pl.setdefault(pid, []).append([plid, count])
+        return pl2p, p2pl
+
+
 def build() -> dict:
     """取數並組裝。26 秒裡大部分花在關係圖上，所以逐步記時——
     想知道該優化哪一步，看一眼就知道，不用再插打印。"""
@@ -388,6 +419,8 @@ def build() -> dict:
 
     pmbk = step("人物分書全量", _mbk, "mentions", "person_id", codes)
     plbk = step("地名分書全量", _mbk, "place_mentions", "place_id", codes)
+    co_pl, co_p = step("人地共現", _cooccurrences)
+    strat = step("兵爭要地", db.get_strategic_places)
 
     data = {
         "v": 1,
@@ -437,6 +470,11 @@ def build() -> dict:
         #    n / chapters / byChapter / aliases 全量給（那是計數與篇級分布）。
         #    這樣體積只多約 0.3MB，而顯示效果與聯機版一致。
         "notes": _notes(),
+        # 三國兩漢兵爭要地與戰略樞紐（宋杰考據底冊）
+        "strat": strat,
+        # 人地時空交集（同句共現榜）
+        "pl2p": co_pl,
+        "p2pl": co_p,
     }
     data["_sec"] = round(time.time() - t0, 1)
     data["_steps"] = took
@@ -449,7 +487,7 @@ def build() -> dict:
 # ⚠️ 地名三块（pmen/plalias/plbook）**必须**在这里：漏一个不是报错，
 #    是离线版少一块数据（搜不到简体 / 点开没命中）——最难发现的那种坏。
 BIG = ("sents", "chaps", "pers", "pm", "pla", "pmen", "plalias", "plbook",
-       "pbook", "idx", "rel", "notes")
+       "pbook", "idx", "rel", "notes", "strat", "pl2p", "p2pl")
 
 
 def dump_js(data: dict) -> str:

@@ -74,7 +74,7 @@ def _check(q: str, limit: int) -> int:
 
 
 def _book_param(book: str) -> str | None:
-    """书号校验：空＝不筛，否则必须是库里真有的书号。
+    """书号校验：空＝不筛，支持单书号或逗号分隔多书号（如 hs,hhs）。
 
     ⚠️ 不校验的话 `?book=zzz` 会返回 200 + 空列表——界面上就是「这人 0 處」，
     而实际上只是参数打错了（docs/34 P1 反复出现的同一类坏：静默 200）。
@@ -82,10 +82,18 @@ def _book_param(book: str) -> str | None:
     book = (book or "").strip()
     if not book:
         return None
-    if book not in db.book_codes():
+    raw_codes = [b.strip() for b in book.split(",") if b.strip()]
+    if not raw_codes:
+        return None
+    valid_codes = db.book_codes()
+    unknown = [b for b in raw_codes if b not in valid_codes]
+    if unknown:
         raise HTTPException(400, "未知書號：{}（可選 {}）".format(
-            book, " / ".join(db.book_codes())))
-    return book
+            ", ".join(unknown), " / ".join(valid_codes)))
+    ordered = [b for b in valid_codes if b in raw_codes]
+    if len(ordered) == len(valid_codes):
+        return None
+    return ",".join(ordered)
 
 
 def _era_param(era: str) -> int | None:
@@ -155,7 +163,7 @@ def api_stats():
 
 
 @app.get("/api/index")
-def api_index(book: str = Query("", description="书号 sj/hs/hhs/sgz/js，空=全部"),
+def api_index(book: str = Query("", description="书号 sj/hs/hhs/sgz/js 或逗号分隔多书号，空=全部"),
               sort: str = Query("c", description="c=篇数（默认） 或 n=次数")):
     """一次性取回索引页三块（人物 / 地名 / 篇目）+ 快捷词。
 
@@ -164,14 +172,16 @@ def api_index(book: str = Query("", description="书号 sj/hs/hhs/sgz/js，空=�
 
     ⚠️ 响应体在 db.index_payload 里拼（与离线导出共用），这里只做参数校验。
     """
-    return db.index_payload(book, sort)
+    valid_book = _book_param(book) or ""
+    return db.index_payload(valid_book, sort)
 
 
 @app.get("/api/quick")
-def api_quick(book: str = Query("", description="书号，空=全部"),
+def api_quick(book: str = Query("", description="书号或多书号，空=全部"),
               np: int = Query(20, ge=1, le=50), nl: int = Query(10, ge=1, le=30)):
     """只取快捷词（换书时用，比 /api/index 轻）。"""
-    return db.quick_words(book=book, np=np, nl=nl)
+    valid_book = _book_param(book) or ""
+    return db.quick_words(book=valid_book, np=np, nl=nl)
 
 
 @app.get("/api/search")

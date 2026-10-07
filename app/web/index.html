@@ -4,19 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>古籍檢索 · 本地索引</title>
+<link rel="icon" type="image/x-icon" href="bookindex.ico">
 <style>
-  /* 克制的古典：宣紙底 / 墨色字 / 朱砂點綴。不做豎排、印章、漢字數字——
+  /* 典雅金石與宣紙雅韻：微暖玉宣紙底 / 沉穩墨色 / 古法朱砂 / 石青石綠。
      可讀性優先（docs/21 §12.4）。正文與書名用宋體，控件與數字用 sans。 */
   :root {
-    --bg: #F7F4EC;      /* 宣紙 */
-    --panel: #FFFDF7;   /* 面板，比底略亮 */
-    --text: #2B2A27;    /* 墨 */
-    --muted: #7A756B;   /* 淡墨 */
-    --border: #DED8C8;  /* 版框線 */
-    --accent: #9E3D32;  /* 朱砂 */
-    --accent-soft: #F5E9E6;
-    --place: #2f7d7d;   /* 地名：青碧，與人物的朱砂分色（與靜態版同值） */
-    --place-soft: #e4f0f0;
+    --bg: #FAF7F0;      /* 溫潤玉版宣紙底色 */
+    --panel: #FFFEFA;   /* 淨白宣紙面板，比底略亮 */
+    --text: #24221F;    /* 沉穩墨黑 */
+    --muted: #70685B;   /* 淡墨灰褐 */
+    --border: #DFD8C7;  /* 典雅版框線 */
+    --accent: #9B3326;  /* 印泥古法朱砂 */
+    --accent-soft: #F5EBE8; /* 朱砂淡暈 */
+    --place: #256D6D;   /* 地名：石青石綠，與人物朱砂分色 */
+    --place-soft: #E6F0F0;
     --serif: "Songti SC", "SimSun", "Source Han Serif SC", "Noto Serif CJK SC", serif;
     --sans: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
   }
@@ -108,8 +109,84 @@
     background: #FFF8E6; border: 1px solid #FFE0A3; border-radius: 4px;
     padding: 0 4px; margin-left: 5px; white-space: nowrap;
   }
+  .het-badge {
+    font-style: normal; font-size: 11px; color: #824C28;
+    background: #FAF0E6; border: 1px solid #E6D0BE; border-radius: 4px;
+    padding: 0 4px; margin-left: 5px; white-space: nowrap;
+  }
+  .liu-badge {
+    font-style: normal; font-size: 11px; color: #7B3F00;
+    background: #FFF5EB; border: 1px solid #F5D6B8; border-radius: 4px;
+    padding: 0 4px; margin-left: 5px; white-space: nowrap;
+  }
+  .sgj-badge {
+    font-style: normal; font-size: 11px; color: #5C4033;
+    background: #F7F3EE; border: 1px solid #DFD5C6; border-radius: 4px;
+    padding: 0 4px; margin-left: 5px; white-space: nowrap;
+  }
+  .mar-badge {
+    font-style: normal; font-size: 11px; color: #6E5334;
+    background: #F5EFEB; border: 1px solid #DCD0C2; border-radius: 4px;
+    padding: 0 4px; margin-left: 5px; white-space: nowrap;
+  }
+  .emp-badge {
+    font-style: normal; font-size: 11px; color: #8A3800;
+    background: #FFF4E5; border: 1px solid #FFD8A8; border-radius: 4px;
+    padding: 0 4px; margin-left: 5px; white-space: nowrap;
+  }
+  .fem-badge {
+    font-style: normal; font-size: 11px; color: #9B2C52;
+    background: #FFF0F5; border: 1px solid #FFD1DC; border-radius: 4px;
+    padding: 0 4px; margin-left: 5px; white-space: nowrap;
+  }
+  .for-badge {
+    font-style: normal; font-size: 11px; color: #374151;
+    background: #F3F4F6; border: 1px solid #E5E7EB; border-radius: 4px;
+    padding: 0 4px; margin-left: 5px; white-space: nowrap;
+  }
+  .sch-badge {
+    font-style: normal; font-size: 11px; color: #1E6B47;
+    background: #EFFDF5; border: 1px solid #BAECD3; border-radius: 4px;
+    padding: 0 4px; margin-left: 5px; white-space: nowrap;
+  }
+  .person-subcat-bar {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 10px; flex-wrap: wrap;
+    font-size: 13px; font-family: var(--sans);
+  }
+  .person-subcat-bar .subcat-label {
+    color: var(--muted); font-size: 12px; letter-spacing: 0.5px;
+  }
+  .subcat-pill {
+    font-size: 12px; padding: 3px 10px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--panel);
+    color: var(--muted); cursor: pointer; user-select: none;
+    transition: all 0.15s ease;
+  }
+  .subcat-pill:hover { border-color: var(--accent); color: var(--accent); }
+  .subcat-pill.on {
+    background: var(--accent-soft); color: var(--accent);
+    border-color: var(--accent); font-weight: 600;
+  }
+  .person-era-bar {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 16px; flex-wrap: wrap;
+    font-size: 13px; font-family: var(--sans);
+  }
+  .person-era-bar .era-label {
+    color: var(--muted); font-size: 12px; letter-spacing: 0.5px;
+  }
+  .era-pill {
+    font-size: 12px; padding: 3px 10px; border-radius: 12px;
+    border: 1px solid var(--border); background: var(--panel);
+    color: var(--muted); cursor: pointer; user-select: none;
+    transition: all 0.15s ease;
+  }
+  .era-pill:hover { border-color: var(--accent); color: var(--accent); }
+  .era-pill.on {
+    background: var(--accent-soft); color: var(--accent);
+    border-color: var(--accent); font-weight: 600;
+  }
   .person-cat-bar {
-    display: flex; gap: 8px; margin: 10px 0 14px; flex-wrap: wrap;
+    display: flex; gap: 8px; margin: 10px 0 10px; flex-wrap: wrap;
   }
   .cat-pill {
     font-size: 13px; padding: 4px 12px; border-radius: 14px;
@@ -252,27 +329,42 @@
   .hint { color: var(--muted); font-size: 12px; margin-top: 8px; }
   .err { color: var(--accent); font-size: 13px; padding: 10px 0; }
 
-  /* ---- 書切換條 ---- 視覺沿用靜態版 web/：膠囊按鈕 + 「選書」前綴 */
+  /* ---- 書切換條 ---- 典籍範疇與多選膠囊，金石微動效 */
   .bookbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 22px 0 0; }
   .bookbar::before {
-    content: "選書"; font-size: 12px; color: var(--muted);
-    letter-spacing: 1px; margin-right: 2px;
+    content: "典籍範疇"; font-size: 12px; color: var(--muted);
+    letter-spacing: 1.5px; margin-right: 4px; font-weight: 500;
   }
   .bk {
     display: inline-flex; align-items: baseline; gap: 6px; cursor: pointer; user-select: none;
     padding: 6px 13px; border: 1px solid var(--border); border-radius: 20px;
     background: var(--panel); color: var(--muted); font-family: var(--serif); font-size: 15px;
+    transition: all 0.18s cubic-bezier(0.25, 0.8, 0.25, 1);
   }
-  .bk:hover { border-color: var(--accent); color: var(--accent); }
+  .bk:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); box-shadow: 0 2px 5px rgba(60, 50, 40, 0.05); }
   .bk em { font-family: var(--sans); font-style: normal; font-size: 11px; color: #b8b3a8; }
-  .bk.pei-chip { font-size: 12px; padding: 6px 10px; color: var(--muted); opacity: 0.75; max-width: 11em; }
+  .bk.pei-chip { font-size: 12px; padding: 6px 11px; color: var(--muted); opacity: 0.75; }
   .bk.pei-chip.on { opacity: 1; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .bk.on {
     border-color: var(--accent); background: var(--accent-soft);
     color: var(--accent); font-weight: 600;
   }
-  .bk.on em { color: #a2977f; }
-  .bk.all { font-family: var(--sans); font-size: 13px; margin-left: 6px; }
+  .bk.on em { color: #9c6c64; }
+  .preset-group {
+    display: inline-flex; align-items: center; gap: 5px; margin-left: 4px;
+    padding-left: 8px; border-left: 1px dashed var(--border);
+  }
+  .preset-pill {
+    display: inline-flex; align-items: center; cursor: pointer; user-select: none;
+    padding: 5px 11px; border: 1px solid var(--border); border-radius: 16px;
+    background: var(--panel); color: var(--muted); font-family: var(--sans); font-size: 12px;
+    transition: all 0.18s ease;
+  }
+  .preset-pill:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-1px); }
+  .preset-pill.on {
+    border-color: var(--accent); background: var(--accent-soft);
+    color: var(--accent); font-weight: 600;
+  }
 
   /* ---- 標籤頁 ---- 與靜態版同序：檢索結果 / 人物索引 / 地名索引 / 篇目一覽 */
   .tabs { display: flex; gap: 4px; margin: 18px 0 14px; border-bottom: 1px solid var(--border); }
@@ -466,24 +558,449 @@
   }
   .pei-line:hover { background: rgba(47,109,122,.11); }
 
-  .reader-body { flex: 1; overflow-y: auto; padding: 16px 20px 40px; }
+  .reader-body { flex: 1; overflow-y: auto; padding: 18px 24px 44px; }
   .reader-body p {
-    font-family: var(--serif); font-size: 15px; line-height: 1.95;
-    margin: 0 0 10px; color: var(--text);
+    font-family: var(--serif); font-size: 15.5px; line-height: 2.15;
+    margin: 0 0 16px; color: var(--text);
   }
+  /* 古漢語自然段落排版與助讀裝幀（Round 5） */
+  .reader-para {
+    position: relative; text-align: justify; text-justify: inter-ideograph;
+    text-indent: 2em; letter-spacing: 0.5px;
+  }
+  .para-badge {
+    display: inline-block; text-indent: 0; font-family: var(--sans);
+    font-size: 11px; color: #B5AFA6; margin-right: 6px; user-select: none;
+    vertical-align: 1px; font-weight: 500;
+  }
+  .reader-para:hover .para-badge { color: var(--accent); }
+  .reader-sent {
+    position: relative; display: inline; transition: background-color 0.25s ease;
+    border-radius: 3px; padding: 1px 0;
+  }
+  .reader-sent:hover { background: rgba(223, 216, 199, 0.28); }
+  .reader-sent.target {
+    background: rgba(155, 51, 38, 0.14);
+    box-shadow: 0 0 0 2px rgba(155, 51, 38, 0.22);
+    border-radius: 4px;
+  }
+  @keyframes reader-pulse {
+    0% { background: rgba(155, 51, 38, 0.05); }
+    50% { background: rgba(155, 51, 38, 0.32); }
+    100% { background: rgba(155, 51, 38, 0.14); }
+  }
+  .reader-sent.pulse { animation: reader-pulse 1.8s ease-in-out 2; }
+  .reader-sent .acts { display: none; margin-left: 6px; vertical-align: middle; }
+  .reader-sent:hover .acts { display: inline-block; }
+
+  /* 古漢語專名號標點（人名實線 / 地名浪線） */
+  .pn-person {
+    text-decoration: underline; text-decoration-color: var(--accent);
+    text-decoration-thickness: 1.5px; text-underline-offset: 4px;
+    cursor: pointer; color: inherit; transition: all 0.15s ease;
+  }
+  .pn-person:hover { background: var(--accent-soft); color: var(--accent); border-radius: 2px; }
+  .pn-place {
+    text-decoration: underline wavy; text-decoration-color: var(--place);
+    text-decoration-thickness: 1.2px; text-underline-offset: 4px;
+    cursor: pointer; color: inherit; transition: all 0.15s ease;
+  }
+  .pn-place:hover { background: var(--place-soft); color: var(--place); border-radius: 2px; }
+
   .reader-body p.target { background: var(--accent-soft); }
-  /* 跨句對話續接（docs/21 §13）：只做顯示層，切分不動。
-     q-cont＝承接上一句仍未收口的對話（左側點線＋縮進）；
-     q-open＝本句話沒說完，與下一句貼緊（下方不留白）。 */
-  .reader-body p.q-cont { padding-left: 14px; border-left: 2px dotted var(--border); }
-  .reader-body p.q-open { margin-bottom: 0; }
+  /* 跨句對話續接（docs/21 §13）：只做顯示層，切分不動。 */
+  .reader-sent.q-cont { padding-left: 4px; border-left: 2px dotted var(--border); }
+  .reader-sent.q-open { margin-bottom: 0; }
+  .reader-head button.on {
+    background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 500;
+  }
+  /* ---- 三國志魏蜀吳分卷與裴注統計卡片 ---- */
+  .sgz-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px; margin: 14px 0 16px;
+    border-top: 3px solid var(--accent);
+  }
+  .sgz-head {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 8px; margin-bottom: 12px;
+  }
+  .sgz-title {
+    font-family: var(--serif); font-size: 16px; font-weight: 600;
+    color: var(--text); letter-spacing: 0.5px;
+  }
+  .sgz-sub { font-size: 12px; color: var(--muted); font-family: var(--sans); }
+  .sgz-view-bar {
+    display: inline-flex; gap: 4px; background: var(--bg);
+    padding: 2px; border-radius: 8px; border: 1px solid var(--border);
+  }
+  .sgz-view-pill {
+    font-family: var(--sans); font-size: 12px; padding: 3px 10px; border-radius: 6px;
+    cursor: pointer; color: var(--muted); transition: all 0.15s ease; user-select: none;
+  }
+  .sgz-view-pill:hover { color: var(--accent); }
+  .sgz-view-pill.on {
+    background: var(--panel); color: var(--accent); font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+
+  /* 三國比重條：魏（黛黑）· 蜀（朱砂）· 吳（青碧） */
+  .sgz-bar-box { margin: 12px 0 14px; }
+  .sgz-bar-label {
+    display: flex; justify-content: space-between; font-size: 12px;
+    color: var(--muted); margin-bottom: 5px; font-family: var(--sans);
+  }
+  .sgz-bar-label span b { font-weight: 600; }
+  .sgz-bar-label .c-wei b { color: #3a5369; }
+  .sgz-bar-label .c-shu b { color: var(--accent); }
+  .sgz-bar-label .c-wu b { color: #2d6a4f; }
+  .sgz-bar-track {
+    display: flex; height: 10px; border-radius: 5px; overflow: hidden;
+    background: var(--border);
+  }
+  .sgz-bar-seg { height: 100%; transition: width 0.3s ease; }
+  .sgz-bar-seg.wei { background: #3a5369; }
+  .sgz-bar-seg.shu { background: var(--accent); }
+  .sgz-bar-seg.wu { background: #2d6a4f; }
+
+  /* 數據明細網格 */
+  .sgz-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+    margin-top: 10px;
+  }
+  .sgz-col {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; text-align: center;
+  }
+  .sgz-col.tot { background: var(--accent-soft); border-color: rgba(158,61,50,0.25); }
+  .sgz-col .vol-name {
+    font-family: var(--serif); font-size: 14px; font-weight: 600;
+    margin-bottom: 4px; color: var(--text);
+  }
+  .sgz-col.tot .vol-name { color: var(--accent); }
+  .sgz-col .vol-num {
+    font-size: 18px; font-weight: 600; font-family: var(--sans);
+    line-height: 1.2; margin: 3px 0; color: var(--text);
+  }
+  .sgz-col.tot .vol-num { color: var(--accent); }
+  .sgz-col .vol-meta {
+    font-size: 11px; color: var(--muted); line-height: 1.4;
+  }
+
+  /* 古典宗藩世系傳承鏈條卡片（Round 4） */
+  .lineage-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px; margin: 14px 0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  }
+  .lineage-header {
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px dashed var(--border);
+  }
+  .lineage-badge {
+    background: var(--accent); color: #fff; font-size: 11px;
+    padding: 2px 7px; border-radius: 4px; font-weight: 500;
+  }
+  .lineage-title {
+    font-family: var(--serif); font-size: 15px; font-weight: 600; color: var(--text);
+  }
+  .lineage-sub {
+    font-size: 12px; color: var(--muted);
+  }
+  .lineage-nav-trio {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px; margin: 10px 0;
+  }
+  .lineage-arrow {
+    color: var(--muted); font-size: 13px; font-weight: bold; flex-shrink: 0; user-select: none;
+  }
+  .lineage-pill {
+    flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; text-align: center;
+    cursor: pointer; transition: all 0.15s ease;
+  }
+  .lineage-pill:hover:not(.disabled):not(.current) {
+    border-color: var(--accent); background: var(--accent-soft);
+  }
+  .lineage-pill.current {
+    background: var(--panel); border: 2px solid var(--accent);
+    cursor: default; box-shadow: 0 2px 6px rgba(155, 51, 38, 0.08);
+  }
+  .lineage-pill.disabled {
+    opacity: 0.55; cursor: not-allowed; background: transparent;
+  }
+  .lp-tag {
+    display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px;
+  }
+  .lp-tag.gold { color: var(--accent); font-weight: 600; }
+  .lp-name {
+    display: block; font-family: var(--serif); font-size: 14px; font-weight: 500;
+    color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .lp-name.bold { font-size: 15px; font-weight: 600; color: var(--accent); }
+  .lp-title {
+    display: block; font-size: 11px; color: var(--muted); margin-top: 1px;
+  }
+  .lineage-track-box {
+    margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(223, 216, 199, 0.5);
+  }
+  .lineage-track-lbl {
+    font-size: 12px; color: var(--muted); margin-bottom: 6px;
+  }
+  .lineage-track {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; font-size: 13px;
+  }
+  .lineage-node {
+    display: inline-block; padding: 2px 7px; border-radius: 4px;
+    background: var(--bg); border: 1px solid var(--border);
+    cursor: pointer; color: var(--text); font-family: var(--serif);
+    transition: all 0.12s ease;
+  }
+  .lineage-node:hover {
+    border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
+  }
+  .lineage-node.active {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+    font-weight: 600; cursor: default;
+  }
+  /* ---- 三國兩漢兵爭要地與人地時空交集（Round 6） ---- */
+  .strat-badge {
+    font-style: normal; font-size: 11px; color: #a8382b;
+    background: #faecea; border: 1px solid #eccbc7; border-radius: 4px;
+    padding: 1px 6px; margin-left: 6px; white-space: nowrap; font-weight: 500;
+  }
+  .strat-card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 18px; margin: 12px 0 16px;
+    border-left: 4px solid var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,0.03);
+  }
+  .strat-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    flex-wrap: wrap; gap: 8px; margin-bottom: 8px; border-bottom: 1px dashed var(--border);
+    padding-bottom: 8px;
+  }
+  .strat-title {
+    font-family: var(--serif); font-size: 15px; font-weight: 600;
+    color: var(--text); letter-spacing: 0.5px;
+  }
+  .strat-zone {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: var(--accent); color: #fff; font-family: var(--sans); font-weight: 500;
+  }
+  .strat-desc p {
+    font-family: var(--serif); font-size: 13.5px; line-height: 1.8;
+    color: #4a453e; margin: 6px 0 10px;
+  }
+  .strat-evolution {
+    font-size: 12.5px; color: var(--muted); margin: 6px 0; font-family: var(--serif);
+    line-height: 1.6; padding: 6px 10px; background: var(--bg); border-radius: 6px;
+  }
+  .strat-evolution b { color: var(--text); }
+  .strat-battles {
+    margin-top: 8px; font-size: 12px; color: var(--muted); display: flex;
+    align-items: center; flex-wrap: wrap; gap: 6px;
+  }
+  .strat-battles b { color: var(--text); }
+  .battle-pill {
+    display: inline-block; font-size: 11.5px; padding: 2px 8px; border-radius: 4px;
+    background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(168, 56, 43, 0.2);
+  }
+  .footprint-grid {
+    display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 0;
+  }
+  .footprint-pill {
+    display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    font-family: var(--serif); font-size: 13.5px; color: var(--text);
+    cursor: pointer; transition: all 0.15s ease; user-select: none;
+  }
+  .footprint-pill:hover {
+    background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+  }
+  .footprint-pill .kind { color: var(--muted); font-size: 11px; margin-left: 2px; }
+  .footprint-pill .qn {
+    font-family: var(--sans); font-size: 11px; font-weight: 600;
+    color: var(--muted); background: var(--panel); padding: 1px 5px; border-radius: 4px;
+  }
+  .footprint-pill.strat {
+    border-color: #eccbc7; background: #fdfaf8; font-weight: 500;
+  }
+  .footprint-pill.strat:hover {
+    border-color: var(--accent); background: #faecea;
+  }
+  .strat-dot {
+    font-style: normal; color: var(--accent); font-size: 11px; margin-right: 2px;
+  }
+  .strat-index-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; margin: 10px 0 16px;
+  }
+  .strat-intro p {
+    font-size: 12.5px; color: var(--muted); margin: 0 0 10px; font-family: var(--serif);
+  }
+  .zone-block {
+    margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px dashed var(--border);
+  }
+  .zone-block:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+  .zone-name {
+    font-family: var(--serif); font-size: 13.5px; font-weight: 600; color: var(--text);
+    margin-bottom: 6px;
+  }
+  .zone-name .sub-count {
+    font-size: 11px; color: var(--muted); font-weight: normal; margin-left: 4px;
+  }
+  .zone-pills {
+    display: flex; flex-wrap: wrap; gap: 6px;
+  }
+  .strat-pill {
+    display: inline-block; font-size: 12.5px; padding: 3px 9px; border-radius: 5px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    cursor: pointer; font-family: var(--serif); transition: all 0.12s ease;
+  }
+  .strat-pill:hover {
+    background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+  }
+
+  /* ---- 兩漢三國兵爭形勝輿圖（方案 A · 古典宣紙矢量地圖） ---- */
+  .strat-map-wrap {
+    position: relative; background: #FAF7F0; border: 1px solid var(--border);
+    border-radius: 12px; margin: 12px 0 16px; overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .strat-map-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 8px; padding: 10px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .strat-map-title-box { display: flex; align-items: baseline; gap: 8px; }
+  .strat-map-title {
+    font-family: var(--serif); font-size: 15px; font-weight: 600;
+    color: var(--text); letter-spacing: 0.5px;
+  }
+  .strat-map-sub {
+    font-size: 11px; color: var(--muted); font-family: var(--sans);
+  }
+  .strat-map-controls {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  }
+  .map-pill {
+    font-family: var(--sans); font-size: 11.5px; padding: 3px 8px;
+    border-radius: 5px; cursor: pointer; color: var(--muted);
+    background: var(--bg); border: 1px solid var(--border);
+    transition: all 0.15s ease; user-select: none;
+  }
+  .map-pill:hover { border-color: var(--accent); color: var(--accent); }
+  .map-pill.on {
+    background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 500;
+  }
+  .strat-map-body { position: relative; width: 100%; height: auto; min-height: 380px; }
+  .strat-map-svg {
+    display: block; width: 100%; height: auto; max-height: 580px;
+    background: #FAF7F0;
+  }
+  .map-water-label {
+    font-family: var(--serif); font-size: 11px; fill: #527588;
+    font-style: italic; opacity: 0.85; user-select: none; pointer-events: none;
+  }
+  .map-mountain-label {
+    font-family: var(--serif); font-size: 11px; fill: #8a7e6f;
+    letter-spacing: 1px; opacity: 0.8; user-select: none; pointer-events: none;
+  }
+  .map-zone-label {
+    font-family: var(--serif); font-size: 13px; font-weight: 600;
+    opacity: 0.28; user-select: none; pointer-events: none;
+  }
+  .map-route-line {
+    stroke: #a8382b; stroke-dasharray: 4,4; stroke-width: 1.6;
+    opacity: 0.38; transition: all 0.25s ease;
+  }
+  .map-route-line.active {
+    stroke: #9B3326; stroke-dasharray: none; stroke-width: 2.5; opacity: 0.95;
+  }
+  .map-hub { cursor: pointer; transition: transform 0.2s ease, opacity 0.25s ease; }
+  .map-hub .hub-ring {
+    fill: #FFFDF7; stroke-width: 1.8; transition: all 0.2s ease;
+  }
+  .map-hub .hub-dot { transition: all 0.2s ease; }
+  .map-hub .hub-text {
+    font-family: var(--serif); font-size: 11px; font-weight: 500;
+    paint-order: stroke; stroke: #FAF7F0; stroke-width: 3px; stroke-linejoin: round;
+    transition: all 0.2s ease; user-select: none;
+  }
+  .map-hub:hover .hub-ring {
+    transform: scale(1.35); transform-origin: center; stroke-width: 2.4;
+  }
+  .map-hub:hover .hub-text {
+    font-weight: 600; font-size: 12.5px;
+  }
+  .map-hub.selected .hub-ring {
+    stroke: #9B3326 !important; fill: #faecea; stroke-width: 2.8;
+  }
+  .map-hub.selected .hub-dot { fill: #9B3326 !important; }
+  .map-hub.selected .hub-text { font-weight: 700; fill: #9B3326 !important; }
+  .map-hub.muted { opacity: 0.18; pointer-events: none; }
+  .map-pulse-ring {
+    animation: mapPulse 1.8s infinite ease-out; transform-origin: center;
+    pointer-events: none;
+  }
+  @keyframes mapPulse {
+    0% { r: 6; opacity: 0.9; stroke-width: 2; }
+    100% { r: 18; opacity: 0; stroke-width: 0.5; }
+  }
+  .map-tooltip {
+    position: absolute; z-index: 100; pointer-events: none;
+    background: rgba(255, 253, 247, 0.96); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    font-family: var(--serif); max-width: 260px; display: none;
+    backdrop-filter: blur(4px); transform: translate(-50%, -115%);
+  }
+  .map-tooltip .tt-head {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 6px; margin-bottom: 4px; border-bottom: 1px dashed var(--border);
+    padding-bottom: 3px;
+  }
+  .map-tooltip .tt-name { font-size: 14px; font-weight: 600; color: var(--text); }
+  .map-tooltip .tt-zone {
+    font-size: 10px; color: #fff; background: var(--accent);
+    padding: 1px 5px; border-radius: 4px; font-family: var(--sans);
+  }
+  .map-tooltip .tt-title { font-size: 11.5px; color: var(--accent); margin-bottom: 4px; }
+  .map-tooltip .tt-battles { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .map-tooltip .tt-foot { font-size: 10.5px; color: #8c827a; margin-top: 4px; text-align: right; }
+  .map-itin-bar {
+    background: #faecea; border-bottom: 1px solid #eccbc7;
+    padding: 6px 14px; display: flex; justify-content: space-between;
+    align-items: center; font-size: 12px; color: #a8382b; font-family: var(--serif);
+  }
+  .map-itin-bar b { font-weight: 600; }
+  .map-itin-close {
+    font-size: 11px; padding: 2px 7px; background: #fff; border: 1px solid #eccbc7;
+    border-radius: 4px; color: #a8382b; cursor: pointer;
+  }
+  .map-itin-close:hover { background: #a8382b; color: #fff; }
+  .map-flow-line {
+    stroke: #9B3326; stroke-width: 2.8; stroke-dasharray: 6, 4;
+    animation: flowDash 1.2s linear infinite; fill: none;
+  }
+  @keyframes flowDash {
+    from { stroke-dashoffset: 20; }
+    to { stroke-dashoffset: 0; }
+  }
+  .map-view-btn {
+    font-family: var(--serif); font-size: 12px; padding: 3px 10px;
+    border-radius: 5px; background: var(--bg); border: 1px solid #eccbc7;
+    color: var(--accent); cursor: pointer; margin-left: 8px; vertical-align: middle;
+    transition: all 0.15s ease;
+  }
+  .map-view-btn:hover {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
 </style>
 </head>
 <body>
 <header>
   <button id="back" class="backbtn" hidden>← 返回</button>
   <h1>古籍檢索</h1>
-  <p class="sub" id="sub">史記 · 漢書 · 後漢書 · 三國志 · 晉書</p>
+  <p class="sub" id="sub">《史記》·《漢書》·《後漢書》·《三國志》·《晉書》· 前四史與晉書實體索引</p>
 </header>
 
 <div class="wrap">
@@ -521,6 +1038,7 @@
           <span class="jump-total" id="jumpTotal"></span>
           <button data-act="jump">跳段</button>
         </span>
+        <button data-act="pntoggle" id="btnPnToggle" class="on" title="切換古漢語專名號標點（人名實線·地名浪線）">專名標點</button>
         <button data-act="hits" id="btnHits" hidden>只看相關段落</button>
         <button id="btnRebuild" hidden>重建</button>
         <button data-act="close">關閉</button>

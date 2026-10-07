@@ -34,6 +34,63 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+# ---------------------------------------------------------------- 三國兩漢兵爭要地與人地交集
+STRATEGIC_PLACES_FILE = os.path.join(ROOT, "data", "dict", "strategic_places.json")
+
+
+def load_strategic_places() -> Dict[str, Any]:
+    if os.path.exists(STRATEGIC_PLACES_FILE):
+        try:
+            with open(STRATEGIC_PLACES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+STRATEGIC_PLACES = load_strategic_places()
+
+
+def get_strategic_places() -> Dict[str, Any]:
+    return STRATEGIC_PLACES
+
+
+def place_top_persons(plid: str, limit: int = 8) -> List[Dict[str, Any]]:
+    """某地名在語料中共同出現最頻繁的人物榜（駐跸征戰歷史人物交集）。"""
+    with connect() as conn:
+        sql = """
+            SELECT m.person_id, p.trad_name, p.name, COUNT(DISTINCT m.sentence_uid) as c
+            FROM mentions m
+            JOIN place_mentions pm ON m.sentence_uid = pm.sentence_uid
+            JOIN persons p ON m.person_id = p.id
+            WHERE pm.place_id = ?
+            GROUP BY m.person_id
+            ORDER BY c DESC LIMIT ?
+        """
+        rows = conn.execute(sql, (plid, limit)).fetchall()
+        return [{"id": r["person_id"], "trad_name": r["trad_name"], "name": r["name"], "n": r["c"]}
+                for r in rows]
+
+
+def person_top_places(pid: str, limit: int = 8) -> List[Dict[str, Any]]:
+    """某人物在語料中共同出現最頻繁的地名榜（主要行跡與兵爭輿地交集）。"""
+    with connect() as conn:
+        sql = """
+            SELECT pm.place_id, pl.trad_name, pl.name, pl.kind, COUNT(DISTINCT pm.sentence_uid) as c
+            FROM mentions m
+            JOIN place_mentions pm ON m.sentence_uid = pm.sentence_uid
+            JOIN places pl ON pm.place_id = pl.id
+            WHERE m.person_id = ?
+            GROUP BY pm.place_id
+            ORDER BY c DESC LIMIT ?
+        """
+        rows = conn.execute(sql, (pid, limit)).fetchall()
+        return [{"id": r["place_id"], "trad_name": r["trad_name"], "name": r["name"],
+                 "kind": r["kind"], "n": r["c"], "isStrategic": (r["place_id"] in STRATEGIC_PLACES)}
+                for r in rows]
+
+
+
 # ---------------------------------------------------------------- 称呼反向
 #
 # ⚠️ 这两张表与 `pipeline/relations.py` 里的同名表**必须逐字一致**——
@@ -200,6 +257,15 @@ PLACE_KIND_LABEL = {"国": "国/朝代", "州": "州部", "郡": "郡", "县": "
 
 
 
+def _parse_book_filter(book: Any) -> List[str]:
+    """解析单书号或逗号分隔多书号为列表。"""
+    if not book:
+        return []
+    if isinstance(book, (list, set, tuple)):
+        return [str(b).strip() for b in book if str(b).strip()]
+    return [b.strip() for b in str(book).split(",") if b.strip()]
+
+
 def _book_counts(conn, table: str, key_col: str,
                  book: str = "") -> Dict[str, Dict[str, Dict]]:
     """一次 GROUP BY 取回「按书命中数 n + 篇数 c」，避免 N+1。
@@ -208,7 +274,16 @@ def _book_counts(conn, table: str, key_col: str,
     （第二遍只为拿 c），白白多花一倍时间——COUNT(DISTINCT) 和 COUNT(*)
     在一条 SELECT 里就能同时算，没理由分开查。
     """
-    where = "WHERE (? = '' OR ch.book_id = ?)" if book else ""
+    b_list = _parse_book_filter(book)
+    where = ""
+    args: List[Any] = []
+    if len(b_list) == 1:
+        where = "WHERE ch.book_id = ?"
+        args = [b_list[0]]
+    elif len(b_list) > 1:
+        placeholders = ",".join("?" * len(b_list))
+        where = "WHERE ch.book_id IN ({})".format(placeholders)
+        args = list(b_list)
     sql = """
         SELECT m.{k} AS kid, ch.book_id AS bid,
                COUNT(*) AS n, COUNT(DISTINCT s.chapter_id) AS c
@@ -218,7 +293,6 @@ def _book_counts(conn, table: str, key_col: str,
         {w}
         GROUP BY m.{k}, ch.book_id
     """.format(t=table, k=key_col, w=where)
-    args: List[Any] = [book, book] if book else []
     out: Dict[str, Dict[str, Dict]] = {}
     for kid, bid, n, c in conn.execute(sql, args):
         out.setdefault(kid, {})[bid] = {"n": n, "c": c}
@@ -226,16 +300,20 @@ def _book_counts(conn, table: str, key_col: str,
 
 
 def _narrow(counts: Dict[str, Dict[str, Dict]], book: str) -> Dict[str, Dict[str, Dict]]:
-    """把「全五書」的按書計數收窄到某一本書。
+    """把「全五書」的按書計數收窄到指定的單書或多本書。
 
-    與「帶 `WHERE ch.book_id=?` 再查一遍」**結果完全一致**——收窄就是從同一個
-    dict 裡只留那本書的鍵（帶 WHERE 查出來時 `book_id` 恆等於該書，也只會有一個鍵）。
-    之所以這麼繞：六個書作用域各查一遍＝12 次三表 JOIN 聚合（實測 23s），
-    一次查完再收窄只要 4s。離線導出（`app/tools/export_static.py`）走的就是這條路。
+    與「帶 `WHERE ch.book_id=?` 或 IN 再查一遍」**結果完全一致**。
+    支持單書或逗號分隔多書號（如 'hs,hhs'）。
     """
-    if not book:
+    b_list = _parse_book_filter(book)
+    if not b_list:
         return counts
-    return {k: {book: v[book]} for k, v in counts.items() if book in v}
+    b_set = set(b_list)
+    return {
+        k: {b: v[b] for b in b_list if b in v}
+        for k, v in counts.items()
+        if any(b in v for b in b_set)
+    }
 
 
 def all_counts(conn) -> tuple:
@@ -334,9 +412,14 @@ def list_chapters(book: str = "") -> Dict[str, Any]:
                "char_count, sentence_count, main_persons, top_places "
                "FROM chapters")
         args: List[Any] = []
-        if book:
+        b_list = _parse_book_filter(book)
+        if len(b_list) == 1:
             sql += " WHERE book_id=?"
-            args.append(book)
+            args.append(b_list[0])
+        elif len(b_list) > 1:
+            placeholders = ",".join("?" * len(b_list))
+            sql += " WHERE book_id IN ({})".format(placeholders)
+            args.extend(b_list)
         sql += " ORDER BY book_id, volume, id"
         def names(ids: str, tbl: Dict[str, str]) -> List[str]:
             """逗號分隔的 id → 顯示名；id 不在表裡（人被合併/改名）就靜默跳過，
@@ -362,6 +445,16 @@ def _top_by_book(conn, table: str, key_col: str, ref_tbl: str,
 
     姓名在 persons / places 主表里，命中表里只有 id，所以要 JOIN 回去取名字。
     """
+    b_list = _parse_book_filter(book)
+    where = ""
+    args: List[Any] = []
+    if len(b_list) == 1:
+        where = "WHERE ch.book_id = ?"
+        args.append(b_list[0])
+    elif len(b_list) > 1:
+        placeholders = ",".join("?" * len(b_list))
+        where = "WHERE ch.book_id IN ({})".format(placeholders)
+        args.extend(b_list)
     sql = """
         SELECT m.{k} AS id, MAX(r.trad_name) AS name,
                COUNT(DISTINCT s.chapter_id) AS c, COUNT(*) AS n
@@ -369,13 +462,14 @@ def _top_by_book(conn, table: str, key_col: str, ref_tbl: str,
         JOIN {rt} r ON r.id = m.{k}
         JOIN sentences s ON s.uid = m.sentence_uid
         JOIN chapters ch ON ch.id = s.chapter_id
-        WHERE (? = '' OR ch.book_id = ?)
+        {w}
         GROUP BY m.{k}
         ORDER BY c DESC, n DESC
         LIMIT ?
-    """.format(t=table, k=key_col, rt=ref_tbl)
+    """.format(t=table, k=key_col, rt=ref_tbl, w=where)
+    args.append(limit)
     return [{"id": r["id"], "name": r["name"], "c": r["c"], "n": r["n"]}
-            for r in conn.execute(sql, (book or "", book or "", limit))]
+            for r in conn.execute(sql, args)]
 
 
 def index_payload(book: str = "", sort: str = "c",
@@ -397,6 +491,101 @@ def index_payload(book: str = "", sort: str = "c",
         "places": list_places(book=book, sort=sort, counts=lc),
         "chapters": list_chapters(book=book),
         "quick": quick_words(book=book),
+        "strategicPlaces": STRATEGIC_PLACES,
+    }
+
+
+def sgz_breakdown(pid: str, pei_info: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """某人在《三國志》魏書（卷1-30）、蜀書（卷31-45）、吳書（卷46-65）的正文與裴注統計。
+
+    若該人物在三國志（正文與裴注）均無命中，返回 None。
+    """
+    with connect() as conn:
+        rows = conn.execute("""
+            SELECT s.chapter_id, COUNT(*) AS n, COUNT(DISTINCT s.chapter_id) AS c
+            FROM mentions m
+            JOIN sentences s ON s.uid = m.sentence_uid
+            JOIN chapters ch ON ch.id = s.chapter_id
+            WHERE m.person_id = ? AND ch.book_id = 'sgz'
+            GROUP BY s.chapter_id
+        """, (pid,)).fetchall()
+
+    wei_main_n, wei_main_c = 0, 0
+    shu_main_n, shu_main_c = 0, 0
+    wu_main_n, wu_main_c = 0, 0
+
+    for r in rows:
+        cid = r[0]
+        cnt = int(r[1] or 0)
+        try:
+            vol = int(cid.split("-")[1])
+        except (IndexError, ValueError):
+            continue
+        if 1 <= vol <= 30:
+            wei_main_n += cnt
+            wei_main_c += 1
+        elif 31 <= vol <= 45:
+            shu_main_n += cnt
+            shu_main_c += 1
+        elif 46 <= vol <= 65:
+            wu_main_n += cnt
+            wu_main_c += 1
+
+    main_tot_n = wei_main_n + shu_main_n + wu_main_n
+    main_tot_c = wei_main_c + shu_main_c + wu_main_c
+
+    # 裴注
+    pei_info = pei_info or pei_of(pid) or {}
+    by_chap = pei_info.get("byChapter", {})
+
+    wei_pei_n, wei_pei_c = 0, 0
+    shu_pei_n, shu_pei_c = 0, 0
+    wu_pei_n, wu_pei_c = 0, 0
+
+    for cid, cnt in by_chap.items():
+        if not cid.startswith("sgz-"):
+            continue
+        try:
+            vol = int(cid.split("-")[1])
+        except (IndexError, ValueError):
+            continue
+        cnt_val = int(cnt or 0)
+        if 1 <= vol <= 30:
+            wei_pei_n += cnt_val
+            wei_pei_c += 1
+        elif 31 <= vol <= 45:
+            shu_pei_n += cnt_val
+            shu_pei_c += 1
+        elif 46 <= vol <= 65:
+            wu_pei_n += cnt_val
+            wu_pei_c += 1
+
+    pei_tot_n = wei_pei_n + shu_pei_n + wu_pei_n
+    pei_tot_c = wei_pei_c + shu_pei_c + wu_pei_c
+
+    comb_tot_n = main_tot_n + pei_tot_n
+    if comb_tot_n == 0:
+        return None
+
+    return {
+        "main": {
+            "wei": {"n": wei_main_n, "c": wei_main_c},
+            "shu": {"n": shu_main_n, "c": shu_main_c},
+            "wu": {"n": wu_main_n, "c": wu_main_c},
+            "total": {"n": main_tot_n, "c": main_tot_c},
+        },
+        "pei": {
+            "wei": {"n": wei_pei_n, "c": wei_pei_c},
+            "shu": {"n": shu_pei_n, "c": shu_pei_c},
+            "wu": {"n": wu_pei_n, "c": wu_pei_c},
+            "total": {"n": pei_tot_n, "c": pei_tot_c},
+        },
+        "combined": {
+            "wei": {"n": wei_main_n + wei_pei_n},
+            "shu": {"n": shu_main_n + shu_pei_n},
+            "wu": {"n": wu_main_n + wu_pei_n},
+            "total": {"n": comb_tot_n},
+        }
     }
 
 
@@ -414,6 +603,7 @@ def person_payload(pid: str, limit: int = 200, book: Optional[str] = None,
     profile = person_profile(pid)
     if not profile:
         return None
+    notes = person_notes_payload(pid)
     return {
         "profile": profile,
         "mentions": person_mentions(pid, None, limit, book=book, era=era),
@@ -421,13 +611,17 @@ def person_payload(pid: str, limit: int = 200, book: Optional[str] = None,
         "relations": relations_graph(pid, 1, limit=limit),
         # 注文（裴注 / 晉書舊史注）：**独立账本**，与上面的正文命中分开算。
         # 前端合计时要把注文分量标成【裴N】，不能混进 mentionCount。
-        "notes": person_notes_payload(pid),
+        "notes": notes,
+        # 三国志魏蜀吴分卷与裴注统计（学术多重视角）
+        "sgzBreakdown": sgz_breakdown(pid, notes.get("pei")),
         # 正文命中的**全量**分布（不受 limit / 篩選影響）。
         # 前端拿它算「共 N 處」和每个筛选桶的条数——联机只给 200 条，
         # 光靠 mentions 算不出来；离线同理吃这一份，两边口径才不会分叉。
         "mentionByBook": mention_by_book(pid),
         # 時代名（下標 = eraRank）。前端不再自己抄一份時代表。
         "eraNames": ERA_NAMES,
+        # 主要行跡與兵爭輿地交集
+        "topPlaces": person_top_places(pid, 8),
     }
 
 
@@ -629,9 +823,14 @@ def person_mentions(pid: str, tier: Optional[str] = None,
     if tier:
         sql += " AND m.tier = ?"
         args.append(tier)
-    if book:
+    b_list = _parse_book_filter(book)
+    if len(b_list) == 1:
         sql += " AND c.book_id = ?"
-        args.append(book)
+        args.append(b_list[0])
+    elif len(b_list) > 1:
+        placeholders = ",".join("?" * len(b_list))
+        sql += " AND c.book_id IN ({})".format(placeholders)
+        args.extend(b_list)
     if era is not None:
         # 時代篩選 = 「句子所在書的記載區間含這個時代」。
         # ⚠️ 史記是通史（era_from IS NULL）→ **不屬於任何具體時代**，
@@ -905,9 +1104,14 @@ def place_mentions(pid: str, limit: int = 200, book: Optional[str] = None,
         WHERE m.place_id = ?
     """
     args: List[Any] = [pid]
-    if book:
+    b_list = _parse_book_filter(book)
+    if len(b_list) == 1:
         sql += " AND c.book_id = ?"
-        args.append(book)
+        args.append(b_list[0])
+    elif len(b_list) > 1:
+        placeholders = ",".join("?" * len(b_list))
+        sql += " AND c.book_id IN ({})".format(placeholders)
+        args.extend(b_list)
     if era is not None:
         # 與 `person_mentions` 同一條規則（史記是通史，不屬任何具體時代）
         sql += (" AND c.book_id IN (SELECT code FROM books "
@@ -959,6 +1163,10 @@ def place_payload(pid: str, limit: int = 200, book: Optional[str] = None,
         # 會以為這個地名不存在（而 places.name 與 trad_name 逐行相同，沒這份
         # 資料就無從解釋）。
         "aliases": place_alias_list(pid),
+        # 宋杰三國兩漢兵爭要地與戰略樞紐考據
+        "strategic": STRATEGIC_PLACES.get(pid),
+        # 駐跸征戰歷史人物交集
+        "topPersons": place_top_persons(pid, 8),
     }
 
 
@@ -1002,24 +1210,27 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
         # 书号校验（docs/28 P1-3）：以前 `AND (book=? OR book='')` 让**任何**书号
         # 都能通过——`book=zzz` 照样返回全部边，旋钮是摆设还骗人。不存在的书号
         # 直接报错，由端点翻成 400。
-        if book:
+        b_list = _parse_book_filter(book)
+        if b_list:
             known = {r[0] for r in conn.execute(
                 "SELECT DISTINCT book_id FROM chapters")}
-            if book not in known:
+            unknown = [b for b in b_list if b not in known]
+            if unknown:
                 raise ValueError("未知書號：{}（有效：{}）".format(
-                    book, "/".join(sorted(known))))
+                    "/".join(unknown), "/".join(sorted(known))))
 
         # 「按书看」的正确语义不是 `book` 列（61/62 条是空的——关系天然跨书，
         # 跟人物一样，见 docs/21），而是**这条关系在该书里有出处**：
         # 有证据句且证据句属于该书的边，也算命中。
         ev_rel: set = set()
-        if book:
+        if b_list:
+            ph_b = ",".join("?" * len(b_list))
             for rid, in conn.execute(
                     "SELECT r.rel_id FROM relations r "
                     "JOIN sentences s ON s.uid=r.evidence_uid "
                     "JOIN chapters c ON c.id=s.chapter_id "
                     "WHERE r.status='active' AND r.evidence_uid<>'' "
-                    "  AND c.book_id=?", (book,)):
+                    "  AND c.book_id IN ({})".format(ph_b), b_list):
                 ev_rel.add(rid)
 
         seen_nodes = {pid: 0}
@@ -1039,12 +1250,13 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
             if rel_type:
                 sql += " AND rel_type=?"
                 args.append(rel_type)
-            if book:
+            if b_list:
                 # 空 book = 未标注（跨书），不因此被滤掉；但要么 `book` 列命中，
                 # 要么证据句落在这本书里（ev_rel），二者都不是才排除。
-                sql += " AND (book=? OR (book='' AND rel_id IN ({})))".format(
-                    ",".join("?" * len(ev_rel)) or "''")
-                args.append(book)
+                ph_b = ",".join("?" * len(b_list))
+                sql += " AND (book IN ({}) OR (book='' AND rel_id IN ({})))".format(
+                    ph_b, ",".join("?" * len(ev_rel)) or "''")
+                args.extend(b_list)
                 args.extend(ev_rel)
             if min_conf:
                 sql += " AND confidence>=?"
