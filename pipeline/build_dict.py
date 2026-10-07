@@ -150,7 +150,7 @@ PERSON_BOOKS_HS = {
     "p_dongxian": ["hs"],
     "p_shixian": ["hs", "hhs"],
     "p_chunyuchang": ["hs"],
-    "p_wangzhengjun": ["hs"],
+    "p_wangzhengjun": ["hs", "hhs"],
     "p_zhaofeiyan": ["hs", "hhs"],
     "p_zhaohede": ["hs"],
     "p_fuzhaoyi": ["hs"],
@@ -2558,6 +2558,7 @@ GENERIC_MANUAL = {
     # 重複鍵見 GENERIC_MANUAL 末尾的自檢——這裡不寫第二份。
     "懷王": ["p_chuhuaiwang", "p_liuyi_hs", "p_liushu2"],
     "平原君": ["p_pingyuanjun", "p_zhujian_hs"],
+    "王皇后": ["p_wangzhi", "p_wangzhengjun"],
     "王太后": ["p_wangzhengjun", "p_wangzhi"],
     "湯": ["p_tang", "p_zhangtang", "p_chentang_hs"],
     "武安君": ["p_baiqi", "p_li_mu"],
@@ -2794,6 +2795,22 @@ GENERIC_BOOK_CANDIDATES = {
         "hhs": ["p_lufang", "p_hanwendi"],
         "sgz": ["p_hanwendi"],
         "js": ["p_hanwendi"],
+    },
+    # 王皇后：史记无；汉书孝景王皇后（王娡）与孝元王皇后（王政君）；后汉书兼有二后追述；三国晋书魏晋诸后不入候选
+    "王皇后": {
+        "sj": ["p_wangzhi"],
+        "hs": ["p_wangzhi", "p_wangzhengjun"],
+        "hhs": ["p_wangzhi", "p_wangzhengjun"],
+        "sgz": [],
+        "js": [],
+    },
+    # 王太后：史记孝景王皇后（武帝母王娡）；汉书孝景王太后与孝元王太后（王政君）；后汉/三国/晋书不入候选
+    "王太后": {
+        "sj": ["p_wangzhi"],
+        "hs": ["p_wangzhi", "p_wangzhengjun"],
+        "hhs": [],
+        "sgz": [],
+        "js": [],
     },
 }
 
@@ -4487,6 +4504,175 @@ GENERIC_CONTEXT_RULES = {
         ("window", "文深小苛", "p_zhangtang"),
         ("window", "唆文", "p_zhangtang"),
     ],
+    "王皇后": [
+        # --- 硬排除（各朝诸侯/天王/宣平王皇后） ---
+        ("window", "陳留王", None),
+        ("window", "陈留王", None),
+        ("window", "天王", None),
+        ("window", "齊王", None),
+        ("window", "齐王", None),
+        ("window", "孝宣", None),
+        ("window", "孝平", None),
+        ("window", "朕之姑", None),
+        # --- 汉景帝王皇后（王娡 p_wangzhi）硬证据 ---
+        ("window", "景帝", "p_wangzhi"),
+        ("window", "孝景", "p_wangzhi"),
+        ("window", "田蚡", "p_wangzhi"),
+        ("window", "田肦", "p_wangzhi"),
+        ("window", "武安侯", "p_wangzhi"),
+        ("window", "條侯", "p_wangzhi"),
+        ("window", "条侯", "p_wangzhi"),
+        ("window", "竇太后", "p_wangzhi"),
+        ("window", "窦太后", "p_wangzhi"),
+        ("window", "槐裏", "p_wangzhi"),
+        ("window", "槐里", "p_wangzhi"),
+        ("window", "臧兒", "p_wangzhi"),
+        ("window", "臧儿", "p_wangzhi"),
+        ("window", "金王孫", "p_wangzhi"),
+        ("window", "金王孙", "p_wangzhi"),
+        ("window", "孝武皇帝", "p_wangzhi"),
+        ("window", "生武帝", "p_wangzhi"),
+        ("window", "武帝母", "p_wangzhi"),
+        # --- 汉元帝王皇后（王政君 p_wangzhengjun）硬证据 ---
+        ("window", "元帝", "p_wangzhengjun"),
+        ("window", "孝元", "p_wangzhengjun"),
+        ("window", "成帝", "p_wangzhengjun"),
+        ("window", "孝成", "p_wangzhengjun"),
+        ("window", "太子宮", "p_wangzhengjun"),
+        ("window", "太子宫", "p_wangzhengjun"),
+        ("window", "甲觀", "p_wangzhengjun"),
+        ("window", "甲观", "p_wangzhengjun"),
+        ("window", "世嫡皇孫", "p_wangzhengjun"),
+        ("window", "世嫡皇孙", "p_wangzhengjun"),
+        ("window", "初元", "p_wangzhengjun"),
+        ("window", "甘露", "p_wangzhengjun"),
+        ("window", "婕妤", "p_wangzhengjun"),
+        ("window", "傅昭儀", "p_wangzhengjun"),
+        ("window", "傅昭仪", "p_wangzhengjun"),
+        ("window", "定陶共王", "p_wangzhengjun"),
+        ("window", "定陶恭王", "p_wangzhengjun"),
+        ("window", "王莽", "p_wangzhengjun"),
+        ("window", "長樂", "p_wangzhengjun"),
+        ("window", "长乐", "p_wangzhengjun"),
+    ],
+    "王太后": [
+        # --- 硬排除（诸侯国王太后、南越樛太后、前凉马氏、成汉罗氏等） ---
+        # 南越国樛太后 / 摎太后
+        ("sent", "南越", None),
+        ("sent", "樛", None),
+        ("sent", "摎", None),
+        ("sent", "呂嘉", None),
+        ("sent", "吕嘉", None),
+        ("sent", "安國少季", None),
+        ("sent", "安国少季", None),
+        ("sent", "少季", None),
+        ("sent", "終軍", None),
+        ("sent", "终军", None),
+        ("sent", "嬰齊", None),
+        ("sent", "婴齐", None),
+        ("pre", "王、", None),
+        ("window", "王、王太后", None),
+        ("window", "嘉等", None),
+        ("window", "弱孤", None),
+        ("window", "越境", None),
+        ("window", "粵境", None),
+        ("window", "粤境", None),
+        ("window", "龍亢侯", None),
+        ("window", "龙亢侯", None),
+        ("window", "龍侯", None),
+        ("window", "龙侯", None),
+        ("window", "入朝具", None),
+        ("window", "不聽王", None),
+        ("window", "不听王", None),
+        # 齐王献城阳尊公主为王太后 / 齐王尊公主为王太后
+        ("sent", "城陽", None),
+        ("sent", "城阳", None),
+        ("window", "尊公主", None),
+        ("pre", "公主為", None),
+        ("pre", "公主为", None),
+        # 诸侯泛指 / 诸侯王太后
+        ("sent", "諸侯", None),
+        ("sent", "诸侯", None),
+        # 梁王太后（文三王传：削梁王五縣，奪王太后湯沐成陽邑）
+        ("sent", "成陽邑", None),
+        ("sent", "成阳邑", None),
+        ("sent", "梁王", None),
+        # 淮阳王太后（张敞奏书谏王太后数出游猎）
+        ("sent", "張敞", None),
+        ("sent", "张敞", None),
+        ("window", "出游獵", None),
+        ("window", "出游猎", None),
+        # 东平王太后（宣元六王传）
+        ("sent", "東平", None),
+        ("sent", "东平", None),
+        ("window", "少加意", None),
+        ("window", "明察此意", None),
+        ("window", "強餐", None),
+        ("window", "强餐", None),
+        ("window", "慎疾自愛", None),
+        ("window", "慎疾自爱", None),
+        # 中山 / 鲁恭 / 定陶
+        ("sent", "宜鄉侯", None),
+        ("sent", "宜乡侯", None),
+        ("sent", "馮參", None),
+        ("sent", "冯参", None),
+        ("sent", "徵臣", None),
+        ("sent", "征臣", None),
+        ("window", "定陶", None),
+        # 太后仪
+        ("sent", "太后儀", None),
+        ("sent", "太后仪", None),
+        # --- 汉景帝王皇后/王太后（王娡 p_wangzhi）硬证据 ---
+        ("window", "槐裏", "p_wangzhi"),
+        ("window", "槐里", "p_wangzhi"),
+        ("window", "臧兒", "p_wangzhi"),
+        ("window", "臧儿", "p_wangzhi"),
+        ("window", "金王孫", "p_wangzhi"),
+        ("window", "金王孙", "p_wangzhi"),
+        ("window", "平陽公主", "p_wangzhi"),
+        ("window", "平阳公主", "p_wangzhi"),
+        ("window", "陽陵", "p_wangzhi"),
+        ("window", "阳陵", "p_wangzhi"),
+        ("window", "三人為侯", "p_wangzhi"),
+        ("window", "三人为侯", "p_wangzhi"),
+        ("window", "景帝", "p_wangzhi"),
+        ("window", "孝景", "p_wangzhi"),
+        ("window", "田蚡", "p_wangzhi"),
+        ("window", "田肦", "p_wangzhi"),
+        ("window", "武安侯", "p_wangzhi"),
+        ("window", "條侯", "p_wangzhi"),
+        ("window", "条侯", "p_wangzhi"),
+        ("window", "竇太后", "p_wangzhi"),
+        ("window", "窦太后", "p_wangzhi"),
+        ("window", "醫幸", "p_wangzhi"),
+        ("window", "医幸", "p_wangzhi"),
+        ("window", "義縱", "p_wangzhi"),
+        ("window", "义纵", "p_wangzhi"),
+        ("window", "姊姁", "p_wangzhi"),
+        ("window", "爲官者乎", "p_wangzhi"),
+        ("window", "为官者乎", "p_wangzhi"),
+        # --- 汉元帝王皇后/王太后（王政君 p_wangzhengjun）硬证据 ---
+        ("window", "長樂宮", "p_wangzhengjun"),
+        ("window", "长乐宫", "p_wangzhengjun"),
+        ("window", "長樂", "p_wangzhengjun"),
+        ("window", "长乐", "p_wangzhengjun"),
+        ("window", "王莽", "p_wangzhengjun"),
+        ("window", "新都侯", "p_wangzhengjun"),
+        ("window", "王鳳", "p_wangzhengjun"),
+        ("window", "王凤", "p_wangzhengjun"),
+        ("window", "元帝", "p_wangzhengjun"),
+        ("window", "成帝", "p_wangzhengjun"),
+        ("window", "平帝", "p_wangzhengjun"),
+        ("window", "哀帝", "p_wangzhengjun"),
+        ("window", "丁、傅", "p_wangzhengjun"),
+        ("window", "傅太后", "p_wangzhengjun"),
+        ("window", "王舜", "p_wangzhengjun"),
+        ("window", "王崇", "p_wangzhengjun"),
+        ("window", "董賢", "p_wangzhengjun"),
+        ("window", "董贤", "p_wangzhengjun"),
+        ("window", "太皇太后", "p_wangzhengjun"),
+        ("window", "即位五年", "p_wangzhengjun"),
+    ],
 }
 
 # 默认归属覆盖：判不出上下文时兜底给谁。汉初「吳王」几乎都指刘濞、
@@ -4526,6 +4712,8 @@ GENERIC_DEFAULT = {
     "會稽王": "p_simayu",
     "王霸": "p_wangba",
     "淮南王": "p_liu_an",
+    "王皇后": "p_wangzhengjun",
+    "王太后": "p_wangzhengjun",
 }
 
 
@@ -4668,14 +4856,14 @@ def main():
             acc.add(simp)
         tokens[person["id"]] = acc
 
-    generic_surfaces = {}     # 繁体别名 -> 核心词（None 表示手工声明）
+    generic_surfaces = {}     # 繁体别名 -> (核心词, 后缀)（None 表示手工声明）
     for item in declared_owner:
         simp = t2s.convert(item)
         for suf in sorted(GENERIC_CORE_SUFFIXES, key=len, reverse=True):
             if simp.endswith(suf) and len(simp) > len(suf):
                 core = simp[:-len(suf)]
                 if core in GENERIC_CORES:
-                    generic_surfaces[item] = core
+                    generic_surfaces[item] = (core, suf)
                 break
     for item in GENERIC_MANUAL:
         if item not in declared_owner:
@@ -4683,18 +4871,31 @@ def main():
         generic_surfaces[item] = None
 
     generic_entries = []
-    for item, core in generic_surfaces.items():
-        if core is None:
+    for item, info in generic_surfaces.items():
+        if info is None:
+            core, suf = None, None
             candidates = list(GENERIC_MANUAL[item])
         else:
+            core, suf = info
             candidates = list(dict.fromkeys(declared_owner[item]))
             own_simp = t2s.convert(item)
             for person in persons:
                 pid = person["id"]
                 if pid in candidates:
                     continue
-                if any(t != own_simp and title_like(t, core)
-                       for t in tokens[pid]):
+                matched = False
+                for t in tokens[pid]:
+                    if t != own_simp and title_like(t, core):
+                        # 爵位/身份守卫：王不混入太后/侯/公，侯不混入王/太后/公，太后不混入王/侯
+                        if suf == "王" and (t.endswith("太后") or t.endswith("侯") or t.endswith("公")):
+                            continue
+                        if suf == "侯" and (t.endswith("太后") or t.endswith("王") or t.endswith("公")):
+                            continue
+                        if suf == "太后" and not t.endswith("太后"):
+                            continue
+                        matched = True
+                        break
+                if matched:
                     candidates.append(pid)
         # 称号对应不到 2 人时通常按普通别名处理，但「莊王/景公/隱公/孝公/文侯」虽库中仅一人，
         # 却必须走泛称以通过 GENERIC_CONTEXT_RULES 硬排除其他诸侯或同号伪切。
