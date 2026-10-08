@@ -425,6 +425,8 @@ def build() -> dict:
     pmbk = step("人物分書全量", _mbk, "mentions", "person_id", codes)
     plbk = step("地名分書全量", _mbk, "place_mentions", "place_id", codes)
     strat = step("兵爭要地", db.get_strategic_places)
+    place_coords = step("核心地名坐標", db.get_place_coordinates)
+    trajectories = step("人物生平行跡", db.get_all_trajectories)
     co_pl, co_p, co_strat = step("人地共現", _cooccurrences, strat)
 
     data = {
@@ -477,6 +479,9 @@ def build() -> dict:
         "notes": _notes(),
         # 三國兩漢兵爭要地與戰略樞紐（宋杰考據底冊）
         "strat": strat,
+        # 核心地名坐標與人物生平行跡數據庫
+        "placeCoords": place_coords,
+        "trajectories": trajectories,
         # 人地時空交集（同句共現榜）
         "pl2p": co_pl,
         "p2pl": co_p,

@@ -993,10 +993,10 @@
   }
   .map-tooltip {
     position: absolute; z-index: 100;
-    background: rgba(255, 253, 247, 0.96); border: 1px solid var(--border);
-    border-radius: 8px; padding: 8px 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-    font-family: var(--serif); max-width: 260px; display: none;
-    backdrop-filter: blur(4px); transform: translate(-50%, -115%);
+    background: rgba(255, 253, 247, 0.98); border: 1px solid var(--border);
+    border-radius: 8px; padding: 9px 13px; box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+    font-family: var(--serif); max-width: 290px; max-height: 260px; overflow-y: auto; display: none;
+    backdrop-filter: blur(4px); box-sizing: border-box;
   }
   .map-tooltip .tt-head {
     display: flex; justify-content: space-between; align-items: center;
@@ -1039,7 +1039,171 @@
   .map-view-btn:hover {
     background: var(--accent); color: #fff; border-color: var(--accent);
   }
+
+  /* ---- 輿圖獨立雙Tab切換 ---- */
+  .map-mode-tabs {
+    display: flex; gap: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .map-mode-tab {
+    font-family: var(--serif); font-size: 13.5px; padding: 6px 16px;
+    border-radius: 6px; cursor: pointer; color: var(--muted);
+    background: var(--panel); border: 1px solid var(--border);
+    transition: all 0.15s ease; user-select: none; font-weight: 500;
+  }
+  .map-mode-tab:hover {
+    border-color: var(--accent); color: var(--accent);
+  }
+  .map-mode-tab.on {
+    background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600;
+    box-shadow: 0 2px 6px rgba(168, 56, 43, 0.2);
+  }
+
+  /* 人物行跡專屬控制欄 */
+  .trj-ctrl-bar {
+    display: flex; flex-direction: column; gap: 8px; padding: 10px 16px;
+    background: #FAF7F0; border-bottom: 1px solid var(--border);
+  }
+  .trj-row {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  }
+  .trj-label {
+    font-size: 12px; font-family: var(--serif); font-weight: 600; color: var(--muted);
+    min-width: 68px;
+  }
+  .trj-pill {
+    font-size: 11.5px; padding: 3px 9px; border-radius: 4px;
+    background: #fff; border: 1px solid var(--border); color: var(--text);
+    cursor: pointer; transition: all 0.15s ease; font-family: var(--serif);
+    user-select: none;
+  }
+  .trj-pill:hover { border-color: var(--accent); color: var(--accent); }
+  .trj-pill.on {
+    background: #2d6a4f; color: #fff; border-color: #2d6a4f; font-weight: 600;
+  }
+  .trj-pill.book-pill.on {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+  .trj-stat-badge {
+    font-size: 10.5px; color: var(--muted); margin-left: 4px; opacity: 0.85;
+  }
+
+  /* Color Bar 時間漸變色階條 */
+  .trj-colorbar-wrap {
+    position: absolute; left: 16px; bottom: 16px; z-index: 12;
+    background: rgba(255, 253, 247, 0.95); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+    backdrop-filter: blur(4px); font-family: var(--serif); pointer-events: none;
+  }
+  .trj-colorbar-title {
+    font-size: 11px; font-weight: 600; color: var(--text); margin-bottom: 5px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .trj-colorbar-track {
+    width: 220px; height: 10px; border-radius: 5px;
+    background: linear-gradient(to right, #2b82d9 0%, #16a085 33%, #e67e22 66%, #c0392b 100%);
+    margin-bottom: 4px; border: 1px solid rgba(0,0,0,0.1);
+  }
+  .trj-colorbar-labels {
+    display: flex; justify-content: space-between; font-size: 10px; color: var(--muted);
+  }
+  .trj-undated-legend {
+    display: flex; align-items: center; gap: 5px; font-size: 10px; color: #666;
+    margin-top: 5px; padding-top: 4px; border-top: 1px dashed var(--border);
+  }
+  .trj-undated-dot {
+    width: 9px; height: 9px; border-radius: 50%; background: #8c8c8c;
+    border: 1px solid #555; display: inline-block;
+  }
+
+  /* 行跡點位標記樣式 */
+  .trj-point { cursor: pointer; transition: opacity 0.25s ease; }
+  .trj-point .trj-hitarea { pointer-events: all; cursor: pointer; fill: transparent; }
+  .trj-point-text {
+    font-family: var(--serif); font-size: 10.5px; font-weight: 600;
+    paint-order: stroke; stroke: #FAF7F0; stroke-width: 3px; stroke-linejoin: round;
+    transition: all 0.2s ease; user-select: none; pointer-events: none;
+  }
+  .trj-point:hover .trj-point-text { font-weight: 700; }
+  .trj-point.selected circle { stroke: #a8382b !important; stroke-width: 2.5px; }
+  
+  /* 行跡點位聚焦動畫與對比度增強 */
+  @keyframes trjFocusPulse {
+    0% { r: 7px; opacity: 1; stroke-width: 2.5px; }
+    50% { r: 16px; opacity: 0.6; stroke-width: 1.5px; }
+    100% { r: 26px; opacity: 0; stroke-width: 0.5px; }
+  }
+  .trj-focus-ring {
+    fill: none; stroke: #a8382b;
+    animation: trjFocusPulse 2s infinite ease-out;
+    pointer-events: none;
+  }
+  .trj-focus-ring-outer {
+    fill: none; stroke: #d97706;
+    animation: trjFocusPulse 2s infinite ease-out;
+    animation-delay: 0.7s;
+    pointer-events: none;
+  }
+  .map-trj-points.has-selection .trj-point:not(.selected) {
+    opacity: 0.28;
+    transition: opacity 0.25s ease;
+  }
+  .map-trj-points.has-selection .trj-point.selected {
+    opacity: 1 !important;
+  }
+  .trj-point.selected .trj-point-text {
+    font-size: 13px !important;
+    font-weight: 800 !important;
+    fill: #a8382b !important;
+    stroke: #ffffff !important;
+    stroke-width: 4px !important;
+  }
+  .trj-clear-focus-btn {
+    font-size: 11.5px; padding: 2px 9px; background: #fff;
+    border: 1px solid #a8382b; border-radius: 4px; color: #a8382b;
+    cursor: pointer; font-family: var(--sans); transition: all 0.15s ease;
+  }
+  .trj-clear-focus-btn:hover {
+    background: #a8382b; color: #fff;
+  }
+  .trj-event-item.selected {
+    background: #faecea !important; border-left: 3px solid #a8382b; padding-left: 8px;
+  }
+
+  /* 行跡事件列表面板 */
+  .trj-events-panel {
+    margin-top: 14px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden;
+  }
+  .trj-events-head {
+    padding: 8px 14px; background: var(--bg); border-bottom: 1px solid var(--border);
+    font-family: var(--serif); font-weight: 600; font-size: 13px; color: var(--text);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .trj-events-list {
+    max-height: 260px; overflow-y: auto; padding: 4px 10px;
+  }
+  .trj-event-item {
+    display: flex; align-items: baseline; gap: 10px; padding: 6px 6px;
+    border-bottom: 1px solid #f0ede6; font-size: 12px; cursor: pointer;
+    transition: background 0.15s ease;
+  }
+  .trj-event-item:hover { background: #f7f3ec; }
+  .trj-event-time {
+    font-family: var(--sans); font-size: 11px; font-weight: 600; min-width: 110px;
+    color: #4a5568;
+  }
+  .trj-event-place {
+    font-family: var(--serif); font-weight: 600; color: var(--accent); min-width: 50px;
+  }
+  .trj-event-desc {
+    flex: 1; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .trj-event-badge {
+    font-size: 10px; padding: 1px 5px; border-radius: 3px; background: #eccbc7; color: #a8382b;
+  }
 </style>
+
 </head>
 <body>
 <header>

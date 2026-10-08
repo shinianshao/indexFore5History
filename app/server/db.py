@@ -522,14 +522,55 @@ def index_payload(book: str = "", sort: str = "c",
         "chapters": list_chapters(book=book),
         "quick": quick_words(book=book),
         "strategicPlaces": STRATEGIC_PLACES,
+        "placeCoords": get_place_coordinates(),
+        "trajectoryCounts": get_trajectory_counts(),
     }
+
+
+# 漢末三國爭霸關鍵人物集合（東漢朝代但屬於三國核心群雄名臣，如曹操、袁紹、董卓、呂布、荀彧等）
+HAN_MO_THREE_KINGDOMS_PIDS = {
+    'p_baoxin', 'p_baoxun', 'p_bianrang', 'p_caimao_sg', 'p_caocao', 'p_caoteng',
+    'p_chunyuqiong', 'p_cuiyan', 'p_dingyuan', 'p_dongcheng', 'p_dongfu', 'p_dongzhuo',
+    'p_duanwei', 'p_dukui', 'p_fengji', 'p_gaolan', 'p_gaoshun', 'p_gongsundu_hhs',
+    'p_gongsunkang', 'p_gongsunzan', 'p_guosi', 'p_guotu', 'p_hansui', 'p_hekui',
+    'p_heyong', 'p_huangzu', 'p_huatuo', 'p_huaxiong', 'p_jushou', 'p_kongrong',
+    'p_lijue', 'p_liubiao', 'p_liudai', 'p_liufang', 'p_liuyan_ys', 'p_lvbu',
+    'p_lvqian', 'p_maojie', 'p_niufu', 'p_pangyu', 'p_quyi', 'p_shanyang',
+    'p_shendan', 'p_shenpei', 'p_songguo', 'p_sunben', 'p_sunjing', 'p_tangzi',
+    'p_taoqian', 'p_tianfeng', 'p_wanglie', 'p_wangzifu', 'p_wenchou', 'p_wenpin',
+    'p_xingyong', 'p_xizhicai', 'p_xunchen', 'p_xunyu', 'p_xuyi', 'p_xuyou',
+    'p_yanbaihu', 'p_yangfeng', 'p_yanliang', 'p_yanwen', 'p_yanyan', 'p_yuanshao',
+    'p_yuanshu', 'p_zangba', 'p_zhangchao', 'p_zhangfan', 'p_zhangjian', 'p_zhangjian_hhs',
+    'p_zhangkuang', 'p_zhangrang', 'p_zhangren', 'p_zhangyang', 'p_zumao'
+}
+
+
+def is_three_kingdoms_person(pid: str) -> bool:
+    """判定某人物是否屬於三國人物（三國朝代人物，或活躍於漢末三國爭霸戰場的東漢末年核心人物）。
+
+    非三國人物（如劉邦、項羽、秦始皇、孔子、周公、漢武帝、光武帝劉秀等）返回 False，
+    以避免在詳情頁橫亙無意義的《三國志》魏蜀吳分卷統計卡片。
+    """
+    if pid in HAN_MO_THREE_KINGDOMS_PIDS:
+        return True
+    with connect() as conn:
+        row = conn.execute("SELECT dynasty, era_rank FROM persons WHERE id = ?", (pid,)).fetchone()
+        if not row:
+            return False
+        dynasty, era_rank = row[0], row[1]
+        if dynasty == "三國" or era_rank == 12:
+            return True
+    return False
 
 
 def sgz_breakdown(pid: str, pei_info: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """某人在《三國志》魏書（卷1-30）、蜀書（卷31-45）、吳書（卷46-65）的正文與裴注統計。
 
-    若該人物在三國志（正文與裴注）均無命中，返回 None。
+    若該人物非三國人物、或在三國志（正文與裴注）均無命中，返回 None。
     """
+    if not is_three_kingdoms_person(pid):
+        return None
+
     with connect() as conn:
         rows = conn.execute("""
             SELECT s.chapter_id, COUNT(*) AS n, COUNT(DISTINCT s.chapter_id) AS c
@@ -1419,3 +1460,96 @@ def relations_graph(pid: str, degree: int = 1, rel_type: str = "",
             e["rel_desc"] = "{} 是 {} 之{}".format(na, nb, e["rel"])
 
         return {"nodes": nodes, "edges": edges[:limit]}
+
+
+def person_trajectories(pid: str) -> list[dict]:
+    """獲取人物的生平行跡列表（含時間、地點、坐標、原典句子）。"""
+    with connect() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, person_id, person_name, place_id, place_name,
+                   time_raw, year_ad, time_order, event_summary,
+                   sentence_uid, source_book, source_chapter, chapter_id, source_text,
+                   tier, confidence, coord_lng, coord_lat, is_disputed
+            FROM person_trajectories
+            WHERE person_id = ?
+            ORDER BY CASE WHEN year_ad IS NOT NULL THEN 0 ELSE 1 END, year_ad, time_order, id
+        """, (pid,))
+        cols = [col[0] for col in c.description]
+        return [dict(zip(cols, row)) for row in c.fetchall()]
+
+
+def trajectory_persons() -> list[dict]:
+    """獲取行跡數據庫中已收錄的人物元數據列表。"""
+    with connect() as conn:
+        c = conn.cursor()
+        c.execute("""
+            SELECT pt.person_id, pt.person_name, p.dynasty,
+                   COUNT(pt.id) as total_points,
+                   SUM(CASE WHEN pt.year_ad IS NOT NULL THEN 1 ELSE 0 END) as dated_points,
+                   SUM(CASE WHEN pt.coord_lng IS NOT NULL THEN 1 ELSE 0 END) as coord_points
+            FROM person_trajectories pt
+            LEFT JOIN persons p ON pt.person_id = p.id
+            GROUP BY pt.person_id
+            ORDER BY total_points DESC
+        """)
+        cols = [col[0] for col in c.description]
+        return [dict(zip(cols, row)) for row in c.fetchall()]
+
+
+PLACE_COORDINATES_FILE = os.path.join(ROOT, "data", "dict", "place_coordinates.json")
+PERSON_TRAJECTORIES_FILE = os.path.join(ROOT, "data", "index", "person_trajectories.json")
+
+
+def get_place_coordinates() -> dict:
+    """獲取擴充之 190+ 處古代核心地名經緯度坐標庫。"""
+    if os.path.exists(PLACE_COORDINATES_FILE):
+        try:
+            with open(PLACE_COORDINATES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def get_all_trajectories() -> dict:
+    """獲取全量人物生平行跡快照數據。"""
+    if os.path.exists(PERSON_TRAJECTORIES_FILE):
+        try:
+            with open(PERSON_TRAJECTORIES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def get_trajectory_counts() -> dict:
+    """獲取各人物在行跡庫中的記錄條數（輕量字典，供前端人物標籤即時顯示計數）。"""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT person_id, COUNT(*) FROM person_trajectories GROUP BY person_id"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+
+def get_sentence_meta(uid: str) -> dict | None:
+    """由句子 uid 獲取其 chapter_id、book_id、段號等元數據。"""
+    with connect() as conn:
+        row = conn.execute("""
+            SELECT s.uid, s.chapter_id, ch.book_id, ch.title, s.para_seq, s.text
+            FROM sentences s
+            JOIN chapters ch ON s.chapter_id = ch.id
+            WHERE s.uid = ?
+        """, (uid,)).fetchone()
+        if not row:
+            return None
+        return {
+            "uid": row[0],
+            "chapter_id": row[1],
+            "book_id": row[2],
+            "chapter_title": row[3],
+            "para_seq": row[4],
+            "text": row[5]
+        }
+
+

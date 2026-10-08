@@ -40,6 +40,34 @@
     Object.keys(D.chaps).forEach(function (cid) { CHAPT[cid] = D.chaps[cid][0]; });
   }
 
+  /* 人物生平行跡緩存與非同步拉取（聯機 8800 + 離線快照同構雙軌） */
+  var TRJ_CACHE = (OFF && D && D.trajectories) ? D.trajectories : {};
+
+  function loadPersonTrajectories(pid, callback) {
+    if (!pid) return Promise.resolve([]);
+    if (TRJ_CACHE[pid] && TRJ_CACHE[pid].length > 0) {
+      if (callback) callback(TRJ_CACHE[pid]);
+      return Promise.resolve(TRJ_CACHE[pid]);
+    }
+    if (typeof window !== "undefined" && window.BOOKINDEX_DATA && window.BOOKINDEX_DATA.trajectories && window.BOOKINDEX_DATA.trajectories[pid]) {
+      TRJ_CACHE[pid] = window.BOOKINDEX_DATA.trajectories[pid];
+      if (callback) callback(TRJ_CACHE[pid]);
+      return Promise.resolve(TRJ_CACHE[pid]);
+    }
+    return request("/api/person/" + encodeURIComponent(pid) + "/trajectories")
+      .then(function (res) {
+        TRJ_CACHE[pid] = (res && res.items) || [];
+        if (callback) callback(TRJ_CACHE[pid]);
+        return TRJ_CACHE[pid];
+      })
+      .catch(function (err) {
+        console.error("Failed to load trajectories for " + pid, err);
+        TRJ_CACHE[pid] = TRJ_CACHE[pid] || [];
+        if (callback) callback(TRJ_CACHE[pid]);
+        return TRJ_CACHE[pid];
+      });
+  }
+
   /* 還原：全部是下標查找 + 物件組裝，沒有任何規則。
      與聯機版唯一的刻意差異——mentions / 句子**不截斷**（聯機上限 200 / 500），
      快照一次給全；只多不少，不影響顯示。 */
@@ -233,8 +261,37 @@
              places: offSearchPlaces(q, limit) };
   }
 
+  // 漢末三國爭霸關鍵人物集合（東漢朝代但屬於三國核心群雄名臣，如曹操、袁紹、董卓、呂布、荀彧等）
+  var HAN_MO_THREE_KINGDOMS_PIDS = {
+    p_baoxin: 1, p_baoxun: 1, p_bianrang: 1, p_caimao_sg: 1, p_caocao: 1, p_caoteng: 1,
+    p_chunyuqiong: 1, p_cuiyan: 1, p_dingyuan: 1, p_dongcheng: 1, p_dongfu: 1, p_dongzhuo: 1,
+    p_duanwei: 1, p_dukui: 1, p_fengji: 1, p_gaolan: 1, p_gaoshun: 1, p_gongsundu_hhs: 1,
+    p_gongsunkang: 1, p_gongsunzan: 1, p_guosi: 1, p_guotu: 1, p_hansui: 1, p_hekui: 1,
+    p_heyong: 1, p_huangzu: 1, p_huatuo: 1, p_huaxiong: 1, p_jushou: 1, p_kongrong: 1,
+    p_lijue: 1, p_liubiao: 1, p_liudai: 1, p_liufang: 1, p_liuyan_ys: 1, p_lvbu: 1,
+    p_lvqian: 1, p_maojie: 1, p_niufu: 1, p_pangyu: 1, p_quyi: 1, p_shanyang: 1,
+    p_shendan: 1, p_shenpei: 1, p_songguo: 1, p_sunben: 1, p_sunjing: 1, p_tangzi: 1,
+    p_taoqian: 1, p_tianfeng: 1, p_wanglie: 1, p_wangzifu: 1, p_wenchou: 1, p_wenpin: 1,
+    p_xingyong: 1, p_xizhicai: 1, p_xunchen: 1, p_xunyu: 1, p_xuyi: 1, p_xuyou: 1,
+    p_yanbaihu: 1, p_yangfeng: 1, p_yanliang: 1, p_yanwen: 1, p_yanyan: 1, p_yuanshao: 1,
+    p_yuanshu: 1, p_zangba: 1, p_zhangchao: 1, p_zhangfan: 1, p_zhangjian: 1, p_zhangjian_hhs: 1,
+    p_zhangkuang: 1, p_zhangrang: 1, p_zhangren: 1, p_zhangyang: 1, p_zumao: 1
+  };
+
+  function isThreeKingdomsPerson(p) {
+    if (!p) return false;
+    var dyn = p.dynasty || "";
+    var era = p.eraRank != null ? p.eraRank : (p.era_rank != null ? p.era_rank : null);
+    var pid = p.id || "";
+    if (dyn === "三國" || era === 12) return true;
+    if (HAN_MO_THREE_KINGDOMS_PIDS[pid]) return true;
+    return false;
+  }
+
   function computeSgzBreakdown(d) {
     if (!d) return null;
+    var prof = d.profile || d;
+    if (!isThreeKingdomsPerson(prof)) return null;
     if (d.sgzBreakdown) return d.sgzBreakdown;
     var mentions = d.mentions || [];
     var pei = (d.notes && d.notes.pei) || null;
@@ -1079,8 +1136,9 @@
       }
       html += "</div>";
 
-      // 三國志魏蜀吳分卷與裴注統計卡片（三重視角）
-      var sgzBk = d.sgzBreakdown || computeSgzBreakdown(d);
+      // 三國志魏蜀吳分卷與裴注統計卡片（僅限三國人物）
+      var isSg = isThreeKingdomsPerson(p) || isThreeKingdomsPerson(d.profile || d);
+      var sgzBk = isSg ? (d.sgzBreakdown || computeSgzBreakdown(d)) : null;
       if (sgzBk) {
         html += renderSgzBreakdownCard(sgzBk);
       }
@@ -1089,14 +1147,29 @@
       html += renderFeoffLineageCard(pid);
 
       // 主要行跡與兵爭輿地交集
-      if ((d.topPlaces && d.topPlaces.length) || (d.strategicHubs && d.strategicHubs.length)) {
+      var isTrjPerson = false;
+      for (var ti = 0; ti < TRJ_PERSON_CONFIG.length; ti++) {
+        if (TRJ_PERSON_CONFIG[ti].pid === pid) {
+          isTrjPerson = true;
+          break;
+        }
+      }
+      if (isTrjPerson) {
+        loadPersonTrajectories(pid);
+      }
+
+      if ((d.topPlaces && d.topPlaces.length) || (d.strategicHubs && d.strategicHubs.length) || isTrjPerson) {
         var allStratHubs = (d.strategicHubs && d.strategicHubs.length)
           ? d.strategicHubs.map(function (h) { return h.id; })
           : (d.topPlaces || []).filter(function (tpl) { return tpl.isStrategic; }).map(function (tpl) { return tpl.id; });
-        var itinBtn = allStratHubs.length
-          ? "<button class=\"map-view-btn\" data-act=\"view-itinerary\" data-pname=\"" + esc(p.trad_name || p.name) + "\" data-hubs=\"" + esc(allStratHubs.join(",")) + "\">在形勝輿圖上檢視行跡（涉足 " + allStratHubs.length + " 處要塞） ➔</button>"
-          : "";
-        html += "<div class=\"group-title\">主要行跡 · 兵爭與輿地交集 <span class=\"count\">" + (d.topPlaces ? d.topPlaces.length : 0) + " 處</span>" + itinBtn + "</div>" +
+        var mapBtns = "";
+        if (isTrjPerson) {
+          mapBtns += "<button class=\"map-view-btn\" data-act=\"view-trj-map\" data-pid=\"" + esc(pid) + "\" data-pname=\"" + esc(p.trad_name || p.name) + "\">📜 在生平行跡圖上檢視足跡 ➔</button>";
+        }
+        if (allStratHubs.length) {
+          mapBtns += "<button class=\"map-view-btn\" data-act=\"view-campaign-map\" data-pid=\"" + esc(pid) + "\" data-pname=\"" + esc(p.trad_name || p.name) + "\" data-hubs=\"" + esc(allStratHubs.join(",")) + "\">⚔️ 在兵爭形勝圖上檢視（涉足 " + allStratHubs.length + " 處要塞） ➔</button>";
+        }
+        html += "<div class=\"group-title\">主要行跡 · 兵爭與輿地交集 <span class=\"count\">" + (d.topPlaces ? d.topPlaces.length : 0) + " 處</span>" + mapBtns + "</div>" +
           "<div class=\"card\"><div class=\"footprint-grid\">" +
           (d.topPlaces || []).map(function (tpl) {
             var cls = tpl.isStrategic ? "footprint-pill strat" : "footprint-pill";
@@ -2940,6 +3013,7 @@
   }
 
   var mapState = {
+    mode: "campaign", // "campaign" (兵爭要地) 或 "trajectory" (生平行跡)
     zone: "all",
     curVb: { x: 0, y: 0, w: 1000, h: 680 },
     showRoutes: true,
@@ -2947,8 +3021,80 @@
     selectedHub: null,
     itineraryPerson: null,
     itineraryPlaces: [],
-    lastDragTime: 0
+    lastDragTime: 0,
+    activeTrjPid: "p_liubang", // 默認劉邦（五史 61 人之首，避免默認曹操誤聯）
+    activeTrjBook: "all",
+    selectedTrjPlace: null
   };
+
+  var TRJ_PERSON_CONFIG = [
+    // 史記 10 人
+    { pid: "p_liubang", name: "劉邦", book: "sj", dyn: "西漢" },
+    { pid: "p_xiangyu", name: "項羽", book: "sj", dyn: "秦末" },
+    { pid: "p_hanxin", name: "韓信", book: "sj", dyn: "西漢" },
+    { pid: "p_qinshihuang", name: "秦始皇", book: "sj", dyn: "秦" },
+    { pid: "p_qihuan", name: "齊桓公", book: "sj", dyn: "春秋" },
+    { pid: "p_jinwengong", name: "晉文公", book: "sj", dyn: "春秋" },
+    { pid: "p_zhangliang", name: "張良", book: "sj", dyn: "西漢" },
+    { pid: "p_weiqing", name: "衛青", book: "sj", dyn: "西漢" },
+    { pid: "p_liguang", name: "李廣", book: "sj", dyn: "西漢" },
+    { pid: "p_huo_qubing", name: "霍去病", book: "sj", dyn: "西漢" },
+    // 漢書 10 人
+    { pid: "p_hanwudi", name: "漢武帝", book: "hs", dyn: "西漢" },
+    { pid: "p_wangmang", name: "王莽", book: "hs", dyn: "新" },
+    { pid: "p_zhangqian", name: "張騫", book: "hs", dyn: "西漢" },
+    { pid: "p_suwu", name: "蘇武", book: "hs", dyn: "西漢" },
+    { pid: "p_liling", name: "李陵", book: "hs", dyn: "西漢" },
+    { pid: "p_liuwu", name: "梁孝王", book: "hs", dyn: "西漢" },
+    { pid: "p_qingbu", name: "黥布", book: "hs", dyn: "西漢" },
+    { pid: "p_hanxuandi", name: "漢宣帝", book: "hs", dyn: "西漢" },
+    { pid: "p_hanchengdi", name: "漢成帝", book: "hs", dyn: "西漢" },
+    { pid: "p_hanaidi", name: "漢哀帝", book: "hs", dyn: "西漢" },
+    // 後漢書 10 人
+    { pid: "p_liuxiu", name: "光武帝", book: "hhs", dyn: "東漢" },
+    { pid: "p_gongsunshu", name: "公孫述", book: "hhs", dyn: "東漢" },
+    { pid: "p_mayuan", name: "馬援", book: "hhs", dyn: "東漢" },
+    { pid: "p_banchao", name: "班超", book: "hhs", dyn: "東漢" },
+    { pid: "p_wuhan", name: "吳漢", book: "hhs", dyn: "東漢" },
+    { pid: "p_wangchang", name: "王常", book: "hhs", dyn: "東漢" },
+    { pid: "p_mawu", name: "馬武", book: "hhs", dyn: "東漢" },
+    { pid: "p_dongzhuo", name: "董卓", book: "hhs", dyn: "東漢" },
+    { pid: "p_dengyu", name: "鄧禹", book: "hhs", dyn: "東漢" },
+    { pid: "p_fengyi", name: "馮異", book: "hhs", dyn: "東漢" },
+    // 三國志 20 人
+    { pid: "p_caocao", name: "曹操", book: "sgz", dyn: "東漢/魏" },
+    { pid: "p_liubei", name: "劉備", book: "sgz", dyn: "三國/蜀" },
+    { pid: "p_caopi", name: "曹丕", book: "sgz", dyn: "三國/魏" },
+    { pid: "p_sunquan", name: "孫權", book: "sgz", dyn: "三國/吳" },
+    { pid: "p_zhugegang", name: "諸葛亮", book: "sgz", dyn: "三國/蜀" },
+    { pid: "p_cao_rui", name: "曹叡", book: "sgz", dyn: "三國/魏" },
+    { pid: "p_guanyu", name: "關羽", book: "sgz", dyn: "三國/蜀" },
+    { pid: "p_yuanshao", name: "袁紹", book: "sgz", dyn: "東漢" },
+    { pid: "p_simayi", name: "司馬懿", book: "sgz", dyn: "三國/魏" },
+    { pid: "p_yuanshu", name: "袁術", book: "sgz", dyn: "東漢" },
+    { pid: "p_liubiao", name: "劉表", book: "sgz", dyn: "東漢" },
+    { pid: "p_jiangwei", name: "姜維", book: "sgz", dyn: "三國/蜀" },
+    { pid: "p_lvbu", name: "呂布", book: "sgz", dyn: "東漢" },
+    { pid: "p_zhangliao", name: "張遼", book: "sgz", dyn: "三國/魏" },
+    { pid: "p_luxun", name: "陸遜", book: "sgz", dyn: "三國/吳" },
+    { pid: "p_sunce", name: "孫策", book: "sgz", dyn: "三國/吳" },
+    { pid: "p_zhouyu_sg", name: "周瑜", book: "sgz", dyn: "三國/吳" },
+    { pid: "p_zhugeke", name: "諸葛恪", book: "sgz", dyn: "三國/吳" },
+    { pid: "p_sunjian", name: "孫堅", book: "sgz", dyn: "三國/吳" },
+    { pid: "p_zhanghe", name: "張郃", book: "sgz", dyn: "三國/魏" },
+    // 晉書 11 人
+    { pid: "p_shihu", name: "石虎", book: "js", dyn: "十六國/後趙" },
+    { pid: "p_shile", name: "石勒", book: "js", dyn: "十六國/後趙" },
+    { pid: "p_fujian2", name: "苻堅", book: "js", dyn: "十六國/前秦" },
+    { pid: "p_simayan", name: "司馬炎", book: "js", dyn: "西晉" },
+    { pid: "p_simarui", name: "司馬睿", book: "js", dyn: "東晉" },
+    { pid: "p_huanwen", name: "桓溫", book: "js", dyn: "東晉" },
+    { pid: "p_liuyao", name: "劉曜", book: "js", dyn: "十六國/前趙" },
+    { pid: "p_murongchui", name: "慕容垂", book: "js", dyn: "十六國/後燕" },
+    { pid: "p_wangdao", name: "王導", book: "js", dyn: "東晉" },
+    { pid: "p_wangmeng_qin", name: "王猛", book: "js", dyn: "十六國/前秦" },
+    { pid: "p_xiean", name: "謝安", book: "js", dyn: "東晉" }
+  ];
 
   var MAP_VIEWBOXES = {
     "all": "0 0 1000 680",
@@ -3224,31 +3370,339 @@
     return h;
   }
 
+  function getTrjColor(year, yMin, yMax) {
+    if (year === null || year === undefined) return "#8c8c8c";
+    if (yMin === null || yMax === null || yMin >= yMax) return "#e67e22";
+    var t = (year - yMin) / (yMax - yMin);
+    if (t < 0.25) return "#2b82d9";
+    if (t < 0.50) return "#16a085";
+    if (t < 0.75) return "#e67e22";
+    return "#c0392b";
+  }
+
+  function renderTrajectoryMap() {
+    var allCoords = (IDX && (IDX.placeCoords || IDX.placeCoordinates)) || (window.BOOKINDEX_DATA && window.BOOKINDEX_DATA.placeCoords) || {};
+    var strats = (IDX && IDX.strategicPlaces) || (window.BOOKINDEX_DATA && window.BOOKINDEX_DATA.strat) || {};
+
+    if (!mapState.curVb) {
+      mapState.curVb = parseViewBox(MAP_VIEWBOXES[mapState.zone] || MAP_VIEWBOXES["all"]);
+    }
+    var vb = mapState.curVb;
+    var vbStr = [Math.round(vb.x), Math.round(vb.y), Math.round(vb.w), Math.round(vb.h)].join(" ");
+    var zoomPct = Math.round((1000 / vb.w) * 100);
+
+    var curPid = mapState.activeTrjPid || "p_liubang";
+    var personTrjs = TRJ_CACHE[curPid];
+    var isTrjLoading = false;
+
+    if (!personTrjs) {
+      if (typeof window !== "undefined" && window.BOOKINDEX_DATA && window.BOOKINDEX_DATA.trajectories && window.BOOKINDEX_DATA.trajectories[curPid]) {
+        TRJ_CACHE[curPid] = window.BOOKINDEX_DATA.trajectories[curPid];
+        personTrjs = TRJ_CACHE[curPid];
+      } else {
+        isTrjLoading = true;
+        personTrjs = [];
+        loadPersonTrajectories(curPid, function () {
+          if (currentTab === "places" && mapState.mode === "trajectory" && mapState.activeTrjPid === curPid) {
+            renderPlacesIndex();
+          }
+        });
+      }
+    }
+
+    var curPersonCfg = null;
+    for (var i = 0; i < TRJ_PERSON_CONFIG.length; i++) {
+      if (TRJ_PERSON_CONFIG[i].pid === curPid) {
+        curPersonCfg = TRJ_PERSON_CONFIG[i];
+        break;
+      }
+    }
+    var personDisplayName = curPersonCfg ? curPersonCfg.name : (personTrjs[0] ? personTrjs[0].person_name : curPid);
+
+    var yMin = null, yMax = null;
+    var yMinRaw = "", yMaxRaw = "";
+    var datedCount = 0;
+    var coordsCount = 0;
+    var yearPlacesMap = {};
+
+    personTrjs.forEach(function (t) {
+      if (t.year_ad !== null && t.year_ad !== undefined) {
+        datedCount++;
+        if (yMin === null || t.year_ad < yMin) {
+          yMin = t.year_ad;
+          yMinRaw = t.time_raw;
+        }
+        if (yMax === null || t.year_ad > yMax) {
+          yMax = t.year_ad;
+          yMaxRaw = t.time_raw;
+        }
+        if (!yearPlacesMap[t.year_ad]) yearPlacesMap[t.year_ad] = {};
+        yearPlacesMap[t.year_ad][t.place_name] = true;
+      }
+      var c = t.coord_lng ? [t.coord_lng, t.coord_lat] : (allCoords[t.place_id] ? allCoords[t.place_id].coords : (strats[t.place_id] ? strats[t.place_id].coords : null));
+      if (c) coordsCount++;
+    });
+
+    var h = '<div class="strat-map-wrap" id="stratMapWrap">';
+
+    h += '<div class="trj-ctrl-bar">' +
+      '<div class="trj-row">' +
+      '<span class="trj-label">典籍篩選：</span>' +
+      '<span class="trj-pill book-pill' + (mapState.activeTrjBook === "all" ? " on" : "") + '" data-trj-book="all">全部 (61人)</span>' +
+      '<span class="trj-pill book-pill' + (mapState.activeTrjBook === "sj" ? " on" : "") + '" data-trj-book="sj">《史記》十人</span>' +
+      '<span class="trj-pill book-pill' + (mapState.activeTrjBook === "hs" ? " on" : "") + '" data-trj-book="hs">《漢書》十人</span>' +
+      '<span class="trj-pill book-pill' + (mapState.activeTrjBook === "hhs" ? " on" : "") + '" data-trj-book="hhs">《後漢書》十人</span>' +
+      '<span class="trj-pill book-pill' + (mapState.activeTrjBook === "sgz" ? " on" : "") + '" data-trj-book="sgz">《三國志》二十人</span>' +
+      '<span class="trj-pill book-pill' + (mapState.activeTrjBook === "js" ? " on" : "") + '" data-trj-book="js">《晉書》十一篇</span>' +
+      '</div>' +
+      '<div class="trj-row">' +
+      '<span class="trj-label">選擇人物：</span>' +
+      '<div class="trj-person-pills">';
+
+    TRJ_PERSON_CONFIG.forEach(function (cfg) {
+      if (mapState.activeTrjBook !== "all" && cfg.book !== mapState.activeTrjBook) return;
+      var isCur = (cfg.pid === curPid);
+      var trjCount = (TRJ_CACHE[cfg.pid] ? TRJ_CACHE[cfg.pid].length : 0) ||
+                     (IDX && IDX.trajectoryCounts && IDX.trajectoryCounts[cfg.pid]) ||
+                     (window.BOOKINDEX_DATA && window.BOOKINDEX_DATA.trajectories && window.BOOKINDEX_DATA.trajectories[cfg.pid] ? window.BOOKINDEX_DATA.trajectories[cfg.pid].length : 0) || 0;
+      h += '<span class="trj-pill' + (isCur ? " on" : "") + '" data-trj-pid="' + esc(cfg.pid) + '">' +
+        esc(cfg.name) + '<span class="trj-stat-badge">(' + trjCount + ')</span></span>';
+    });
+
+    h += '</div></div></div>';
+
+    h += '<div class="strat-map-bar">' +
+      '<div class="strat-map-title-box">' +
+      '<span class="strat-map-title">「' + esc(personDisplayName) + '」生平行跡與時空足跡圖</span>' +
+      (isTrjLoading
+        ? '<span class="strat-map-sub" style="color: #a8382b;">⏳ 正在自數據庫檢索【' + esc(personDisplayName) + '】生平行跡考據數據...</span>'
+        : '<span class="strat-map-sub">全書共收錄 ' + personTrjs.length + ' 處行跡（' + coordsCount + ' 處精準上圖打點，' + datedCount + ' 處有確鑿紀年）</span>'
+      ) +
+      '</div>' +
+      '<div class="strat-map-controls">' +
+      '<span class="map-pill' + (mapState.showTerrain ? " on" : "") + '" data-map-toggle="terrain">' +
+      (mapState.showTerrain ? "⛰️ 地形底圖：開" : "⛰️ 地形底圖：關") + '</span>' +
+      '<span class="map-pill" data-map-reset="true" title="復位全景">復位</span>' +
+      '</div>' +
+      '</div>';
+
+    h += '<div class="strat-map-body" id="stratMapBody">';
+    h += '<svg class="strat-map-svg" id="stratMapSvg" viewBox="' + vbStr + '" preserveAspectRatio="xMidYMid meet">';
+
+    h += '<rect x="0" y="0" width="1000" height="680" fill="#FAF7F0"/>';
+    if (mapState.showTerrain) {
+      h += '<image href="terrain_basemap.jpg" x="0" y="0" width="1000" height="680" preserveAspectRatio="none" opacity="0.88" class="map-terrain-layer"/>';
+    }
+
+    h += '<g class="map-mountains">' +
+      '<text class="map-mountain-range" x="730" y="96" text-anchor="middle">── 燕　山　山　脈 ──</text>' +
+      '<text class="map-mountain-range" x="525" y="225" text-anchor="middle">▲ 太　行　山</text>' +
+      '<text class="map-mountain-range qinling" x="295" y="394" text-anchor="middle">── 秦　嶺　山　脈 ──</text>' +
+      '<text class="map-mountain-range" x="220" y="452" text-anchor="middle">── 大　巴　山 ──</text>' +
+      '<text class="map-mountain-range" x="670" y="488" text-anchor="middle">── 大　別　山 ──</text>' +
+      '</g>';
+
+    var pathCJ = buildRiverPath(RIVER_COORDS["changjiang"]);
+    var pathHH = buildRiverPath(RIVER_COORDS["huanghe"]);
+    var pathHS = buildRiverPath(RIVER_COORDS["hanshui"]);
+    var pathHU = buildRiverPath(RIVER_COORDS["huaishui"]);
+
+    h += '<g class="map-rivers">' +
+      '<path d="' + pathCJ + '" fill="none" stroke="#527588" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>' +
+      '<text class="map-water-label" x="830" y="460">大江（長江）→</text>' +
+      '<path d="' + pathHH + '" fill="none" stroke="#b08d57" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.62"/>' +
+      '<text class="map-water-label" x="650" y="310">古黃河 →</text>' +
+      '<path d="' + pathHS + '" fill="none" stroke="#688f9e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>' +
+      '<text class="map-water-label" x="470" y="450">漢水</text>' +
+      '<path d="' + pathHU + '" fill="none" stroke="#688f9e" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>' +
+      '<text class="map-water-label" x="730" y="440">淮水</text>' +
+      '</g>';
+
+    h += '<g class="map-trj-points' + (mapState.selectedTrjPlace ? " has-selection" : "") + '">';
+
+    var placeAggr = {};
+    personTrjs.forEach(function (t) {
+      var c = t.coord_lng ? [t.coord_lng, t.coord_lat] : (allCoords[t.place_id] ? allCoords[t.place_id].coords : (strats[t.place_id] ? strats[t.place_id].coords : null));
+      if (!c) return;
+      var k = t.place_id || t.place_name;
+      if (!placeAggr[k]) {
+        placeAggr[k] = {
+          place_id: t.place_id,
+          place_name: t.place_name,
+          coords: c,
+          items: []
+        };
+      }
+      placeAggr[k].items.push(t);
+    });
+
+    Object.keys(placeAggr).forEach(function (k) {
+      var ag = placeAggr[k];
+      var pt = projectCoord(ag.coords[0], ag.coords[1]);
+
+      var firstDated = null;
+      ag.items.forEach(function (it) {
+        if (it.year_ad !== null && it.year_ad !== undefined) {
+          if (!firstDated || it.year_ad < firstDated.year_ad) {
+            firstDated = it;
+          }
+        }
+      });
+
+      var isDated = (firstDated !== null);
+      var ptColor = isDated ? getTrjColor(firstDated.year_ad, yMin, yMax) : "#8c8c8c";
+      var isMulti = false;
+      if (isDated && yearPlacesMap[firstDated.year_ad] && Object.keys(yearPlacesMap[firstDated.year_ad]).length > 1) {
+        isMulti = true;
+      }
+
+      var isSelected = (mapState.selectedTrjPlace === ag.place_id);
+      var primaryItem = firstDated || ag.items[0];
+      var tipTime = primaryItem.time_raw + (primaryItem.year_ad ? (" (公元" + primaryItem.year_ad + "年)") : "");
+      var tipDesc = primaryItem.event_summary || primaryItem.source_text;
+      var tipChapter = primaryItem.source_chapter || "";
+
+      h += '<g class="trj-point' + (isSelected ? " selected" : "") + '" data-trj-place="' + esc(ag.place_id) + '" ' +
+        'data-name="' + esc(ag.place_name) + '" data-time="' + esc(tipTime) + '" ' +
+        'data-chapter="' + esc(tipChapter) + '" data-desc="' + esc(tipDesc) + '" ' +
+        'data-multi="' + (isMulti ? "1" : "0") + '" data-count="' + ag.items.length + '">';
+
+      h += '<rect x="' + (pt[0] - 18) + '" y="' + (pt[1] - 18) + '" width="36" height="36" rx="8" class="trj-hitarea"/>';
+
+      if (isSelected) {
+        h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="14" class="trj-focus-ring"/>';
+        h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="22" class="trj-focus-ring-outer"/>';
+      }
+
+      if (isMulti) {
+        h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="9.5" fill="none" stroke="#e67e22" stroke-width="1.2" stroke-dasharray="2,2"/>';
+      }
+
+      if (isDated) {
+        h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="' + (isSelected ? 7.5 : 6) + '" stroke="#ffffff" stroke-width="' + (isSelected ? 2 : 1.5) + '" fill="' + ptColor + '"/>';
+        h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="2" fill="#ffffff"/>';
+      } else {
+        h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="' + (isSelected ? 6 : 4.5) + '" stroke="' + (isSelected ? "#a8382b" : "#666666") + '" stroke-width="1.5" fill="#FAF7F0"/>';
+        h += '<circle cx="' + pt[0] + '" cy="' + pt[1] + '" r="2" fill="' + (isSelected ? "#a8382b" : "#8c8c8c") + '"/>';
+      }
+
+      h += '<text x="' + pt[0] + '" y="' + (pt[1] - (isSelected ? 10 : 8)) + '" text-anchor="middle" ' +
+        'class="trj-point-text' + (isSelected ? " focused" : "") + '" fill="' + (isSelected ? "#a8382b" : (isDated ? "#1a1a1a" : "#666666")) + '">' + esc(ag.place_name) + '</text>';
+
+      h += '</g>';
+    });
+
+    h += '</g>';
+    h += '</svg>';
+
+    h += '<div class="map-zoom-tools">' +
+      '<button class="map-zoom-btn" data-map-zoom="in" title="放大">＋</button>' +
+      '<button class="map-zoom-btn" data-map-zoom="reset" title="復位視野">⟲</button>' +
+      '<button class="map-zoom-btn" data-map-zoom="out" title="縮小">－</button>' +
+      '<div class="map-zoom-level" id="mapZoomLevel">' + zoomPct + '%</div>' +
+      '</div>';
+
+    if (datedCount > 0 && yMin !== null && yMax !== null) {
+      h += '<div class="trj-colorbar-wrap">' +
+        '<div class="trj-colorbar-title">' +
+        '<span>生平時間軸色階 (Color Bar)</span>' +
+        '<span style="font-weight: normal; color: #a8382b;">' + datedCount + '處紀年</span>' +
+        '</div>' +
+        '<div class="trj-colorbar-track"></div>' +
+        '<div class="trj-colorbar-labels">' +
+        '<span>' + (yMin < 0 ? ("前" + Math.abs(yMin)) : yMin) + '年 (' + esc(yMinRaw) + ')</span>' +
+        '<span>' + (yMax < 0 ? ("前" + Math.abs(yMax)) : yMax) + '年 (' + esc(yMaxRaw) + ')</span>' +
+        '</div>' +
+        '<div class="trj-undated-legend">' +
+        '<span class="trj-undated-dot"></span>' +
+        '<span>無明確紀年點位（存疑待勘/傳記雜載）</span>' +
+        '</div>' +
+        '</div>';
+    }
+
+    h += '<div class="map-tooltip" id="mapTooltip"></div>';
+    h += '</div>';
+
+    var displayTrjs = personTrjs;
+    var focusedPlaceName = "";
+    if (mapState.selectedTrjPlace) {
+      displayTrjs = personTrjs.filter(function (t) {
+        return t.place_id === mapState.selectedTrjPlace;
+      });
+      if (displayTrjs.length > 0) {
+        focusedPlaceName = displayTrjs[0].place_name;
+      }
+    }
+
+    h += '<div class="trj-events-panel">' +
+      '<div class="trj-events-head">' +
+      (mapState.selectedTrjPlace ? 
+        ('<span>🔍 聚焦考據：【' + esc(personDisplayName) + '】在【' + esc(focusedPlaceName) + '】的生平行蹟 (' + displayTrjs.length + ' 條)</span>' +
+         '<button class="trj-clear-focus-btn" data-trj-clear="true" title="還原全景視野與全部列表">✕ 取消聚焦 · 顯示全部 (' + personTrjs.length + ')</button>') :
+        ('<span>【' + esc(personDisplayName) + '】生平行跡與文獻證據考據清單（點擊條目在地圖聚焦）</span>' +
+         '<span style="font-size: 11px; font-weight: normal; color: var(--muted);">共 ' + personTrjs.length + ' 條記錄</span>')
+      ) +
+      '</div>' +
+      '<div class="trj-events-list">';
+
+    if (isTrjLoading) {
+      h += '<div style="padding: 36px 16px; text-align: center; color: var(--muted); font-size: 14px;">' +
+        '<span style="display:inline-block; margin-right: 8px;">⏳</span>正在自數據庫檢索【' + esc(personDisplayName) + '】生平足跡與文獻證據...</div>';
+    } else if (!displayTrjs.length) {
+      h += '<div style="padding: 36px 16px; text-align: center; color: var(--muted); font-size: 14px;">暫無該地點之事蹟記載</div>';
+    } else {
+      displayTrjs.forEach(function (t, idx) {
+        var isM = (t.year_ad !== null && yearPlacesMap[t.year_ad] && Object.keys(yearPlacesMap[t.year_ad]).length > 1);
+        h += '<div class="trj-event-item' + (mapState.selectedTrjPlace ? ' selected' : '') + '" data-trj-item="' + idx + '" data-trj-plid="' + esc(t.place_id) + '">' +
+          '<span class="trj-event-time">' + esc(t.time_raw) + (t.year_ad ? (' (' + (t.year_ad < 0 ? ('前' + Math.abs(t.year_ad)) : t.year_ad) + ')') : '') + '</span>' +
+          '<span class="trj-event-place">[' + esc(t.place_name) + ']</span>' +
+          '<span class="trj-event-desc">' + esc(t.event_summary || t.source_text) + '</span>' +
+          (isM ? '<span class="trj-event-badge" title="同一年在多地有記載">同期多地</span>' : '') +
+          '<button class="map-view-btn trj-jump-btn" data-chapter="' + esc(t.chapter_id || '') + '" data-jump-uid="' + esc(t.sentence_uid) + '" style="margin-left: auto;">查閱原典 ➔</button>' +
+          '</div>';
+      });
+    }
+
+    h += '</div></div>';
+    h += '</div>';
+    return h;
+  }
+
   function renderPlacesIndex() {
     var items = resort(((IDX || {}).places || {}).items || []);
     var strats = (IDX || {}).strategicPlaces || (window.BOOKINDEX_DATA && window.BOOKINDEX_DATA.strat) || {};
     var stratKeys = Object.keys(strats);
     var h = "";
 
-    // 兵爭要地 · 五大戰區形勝輿圖與專欄（宋杰先生軍事地理考據精華）
+    // 頂部解耦雙Tab切換欄：兵爭要地 vs 人物行跡
     if (stratKeys.length) {
-      h += '<div class="group-title">兩漢三國兵爭形勝圖 <span class="count">' + stratKeys.length + ' 處要塞</span></div>';
-      h += renderStrategicMap(strats);
+      h += '<div class="map-mode-tabs">' +
+        '<button class="map-mode-tab' + (mapState.mode === "campaign" ? " on" : "") + '" data-map-mode="campaign">⚔️ 兩漢三國 · 兵爭要地</button>' +
+        '<button class="map-mode-tab' + (mapState.mode === "trajectory" ? " on" : "") + '" data-map-mode="trajectory">📜 歷代名賢 · 生平行跡</button>' +
+        '</div>';
 
-      // 如果有當前選中的要衝，渲染專屬考據卡片
-      if (mapState.selectedHub && strats[mapState.selectedHub]) {
-        var sh = strats[mapState.selectedHub];
-        h += '<div class="card strat-card" id="selectedHubCard" style="border-left: 4px solid var(--accent); margin-bottom: 16px;">' +
-          '<div class="strat-head">' +
-          '<div><span class="strat-title">【選中要衝考據】' + esc(sh.trad_name) + ' · ' + esc(sh.strat_title) + '</span>' +
-          '<span class="strat-zone" style="margin-left: 8px;">' + esc(sh.zone) + '</span></div>' +
-          '<button class="map-view-btn" data-place="' + esc(mapState.selectedHub) + '">進入「' + esc(sh.trad_name) + '」輿地檢索 ➔</button>' +
-          '</div>' +
-          '<div class="strat-desc"><p>' + esc(sh.strat_desc) + "</p></div>" +
-          '<div class="strat-evolution"><b>古今沿革：</b>' + esc(sh.evolution) + "</div>" +
-          (sh.battles && sh.battles.length ? ('<div class="strat-battles"><b>關聯戰事：</b>' + sh.battles.map(function (bt) { return '<span class="battle-pill">' + esc(bt) + "</span>"; }).join("") + "</div>") : "") +
-          '</div>';
+      if (mapState.mode === "trajectory") {
+        h += renderTrajectoryMap();
+      } else {
+        h += '<div class="group-title">兩漢三國兵爭形勝圖 <span class="count">' + stratKeys.length + ' 處要塞</span></div>';
+        h += renderStrategicMap(strats);
+
+        // 如果有當前選中的要衝，渲染專屬考據卡片
+        if (mapState.selectedHub && strats[mapState.selectedHub]) {
+          var sh = strats[mapState.selectedHub];
+          h += '<div class="card strat-card" id="selectedHubCard" style="border-left: 4px solid var(--accent); margin-bottom: 16px;">' +
+            '<div class="strat-head">' +
+            '<div><span class="strat-title">【選中要衝考據】' + esc(sh.trad_name) + ' · ' + esc(sh.strat_title) + '</span>' +
+            '<span class="strat-zone" style="margin-left: 8px;">' + esc(sh.zone) + '</span></div>' +
+            '<button class="map-view-btn" data-place="' + esc(mapState.selectedHub) + '">進入「' + esc(sh.trad_name) + '」輿地檢索 ➔</button>' +
+            '</div>' +
+            '<div class="strat-desc"><p>' + esc(sh.strat_desc) + "</p></div>" +
+            '<div class="strat-evolution"><b>古今沿革：</b>' + esc(sh.evolution) + "</div>" +
+            (sh.battles && sh.battles.length ? ('<div class="strat-battles"><b>關聯戰事：</b>' + sh.battles.map(function (bt) { return '<span class="battle-pill">' + esc(bt) + "</span>"; }).join("") + "</div>") : "") +
+            '</div>';
+        }
       }
+
 
       var zoneOrder = ["塞北邊疆戰區", "中原河洛戰區", "中原河北戰區", "秦嶺隴蜀戰區", "荊襄戰區", "江淮戰區"];
       var byZone = {};
@@ -3393,6 +3847,7 @@
       IDX = d;
       renderQuick();
       fillDatalist();
+      loadPersonTrajectories(mapState.activeTrjPid || "p_liubang");
       cb && cb();
     }).catch(showErr);
   }
@@ -3542,6 +3997,142 @@
       onMFilterChange("book", "");
       return;
     }
+    // 輿圖雙Tab模式切換（兵爭要地 vs 人物行跡）
+    var mModeBtn = ev.target.closest ? ev.target.closest("[data-map-mode]") : null;
+    if (mModeBtn) {
+      var mm = mModeBtn.getAttribute("data-map-mode");
+      if (mm && mm !== mapState.mode) {
+        mapState.mode = mm;
+        if (mm === "trajectory" && mapState.itineraryPerson) {
+          for (var i = 0; i < TRJ_PERSON_CONFIG.length; i++) {
+            if (TRJ_PERSON_CONFIG[i].name === mapState.itineraryPerson) {
+              mapState.activeTrjPid = TRJ_PERSON_CONFIG[i].pid;
+              mapState.activeTrjBook = TRJ_PERSON_CONFIG[i].book;
+              break;
+            }
+          }
+        } else if (mm === "campaign" && mapState.activeTrjPid) {
+          for (var i = 0; i < TRJ_PERSON_CONFIG.length; i++) {
+            if (TRJ_PERSON_CONFIG[i].pid === mapState.activeTrjPid) {
+              mapState.itineraryPerson = TRJ_PERSON_CONFIG[i].name;
+              break;
+            }
+          }
+        }
+        renderPlacesIndex();
+      }
+      return;
+    }
+    // 人物行跡模式控制：典籍切換、人物切換、原典穿透、點位選中
+    var trjBk = ev.target.closest ? ev.target.closest("[data-trj-book]") : null;
+    if (trjBk) {
+      var bk = trjBk.getAttribute("data-trj-book");
+      if (bk) {
+        mapState.activeTrjBook = bk;
+        var hasCur = false;
+        for (var i = 0; i < TRJ_PERSON_CONFIG.length; i++) {
+          if (TRJ_PERSON_CONFIG[i].pid === mapState.activeTrjPid) {
+            if (bk === "all" || TRJ_PERSON_CONFIG[i].book === bk) hasCur = true;
+            break;
+          }
+        }
+        if (!hasCur) {
+          for (var j = 0; j < TRJ_PERSON_CONFIG.length; j++) {
+            if (bk === "all" || TRJ_PERSON_CONFIG[j].book === bk) {
+              mapState.activeTrjPid = TRJ_PERSON_CONFIG[j].pid;
+              break;
+            }
+          }
+        }
+        renderPlacesIndex();
+      }
+      return;
+    }
+    var trjPidBtn = ev.target.closest ? ev.target.closest("[data-trj-pid]") : null;
+    if (trjPidBtn) {
+      var pid = trjPidBtn.getAttribute("data-trj-pid");
+      if (pid) {
+        mapState.activeTrjPid = pid;
+        mapState.selectedTrjPlace = null;
+        renderPlacesIndex();
+        if (!TRJ_CACHE[pid]) {
+          loadPersonTrajectories(pid, function () {
+            if (mapState.activeTrjPid === pid && mapState.mode === "trajectory") {
+              renderPlacesIndex();
+            }
+          });
+        }
+      }
+      return;
+    }
+    var jumpUidBtn = ev.target.closest ? ev.target.closest("[data-jump-uid]") : null;
+    if (jumpUidBtn) {
+      if (ev.stopPropagation) ev.stopPropagation();
+      var jUid = jumpUidBtn.getAttribute("data-jump-uid");
+      var cid = jumpUidBtn.getAttribute("data-chapter");
+      var targetScope = mapState.activeTrjPid || null;
+      if (cid && jUid) {
+        openChapter(cid, jUid, targetScope).catch(showErr);
+      } else if (jUid) {
+        // 安全兜底：如果元素未帶 data-chapter，調用 /api/sentence/{uid} 異步獲取
+        request("/api/sentence/" + encodeURIComponent(jUid)).then(function (info) {
+          if (info && info.chapter_id) {
+            openChapter(info.chapter_id, jUid, targetScope).catch(showErr);
+          } else {
+            alert("未查找到該句子所屬篇章：" + jUid);
+          }
+        }).catch(showErr);
+      }
+      return;
+    }
+    var trjClearBtn = ev.target.closest ? ev.target.closest("[data-trj-clear]") : null;
+    if (trjClearBtn) {
+      mapState.selectedTrjPlace = null;
+      mapState.curVb = parseViewBox(MAP_VIEWBOXES["all"]);
+      renderPlacesIndex();
+      return;
+    }
+    var trjPtEl = ev.target.closest ? ev.target.closest(".trj-point[data-trj-place], .trj-event-item[data-trj-plid]") : null;
+    if (trjPtEl) {
+      if (mapState.lastDragTime && (Date.now() - mapState.lastDragTime < 220)) return;
+      var tPlid = trjPtEl.getAttribute("data-trj-place") || trjPtEl.getAttribute("data-trj-plid");
+      if (tPlid) {
+        if (mapState.selectedTrjPlace === tPlid) {
+          mapState.selectedTrjPlace = null;
+          mapState.curVb = parseViewBox(MAP_VIEWBOXES["all"]);
+        } else {
+          mapState.selectedTrjPlace = tPlid;
+          var allCoords = (IDX && (IDX.placeCoords || IDX.placeCoordinates)) || (window.BOOKINDEX_DATA && window.BOOKINDEX_DATA.placeCoords) || {};
+          var strats = (IDX && IDX.strategicPlaces) || (window.BOOKINDEX_DATA && window.BOOKINDEX_DATA.strat) || {};
+          var targetCoord = allCoords[tPlid] ? allCoords[tPlid].coords : (strats[tPlid] ? strats[tPlid].coords : null);
+          if (!targetCoord) {
+            var pTrjs = TRJ_CACHE[mapState.activeTrjPid] || [];
+            for (var i = 0; i < pTrjs.length; i++) {
+              if (pTrjs[i].place_id === tPlid && pTrjs[i].coord_lng) {
+                targetCoord = [pTrjs[i].coord_lng, pTrjs[i].coord_lat];
+                break;
+              }
+            }
+          }
+          if (targetCoord) {
+            var pt = projectCoord(targetCoord[0], targetCoord[1]);
+            var fW = 450;
+            var fH = Math.round(fW * (680 / 1000));
+            var nX = Math.max(0, Math.min(1000 - fW, pt[0] - fW / 2));
+            var nY = Math.max(0, Math.min(680 - fH, pt[1] - fH / 2));
+            mapState.curVb = { x: nX, y: nY, w: fW, h: fH };
+          }
+        }
+        renderPlacesIndex();
+        if (mapState.selectedTrjPlace) {
+          var evPanel = document.querySelector(".trj-events-panel");
+          if (evPanel && evPanel.scrollIntoView) {
+            try { evPanel.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) {}
+          }
+        }
+      }
+      return;
+    }
     // 兩漢三國兵爭形勝輿圖控制：戰區切換、通道開關、全景復位、退出行跡、放大縮小
     var mz = ev.target.closest ? ev.target.closest(".map-pill[data-map-zone]") : null;
     if (mz) {
@@ -3585,6 +4176,10 @@
       mapState.selectedHub = null;
       mapState.itineraryPerson = null;
       mapState.itineraryPlaces = [];
+      mapState.selectedTrjPlace = null;
+      mapState.scale = 1.0;
+      mapState.panX = 0;
+      mapState.panY = 0;
       renderPlacesIndex();
       return;
     }
@@ -3616,16 +4211,88 @@
       return;
     }
     // 人物頁/地名頁/選中考據卡片上的形勝跳轉按鈕
+    var trjMapBtn = ev.target.closest ? ev.target.closest(".map-view-btn[data-act=\"view-trj-map\"]") : null;
+    if (trjMapBtn) {
+      var pid = trjMapBtn.getAttribute("data-pid") || "";
+      var pname = trjMapBtn.getAttribute("data-pname") || "";
+      mapState.mode = "trajectory";
+      if (pid) {
+        mapState.activeTrjPid = pid;
+        for (var i = 0; i < TRJ_PERSON_CONFIG.length; i++) {
+          if (TRJ_PERSON_CONFIG[i].pid === pid) {
+            mapState.activeTrjBook = TRJ_PERSON_CONFIG[i].book;
+            break;
+          }
+        }
+      }
+      if (pname) mapState.itineraryPerson = pname;
+      mapState.selectedTrjPlace = null;
+      mapState.curVb = parseViewBox(MAP_VIEWBOXES["all"]);
+      switchTab("places");
+      var mw0 = document.getElementById("stratMapWrap");
+      if (mw0 && mw0.scrollIntoView) {
+        try { mw0.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) {}
+      }
+      return;
+    }
+
+    var campMapBtn = ev.target.closest ? ev.target.closest(".map-view-btn[data-act=\"view-campaign-map\"]") : null;
+    if (campMapBtn) {
+      var pid = campMapBtn.getAttribute("data-pid") || "";
+      var pname = campMapBtn.getAttribute("data-pname") || "";
+      var hubsStr = campMapBtn.getAttribute("data-hubs") || "";
+      var hubs = hubsStr.split(",").filter(Boolean);
+      mapState.mode = "campaign";
+      mapState.itineraryPerson = pname;
+      mapState.itineraryPlaces = hubs;
+      if (pid) {
+        mapState.activeTrjPid = pid;
+        for (var i = 0; i < TRJ_PERSON_CONFIG.length; i++) {
+          if (TRJ_PERSON_CONFIG[i].pid === pid) {
+            mapState.activeTrjBook = TRJ_PERSON_CONFIG[i].book;
+            break;
+          }
+        }
+      }
+      mapState.zone = "all";
+      mapState.curVb = parseViewBox(MAP_VIEWBOXES["all"]);
+      mapState.selectedHub = null;
+      switchTab("places");
+      var mw1 = document.getElementById("stratMapWrap");
+      if (mw1 && mw1.scrollIntoView) {
+        try { mw1.scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) {}
+      }
+      return;
+    }
+
     var itBtn = ev.target.closest ? ev.target.closest(".map-view-btn[data-act=\"view-itinerary\"]") : null;
     if (itBtn) {
       var pname = itBtn.getAttribute("data-pname") || "";
+      var pid = itBtn.getAttribute("data-pid") || "";
+      if (!pid && pname) {
+        for (var i = 0; i < TRJ_PERSON_CONFIG.length; i++) {
+          if (TRJ_PERSON_CONFIG[i].name === pname) {
+            pid = TRJ_PERSON_CONFIG[i].pid;
+            break;
+          }
+        }
+      }
       var hubsStr = itBtn.getAttribute("data-hubs") || "";
       var hubs = hubsStr.split(",").filter(Boolean);
       mapState.itineraryPerson = pname;
       mapState.itineraryPlaces = hubs;
+      if (pid) {
+        mapState.activeTrjPid = pid;
+        for (var i = 0; i < TRJ_PERSON_CONFIG.length; i++) {
+          if (TRJ_PERSON_CONFIG[i].pid === pid) {
+            mapState.activeTrjBook = TRJ_PERSON_CONFIG[i].book;
+            break;
+          }
+        }
+      }
       mapState.zone = "all";
       mapState.curVb = parseViewBox(MAP_VIEWBOXES["all"]);
-      mapState.selectedHub = hubs[0] || null;
+      mapState.selectedHub = null;
       switchTab("places");
       var mw = document.getElementById("stratMapWrap");
       if (mw && mw.scrollIntoView) {
@@ -3984,46 +4651,108 @@
     });
   }
 
-  // 兩漢三國兵爭形勝輿圖：懸停氣泡 Tooltip 動態跟隨（帶防抖、要衝狀態鎖定與平滑防閃）
+  // 兩漢三國兵爭形勝輿圖 / 人物行跡圖：懸停氣泡 Tooltip 動態跟隨（邊界智慧翻轉、防抖、平滑防閃）
   var mapTipTimer = null;
   var currentTipHub = null;
 
+  function positionMapTooltip(tip, body, ev) {
+    if (!tip || !body || !ev) return;
+    var rect = body.getBoundingClientRect();
+    var mouseX = ev.clientX - rect.left;
+    var mouseY = ev.clientY - rect.top;
+
+    var tipW = tip.offsetWidth || 260;
+    var tipH = tip.offsetHeight || 110;
+
+    // 水平定位：預設以滑鼠居中，越界時自適應貼邊避讓
+    var left = mouseX - tipW / 2;
+    if (left < 8) {
+      left = 8;
+    } else if (left + tipW > rect.width - 8) {
+      left = Math.max(8, rect.width - tipW - 8);
+    }
+
+    // 垂直定位：優先置於滑鼠上方；若頂部邊緣空間不足（< 10px），自動智慧翻轉至滑鼠下方！
+    var top = mouseY - tipH - 12;
+    if (top < 10) {
+      top = mouseY + 18;
+      if (top + tipH > rect.height - 8) {
+        top = Math.max(8, rect.height - tipH - 8);
+      }
+    }
+
+    tip.style.transform = "none";
+    tip.style.left = Math.round(left) + "px";
+    tip.style.top = Math.round(top) + "px";
+  }
+
   out.addEventListener("mouseover", function (ev) {
-    var hub = ev.target.closest ? ev.target.closest(".map-hub[data-plid]") : null;
     var tip = document.getElementById("mapTooltip");
-    if (!hub || !tip) return;
-    var plid = hub.getAttribute("data-plid");
+    if (!tip) return;
+    var hub = ev.target.closest ? ev.target.closest(".map-hub[data-plid]") : null;
+    var trjPt = ev.target.closest ? ev.target.closest(".trj-point[data-trj-place]") : null;
+    if (!hub && !trjPt) return;
     if (mapTipTimer) { clearTimeout(mapTipTimer); mapTipTimer = null; }
-    if (currentTipHub === plid && tip.style.display === "block") return;
-    currentTipHub = plid;
-    var name = hub.getAttribute("data-name") || "";
-    var zone = hub.getAttribute("data-zone") || "";
-    var title = hub.getAttribute("data-title") || "";
-    var battles = hub.getAttribute("data-battles") || "";
-    tip.innerHTML = '<div class="tt-head"><span class="tt-name">' + esc(name) + '</span><span class="tt-zone">' + esc(zone) + '</span></div>' +
-      (title ? '<div class="tt-title">' + esc(title) + '</div>' : '') +
-      (battles ? '<div class="tt-battles"><b>關聯戰事：</b>' + esc(battles) + '</div>' : '') +
-      '<div class="tt-foot">點擊選中要衝 · 檢視考據</div>';
-    tip.style.display = "block";
+
+    if (hub) {
+      var plid = hub.getAttribute("data-plid");
+      if (currentTipHub === plid && tip.style.display === "block") return;
+      currentTipHub = plid;
+      var name = hub.getAttribute("data-name") || "";
+      var zone = hub.getAttribute("data-zone") || "";
+      var title = hub.getAttribute("data-title") || "";
+      var battles = hub.getAttribute("data-battles") || "";
+      tip.innerHTML = '<div class="tt-head"><span class="tt-name">' + esc(name) + '</span><span class="tt-zone">' + esc(zone) + '</span></div>' +
+        (title ? '<div class="tt-title">' + esc(title) + '</div>' : '') +
+        (battles ? '<div class="tt-battles"><b>關聯戰事：</b>' + esc(battles) + '</div>' : '') +
+        '<div class="tt-foot">點擊選中要衝 · 檢視考據</div>';
+      tip.style.display = "block";
+      positionMapTooltip(tip, tip.parentElement, ev);
+      return;
+    }
+
+    if (trjPt) {
+      var tPlid = "trj_" + (trjPt.getAttribute("data-trj-place") || "");
+      if (currentTipHub === tPlid && tip.style.display === "block") return;
+      currentTipHub = tPlid;
+      var tName = trjPt.getAttribute("data-name") || "";
+      var tTime = trjPt.getAttribute("data-time") || "時間未詳（備校勘）";
+      var tChapter = trjPt.getAttribute("data-chapter") || "";
+      var tDesc = trjPt.getAttribute("data-desc") || "";
+      var isMulti = (trjPt.getAttribute("data-multi") === "1");
+      var tCount = parseInt(trjPt.getAttribute("data-count") || "1", 10);
+      var badge = isMulti ? '<span class="tt-zone" style="background:#8b261e;color:#fff;">同期多地並存</span>' : '<span class="tt-zone">人物足跡</span>';
+      var badgeCount = (tCount > 1) ? '<span style="font-size:11px;color:#888;margin-left:6px;">共 ' + tCount + ' 條記載</span>' : '';
+      tip.innerHTML = '<div class="tt-head"><span class="tt-name">' + esc(tName) + '</span>' + badge + badgeCount + '</div>' +
+        '<div class="tt-title" style="color:#2b4c7e;font-weight:bold;">' + (tTime ? ('紀年：' + esc(tTime)) : '時間未詳（備校勘）') + '</div>' +
+        (tChapter ? '<div style="font-size:12px;color:#666;margin-top:2px;">篇卷：' + esc(tChapter) + '</div>' : '') +
+        (tDesc ? '<div class="tt-battles" style="margin-top:6px;max-height:85px;overflow-y:auto;line-height:1.45;"><b>事蹟考據：</b>' + esc(tDesc) + '</div>' : '') +
+        '<div class="tt-foot" style="color:#a8382b;font-weight:600;margin-top:6px;">' + (tCount > 1 ? ('點擊聚焦地圖並檢視此地全部 ' + tCount + ' 條事蹟 ➔') : '點擊聚焦地圖此地點 ➔') + '</div>';
+      tip.style.display = "block";
+      positionMapTooltip(tip, tip.parentElement, ev);
+    }
   });
 
   out.addEventListener("mousemove", function (ev) {
     var tip = document.getElementById("mapTooltip");
     if (!tip || tip.style.display === "none") return;
-    var body = tip.parentElement;
-    if (!body) return;
-    var rect = body.getBoundingClientRect();
-    var x = ev.clientX - rect.left;
-    var y = ev.clientY - rect.top;
-    tip.style.left = Math.max(70, Math.min(rect.width - 70, x)) + "px";
-    tip.style.top = Math.max(25, y - 16) + "px";
+    positionMapTooltip(tip, tip.parentElement, ev);
   });
 
   out.addEventListener("mouseout", function (ev) {
     var hub = ev.target.closest ? ev.target.closest(".map-hub[data-plid]") : null;
-    if (!hub) return;
-    var rel = ev.relatedTarget ? (ev.relatedTarget.closest ? ev.relatedTarget.closest(".map-hub[data-plid]") : null) : null;
-    if (rel === hub) return;
+    var trjPt = ev.target.closest ? ev.target.closest(".trj-point[data-trj-place]") : null;
+    if (!hub && !trjPt) return;
+
+    if (hub) {
+      var rel = ev.relatedTarget ? (ev.relatedTarget.closest ? ev.relatedTarget.closest(".map-hub[data-plid]") : null) : null;
+      if (rel === hub) return;
+    }
+    if (trjPt) {
+      var relTrj = ev.relatedTarget ? (ev.relatedTarget.closest ? ev.relatedTarget.closest(".trj-point[data-trj-place]") : null) : null;
+      if (relTrj === trjPt) return;
+    }
+
     currentTipHub = null;
     var tip = document.getElementById("mapTooltip");
     if (tip) {

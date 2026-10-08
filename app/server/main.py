@@ -265,6 +265,14 @@ def api_chapter(cid: str, limit: int = Query(5000)):
     return data
 
 
+@app.get("/api/sentence/{uid}")
+def api_sentence(uid: str):
+    data = db.get_sentence_meta(uid)
+    if not data:
+        raise HTTPException(404, "查無此句：{}".format(uid))
+    return data
+
+
 @app.get("/api/person/{pid}/relations")
 def api_relations(pid: str,
                   degree: int = Query(1, ge=1, le=3, description="邻居度数"),
@@ -287,6 +295,19 @@ def api_relations(pid: str,
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"person": pid, **g}
+
+
+@app.get("/api/trajectories/persons")
+def api_trajectory_persons():
+    """獲取有行跡數據庫記錄的核心人物列表。"""
+    return {"items": db.trajectory_persons()}
+
+
+@app.get("/api/person/{pid}/trajectories")
+def api_person_trajectories(pid: str):
+    """獲取人物的完整生平行跡數據庫記錄。"""
+    items = db.person_trajectories(pid)
+    return {"person_id": pid, "total": len(items), "items": items}
 
 
 # ---------------------------------------------------------------- 句级编辑

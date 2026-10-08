@@ -86,9 +86,15 @@
 40. ✅ **舆图自由缩放平移引擎与秦岭五丈原空间解耦避让**：实现原生零依赖SVG视口平滑缩放平移引擎，水墨艺术字横贯排布，秦岭五丈原上下错开32px解耦避让（docs/81）；
 41. ✅ **两汉书书目选择联动裴注自动取消修复**：选择两汉书胶囊时自动重置 peiOn 为 false，杜绝空裴注状态；
 42. ✅ **单字地名假阳性系统性治理与守卫增强（重点攻坚）**：扩充 BARE_OFF（夏/汝/曹/商/丰/唐/巢/虞/岐/柘 10大高危单字禁裸匹，繁简全覆盖）、补齐合法多字别名、增强 CHAR_GUARDS 邻字双向守卫（陈/梁/越/周/卫/江/河/雍/宋/鲁/赵/魏）、扩充 NAME_BLOCK 五史长尾人物至 129 人；全库净净化 9,251 处假阳性纯噪声（place_mentions 降至 108,760 处实打实真地名）；42/42 全系统独立审查全绿，繁简 7 闸全绿，快照与双版本发布包制作完成（docs/82）。
+43. ✅ **人物行迹数据库核心候选名单大数据对账与Schema设计（重构首期）**：践行兵争图与人物行迹图彻底解耦决议；全库 223,164 句大数据实证对账，确立五史 60 位核心枢纽人物名单（史记10、汉书10、后汉书10、三国志20、晋书10+1），考证并完成班超平移至后汉书；设计 person_trajectories 底层数据库 Schema 与渐变色温 Color Bar 标绘规范；开发 extract_trajectories.py 自动化提取初标管线，首批 6 位试点代表人物（曹操、刘备、诸葛亮、刘邦、刘秀、石勒）共 4,295 条真实行迹成功入库 SQLite 并输出脱机快照（docs/83）。
+44. ✅ **人物行迹图与兵争图解耦上线暨全量61人行迹数据库交付**：彻底闭环三大行动：①数据扩充至五史全量61位核心人物，提取12,361条真实足迹（确凿纪年413处、经纬度坐标4,539处）入库SQLite person_trajectories；②编译建立涵盖190处古代都邑塞外名隘坐标库（place_coordinates.json）；③前端舆图模式双Tab解耦上线，配齐Color Bar时间渐变色温条（早年冷色/晚年暖色/无时间灰色）、同期多地并存高亮徽章、坐标准确防重叠与Tooltip悬停平滑防抖；全量14项独立审查verify_trajectories.py 100%全绿且--inject故障注入红绿双向闭环，繁简7闸与地名42项全绿，双端同构同步（docs/84）。
+45. ✅ **人物行迹图全空排查修复与刘邦兵争形胜图联动消歧修复**：根治联机版（8800）index_payload 缺失 placeCoords 与 trajectories 导致的行迹全空缺陷，构建前端 TRJ_CACHE 异步获取机制（单次查询 8ms），保证 61 人行迹秒开；彻底消解人物详情页跳转舆图时未带 pid 导致的曹操残留与兵争卡片误导，拆分为【📜 在生平行跡圖上檢視足跡】与【⚔️ 在兵爭形勝圖上檢視要塞交集】双独立按钮，双 Tab 模式切换自动双向同步人物；修复 SVG viewBox 视界计算实现点击地点精准放大居中聚焦；升级 verify_trajectories.py 达 21/21 项全绿，--inject 故障注入红绿双向闭环，繁简 7 闸全绿，双端 100% 同构（docs/85）。
+46. ✅ **刘邦生平行迹穿越排查与历史学时代窗口过滤治理**：彻底拔除刘邦行迹中《后汉书·董卓列传》《三国志·诸夏侯曹传》《三国志·武帝纪》等宋建（宗建）割据伪号「河首平漢王」误切及广汉王累、曹腾高祖大长秋等后世伪行迹；在 pipeline/annotate.py 筑牢 ALIAS_STOP_PRE/POST 守卫（漢王前接平/廣阻断、高祖后接父母阻断、劉季后接陵/緒阻断）；在 pipeline/extract_trajectories.py 确立全量 61 位核心人物 HISTORIOGRAPHICAL ERA 时代窗口 PERSON_VALID_BOOKS 物理落锁，抽取 SQL 强制限定合法正史书籍，刘邦行迹 100% 纯净收归史记汉书（1,427条，董卓列传/诸夏侯曹传/枹罕彻底清零）；全量 61 人行迹达 10,733 条且 100% 遵守断代史料合规性；升级 verify_trajectories.py 达 25/25 项全绿且 --inject 故障注入红绿双向闭环，繁简 7 闸全绿，权威源 0 改动（docs/86）。
+47. ✅ **考据清单查阅原典功能修复与篇章元数据直通治理**：彻底修复人物行迹图考据清单「查阅原典」死链接（修复未定义 jumpToSentence 导致的 ReferenceError）；底层在 person_trajectories 表与离线 JSON 中直通机读篇章 ID chapter_id；后端在 app/server/main.py 扩展 GET /api/sentence/{uid} 单句定位接口与 db.py get_sentence_meta 辅助函数；前端在 app/web/app.js（及 dist/app.js）将原典按钮绑定 data-chapter 并接入 openChapter 原典阅读器，注入人物高亮作用域 targetScope 与 ev.stopPropagation() 冒泡隔离；verify_trajectories.py 29/29 项全绿且 --inject 故障注入 5 项变红闭环，权威源 0 改动（docs/87）。
 
 ## 跨会话铁律（用户明确要求）
-每次总结后必须留下说明文档（如 docs/39~docs/82），并在本文件登记；同时同步维护项目 skill（.agents/skills/ 与 .mimocode/skills/ 的 bookindex-workflow 等），确保新开对话无缝接手。
+每次总结后必须留下说明文档（如 docs/39~docs/87），并在本文件登记；同时同步维护项目 skill（.agents/skills/ 与 .mimocode/skills/ 的 bookindex-workflow 等），确保新开对话无缝接手。
+
 
 
 
